@@ -2,6 +2,37 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { StateStore } from '../src/store/state.js';
 
+const plainSummaryTheme = {
+  bold: (value) => value,
+  cyan: (value) => value
+};
+
+function createSilentStdout() {
+  return {
+    isTTY: false,
+    write() {
+      return true;
+    }
+  };
+}
+
+function createRecordingStdout(calls, options = {}) {
+  return {
+    isTTY: Boolean(options.isTTY),
+    write(value) {
+      calls.push(['write', String(value)]);
+      return true;
+    }
+  };
+}
+
+function createClock(startedAt, endedAt) {
+  const values = [startedAt, endedAt];
+  let index = 0;
+
+  return () => values[Math.min(index++, values.length - 1)];
+}
+
 test('runtime modules import without syntax or ESM errors', async () => {
   const index = await import('../src/index.js');
   const app = await import('../src/ui/App.js');
@@ -24,6 +55,7 @@ test('startInspector selects the live proxy engine for live mode', async () => {
     },
     {
       stateStore: new StateStore(),
+      stdout: createSilentStdout(),
       renderApp: () => ({
         unmount() {
           calls.push(['unmount']);
@@ -65,13 +97,7 @@ test('startInspector contains interactive output in the alternate terminal scree
     EXIT_ALTERNATE_SCREEN
   } = await import('../src/ui/terminal-screen.js');
   const calls = [];
-  const stdout = {
-    isTTY: true,
-    write(value) {
-      calls.push(['write', String(value)]);
-      return true;
-    }
-  };
+  const stdout = createRecordingStdout(calls, { isTTY: true });
   const inspector = startInspector(
     {
       mode: 'demo',
@@ -86,6 +112,8 @@ test('startInspector contains interactive output in the alternate terminal scree
     {
       stateStore: new StateStore(),
       stdout,
+      now: createClock(0, 2000),
+      summaryTheme: plainSummaryTheme,
       renderApp: (node, options) => {
         calls.push(['render', options.stdout === stdout, node.props.context.mode]);
 
@@ -122,6 +150,7 @@ test('startInspector contains interactive output in the alternate terminal scree
     ['write', DISABLE_MOUSE_REPORTING],
     ['write', EXIT_ALTERNATE_SCREEN],
     ['engine-stop'],
+    ['write', '\nGood bye.\n\nSession summary\n  Runtime       2s\n  Requests      0\n  Status        2xx 0  3xx 0  4xx 0  5xx 0  other 0\n  Avg response  n/a\n'],
     ['exit', 0]
   ]);
 });
@@ -160,6 +189,7 @@ test('startInspector wires full recording to StateStore add events and shutdown'
     },
     {
       stateStore,
+      stdout: createSilentStdout(),
       recorder,
       renderApp: (node) => {
         calls.push(['render', node.props.trafficRecorder === recorder]);
@@ -234,6 +264,7 @@ test('startInspector passes partial recorder into App without full capture subsc
     },
     {
       stateStore,
+      stdout: createSilentStdout(),
       recorder,
       renderApp: (node) => {
         calls.push(['render', node.props.trafficRecorder === recorder]);
@@ -259,6 +290,7 @@ test('startInspector passes partial recorder into App without full capture subsc
 test('startInspector loads replay sessions without starting capture engines', async () => {
   const { startInspector } = await import('../src/index.js');
   const calls = [];
+  const stdout = createRecordingStdout(calls);
   const entries = Array.from({ length: 105 }, (_, index) => ({
     id: `entry-${index + 1}`,
     path: `/entry-${index + 1}`
@@ -277,6 +309,9 @@ test('startInspector loads replay sessions without starting capture engines', as
       targetUrl: null
     },
     {
+      stdout,
+      now: createClock(0, 65_000),
+      summaryTheme: plainSummaryTheme,
       loadRecordedSession: (sessionPath) => {
         calls.push(['load', sessionPath]);
 
@@ -329,6 +364,7 @@ test('startInspector loads replay sessions without starting capture engines', as
     ['load', './captures/session.ndjson'],
     ['render', 'replay', 105, 1],
     ['unmount'],
+    ['write', '\nGood bye.\n\nSession summary\n  Runtime       1m 5s\n  Requests      105\n  Status        2xx 0  3xx 0  4xx 0  5xx 0  other 105\n  Avg response  0ms\n'],
     ['exit', 0]
   ]);
 });
@@ -370,6 +406,7 @@ test('startInspector opens the proxy URL for public live targets when requested'
     },
     {
       stateStore: new StateStore(),
+      stdout: createSilentStdout(),
       renderApp: () => ({
         unmount() {
           calls.push(['unmount']);
@@ -410,6 +447,7 @@ test('startInspector does not open browser for local live targets', async () => 
     },
     {
       stateStore: new StateStore(),
+      stdout: createSilentStdout(),
       renderApp: () => ({
         unmount() {}
       }),

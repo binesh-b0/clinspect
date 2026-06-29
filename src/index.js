@@ -11,6 +11,7 @@ import {
 } from './cli/options.js';
 import { openUrl } from './browser.js';
 import { startLiveProxy, startMockTrafficFeed } from './engine/proxy.js';
+import { createSessionStats, formatExitSummary } from './exit-summary.js';
 import { DEFAULT_BODY_LIMIT, DEFAULT_MAX_ENTRIES, StateStore } from './store/state.js';
 import { getProxyOrigin, isPublicTargetUrl } from './target.js';
 import { App } from './ui/App.js';
@@ -76,6 +77,8 @@ function getTargetKind(options = {}) {
 }
 
 export function startInspector(options, runtime = {}) {
+  const now = runtime.now ?? (() => new Date());
+  const startedAt = now();
   const loadSession = runtime.loadRecordedSession ?? loadRecordedSession;
   const loadedSession = options.mode === 'replay'
     ? loadSession(options.sessionPath, {
@@ -98,6 +101,8 @@ export function startInspector(options, runtime = {}) {
   const captureController = runtime.captureController ?? createCaptureController();
   const stdout = runtime.stdout ?? createStableStdout(process.stdout);
   const terminalScreen = runtime.terminalScreen ?? createTerminalScreen(stdout);
+  const sessionStats = createSessionStats();
+  const summaryOptions = runtime.summaryTheme ? { theme: runtime.summaryTheme } : {};
   const trafficRecorder = options.mode === 'replay'
     ? (runtime.trafficRecorder ?? runtime.recorder ?? createNoopRecorder())
     : (runtime.trafficRecorder ?? runtime.recorder ?? createTrafficRecorder({
@@ -114,6 +119,7 @@ export function startInspector(options, runtime = {}) {
       targetUrl: options.targetUrl
     }));
   const handleRecordAdd = (logEntry) => trafficRecorder.recordCapture?.(logEntry);
+  const handleStatsAdd = (logEntry) => sessionStats.record(logEntry);
   const appContext = options.mode === 'replay'
     ? {
       ...options,
@@ -127,8 +133,12 @@ export function startInspector(options, runtime = {}) {
     : options;
 
   if (loadedSession) {
-    loadedSession.entries.forEach((entry) => stateStore.addLog(entry));
+    loadedSession.entries.forEach((entry) => {
+      sessionStats.record(stateStore.addLog(entry));
+    });
   }
+
+  stateStore.on('add', handleStatsAdd);
 
   if (trafficRecorder.getStatus?.().mode === 'full') {
     stateStore.on('add', handleRecordAdd);
@@ -168,7 +178,6 @@ export function startInspector(options, runtime = {}) {
     }
 
     terminalScreen.exit?.();
-    process.stdout.write('\n');
 
     return Promise.resolve(engine.stop())
       .catch((error) => {
@@ -176,6 +185,7 @@ export function startInspector(options, runtime = {}) {
       })
       .then(() => {
         stateStore.off('add', handleRecordAdd);
+        stateStore.off('add', handleStatsAdd);
 
         return Promise.resolve(trafficRecorder.stop?.())
           .catch((error) => {
@@ -183,6 +193,11 @@ export function startInspector(options, runtime = {}) {
           });
       })
       .finally(() => {
+        stdout.write(`\n${formatExitSummary({
+          endedAt: now(),
+          startedAt,
+          stats: sessionStats.snapshot()
+        }, summaryOptions)}\n`);
         exitProcess(code);
       });
   };
