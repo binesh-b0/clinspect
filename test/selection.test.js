@@ -183,6 +183,26 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
   );
   assert.deepEqual(getKeyboardAction('o'), { type: 'openDetailModal' });
   assert.deepEqual(
+    getKeyboardAction('y', {}, { isListFocused: true }),
+    { type: 'startExport', action: 'copy' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('D', {}, { isListFocused: false }),
+    { type: 'startExport', action: 'download' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('m', {}, { isExportPromptOpen: true }),
+    { type: 'finishExport', secretPolicy: 'masked' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('r', {}, { isExportPromptOpen: true }),
+    { type: 'finishExport', secretPolicy: 'raw' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { escape: true }, { isExportPromptOpen: true }),
+    { type: 'cancelExport' }
+  );
+  assert.deepEqual(
     getKeyboardAction('n', {}, { isListFocused: false }),
     { type: 'moveDetailMatch', direction: 1 }
   );
@@ -390,6 +410,14 @@ test('keyboard action helper supports detail modal and detail search input', () 
     { type: 'openDetailSearch' }
   );
   assert.deepEqual(
+    getKeyboardAction('y', {}, { isDetailModalOpen: true }),
+    { type: 'startExport', action: 'copy' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('D', {}, { isDetailModalOpen: true }),
+    { type: 'startExport', action: 'download' }
+  );
+  assert.deepEqual(
     getKeyboardAction('j', {}, { isDetailModalOpen: true }),
     { type: 'scrollDetails', direction: 1 }
   );
@@ -423,11 +451,11 @@ test('getRenderHeight keeps one terminal row free for Ink updates', () => {
 test('footer text shows mode-aware essential keymaps', () => {
   assert.equal(
     formatFooterText({ isListFocused: true }),
-    'j/k move  [/] page  enter inspect  n new  e clone  l library  tab details  P/S rec  h help  q quit'
+    'j/k move  [/] page  enter inspect  y copy  D download  n new  tab details  P/S rec  h help  q quit'
   );
   assert.equal(
     formatFooterText({ isListFocused: false }),
-    'j/k scroll  [/] page  r req/res  / find  n/N match  e clone  l library  tab traffic  P/S rec  h help'
+    'j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  tab traffic  P/S rec  h help'
   );
   assert.equal(
     formatFooterText({ isComposerOpen: true }),
@@ -449,6 +477,14 @@ test('footer text shows mode-aware essential keymaps', () => {
     formatFooterText({ isListFocused: false, isDetailSearchActive: true, isDetailModalOpen: true }),
     'detail search active  / edit  n/N match  j/k scroll  enter collapse  esc/q close'
   );
+  assert.equal(
+    formatFooterText({ isExportPromptOpen: true }),
+    'export  m masked  r raw  esc cancel'
+  );
+  assert.equal(
+    formatFooterText({ exportStatus: 'copied response body', isListFocused: false }),
+    'j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  tab traffic  P/S rec  h help | copied response body'
+  );
   assert.equal(formatFooterText({ isHelpOpen: true }), 'help | esc/h/q close');
 });
 
@@ -457,6 +493,14 @@ test('help sections describe starting, pausing, and stopping recording', () => {
 
   assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'P'), ['P', 'start / pause recording']);
   assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'S'), ['S', 'stop recording']);
+});
+
+test('help sections describe copy and download exports', () => {
+  const exportSection = HELP_SECTIONS.find((section) => section.title === 'Export');
+
+  assert.deepEqual(exportSection.rows.find(([keys]) => keys === 'y'), ['y', 'copy focused item']);
+  assert.deepEqual(exportSection.rows.find(([keys]) => keys === 'D'), ['D', 'download focused item']);
+  assert.deepEqual(exportSection.rows.find(([keys]) => keys === 'm / r'), ['m / r', 'masked / raw export']);
 });
 
 test('help sections describe bracket page movement', () => {

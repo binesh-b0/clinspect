@@ -11,6 +11,12 @@ import {
   isManagedManualRequestHeader,
   normalizeManualRequestDraft
 } from '../engine/manual-request.js';
+import {
+  copyTextToClipboard,
+  createTrafficExport,
+  resolveTrafficExportTarget,
+  writeTrafficExportFile
+} from '../export/traffic-export.js';
 import { getProxyOrigin, isPublicTargetUrl } from '../target.js';
 import { isInkMouseInput, parseInkMouseInput } from './mouse.js';
 
@@ -2758,6 +2764,14 @@ export const HELP_SECTIONS = [
     ]
   },
   {
+    title: 'Export',
+    rows: [
+      ['y', 'copy focused item'],
+      ['D', 'download focused item'],
+      ['m / r', 'masked / raw export']
+    ]
+  },
+  {
     title: 'Session',
     rows: [
       ['f', 'follow latest'],
@@ -2827,17 +2841,29 @@ const HelpModal = React.memo(function HelpModal() {
 });
 
 export function formatFooterText({
+  exportStatus = '',
   isComposerConfirmOpen = false,
   isComposerOpen = false,
   isComposerTextFocused = false,
   isDetailModalOpen = false,
   isDetailSearchActive = false,
+  isExportPromptOpen = false,
   isHelpOpen = false,
   isListFocused = true,
   isRawModeSupported = true
 } = {}) {
+  const withExportStatus = (value) => {
+    const status = String(exportStatus ?? '').trim();
+
+    return status ? `${value} | ${status}` : value;
+  };
+
   if (!isRawModeSupported) {
     return 'keyboard input unavailable in this shell | Ctrl-C or SIGTERM quit';
+  }
+
+  if (isExportPromptOpen) {
+    return 'export  m masked  r raw  esc cancel';
   }
 
   if (isHelpOpen) {
@@ -2856,23 +2882,25 @@ export function formatFooterText({
 
   if (isDetailSearchActive && !isListFocused) {
     return isDetailModalOpen
-      ? 'detail search active  / edit  n/N match  j/k scroll  enter collapse  esc/q close'
-      : 'detail search active  / edit  n/N match  j/k scroll  enter collapse  o big  tab traffic  q quit';
+      ? withExportStatus('detail search active  / edit  n/N match  j/k scroll  enter collapse  esc/q close')
+      : withExportStatus('detail search active  / edit  n/N match  j/k scroll  enter collapse  o big  tab traffic  q quit');
   }
 
   if (isListFocused) {
-    return 'j/k move  [/] page  enter inspect  n new  e clone  l library  tab details  P/S rec  h help  q quit';
+    return withExportStatus('j/k move  [/] page  enter inspect  y copy  D download  n new  tab details  P/S rec  h help  q quit');
   }
 
-  return 'j/k scroll  [/] page  r req/res  / find  n/N match  e clone  l library  tab traffic  P/S rec  h help';
+  return withExportStatus('j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  tab traffic  P/S rec  h help');
 }
 
 const Footer = React.memo(function Footer({
+  exportStatus,
   isComposerConfirmOpen,
   isComposerOpen,
   isComposerTextFocused,
   isDetailModalOpen,
   isDetailSearchActive,
+  isExportPromptOpen,
   isHelpOpen,
   isListFocused,
   isRawModeSupported
@@ -2884,11 +2912,13 @@ const Footer = React.memo(function Footer({
       Text,
       { color: 'gray', wrap: 'truncate' },
       formatFooterText({
+        exportStatus,
         isComposerConfirmOpen,
         isComposerOpen,
         isComposerTextFocused,
         isDetailModalOpen,
         isDetailSearchActive,
+        isExportPromptOpen,
         isHelpOpen,
         isListFocused,
         isRawModeSupported
@@ -2964,6 +2994,7 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     isFilterOpen = false,
     isDetailSearchOpen = false,
     isDetailModalOpen = false,
+    isExportPromptOpen = false,
     isReplayMode = false,
     isLiveMode = false,
     isComposerOpen = false,
@@ -2980,6 +3011,22 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
 
   if (value === 'c' && keyState.ctrl) {
     return { type: 'quit' };
+  }
+
+  if (isExportPromptOpen) {
+    if (keyState.escape) {
+      return { type: 'cancelExport' };
+    }
+
+    if (value === 'm' || value === 'M') {
+      return { type: 'finishExport', secretPolicy: 'masked' };
+    }
+
+    if (value === 'r' || value === 'R') {
+      return { type: 'finishExport', secretPolicy: 'raw' };
+    }
+
+    return { type: 'none' };
   }
 
   if (isHelpOpen) {
@@ -3179,6 +3226,14 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
       return { type: 'closeDetailModal' };
     }
 
+    if (value === 'y') {
+      return { type: 'startExport', action: 'copy' };
+    }
+
+    if (value === 'D') {
+      return { type: 'startExport', action: 'download' };
+    }
+
     if (value === '/') {
       return { type: 'openDetailSearch' };
     }
@@ -3278,6 +3333,14 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
 
   if (value === 'h') {
     return { type: 'openHelp' };
+  }
+
+  if (value === 'y') {
+    return { type: 'startExport', action: 'copy' };
+  }
+
+  if (value === 'D') {
+    return { type: 'startExport', action: 'download' };
   }
 
   if (value === 'n' && isLiveMode && isListFocused) {
@@ -3416,6 +3479,7 @@ function KeyboardControls({
   isFilterOpen,
   isDetailSearchOpen,
   isDetailModalOpen,
+  isExportPromptOpen,
   isReplayMode,
   isLiveMode,
   isComposerOpen,
@@ -3432,6 +3496,7 @@ function KeyboardControls({
   onBackspaceComposerText,
   onBackspaceSearch,
   onBackspaceDetailSearch,
+  onCancelExport,
   onCloseComposerBodyEditor,
   onCloseComposerLibrary,
   onCloseComposerPreview,
@@ -3445,6 +3510,7 @@ function KeyboardControls({
   onDeleteComposerRow,
   onDeleteComposerText,
   onCycleFilterFocus,
+  onFinishExport,
   onFinishDetailSearch,
   onFinishSearch,
   onFollowLatest,
@@ -3473,6 +3539,7 @@ function KeyboardControls({
   onScrollDetailsTo,
   onSendComposer,
   onSelectComposerTab,
+  onStartExport,
   onStopRecording,
   onToggleComposerField,
   onToggleComposerReveal,
@@ -3491,6 +3558,7 @@ function KeyboardControls({
       isFilterOpen,
       isDetailSearchOpen,
       isDetailModalOpen,
+      isExportPromptOpen,
       isReplayMode,
       isLiveMode,
       isComposerOpen,
@@ -3521,6 +3589,9 @@ function KeyboardControls({
         break;
       case 'backspaceDetailSearch':
         onBackspaceDetailSearch();
+        break;
+      case 'cancelExport':
+        onCancelExport();
         break;
       case 'closeComposerBodyEditor':
         onCloseComposerBodyEditor();
@@ -3563,6 +3634,9 @@ function KeyboardControls({
         break;
       case 'finishSearch':
         onFinishSearch();
+        break;
+      case 'finishExport':
+        onFinishExport(action.secretPolicy);
         break;
       case 'finishDetailSearch':
         onFinishDetailSearch();
@@ -3644,6 +3718,9 @@ function KeyboardControls({
         break;
       case 'selectComposerTab':
         onSelectComposerTab(action.tab);
+        break;
+      case 'startExport':
+        onStartExport(action.action);
         break;
       case 'stopRecording':
         onStopRecording();
@@ -3924,6 +4001,8 @@ export function App({
   const [detailMatchIndex, setDetailMatchIndex] = useState(0);
   const [collapsedDetailPaths, setCollapsedDetailPaths] = useState([]);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [pendingExport, setPendingExport] = useState(null);
+  const [exportStatus, setExportStatus] = useState('');
   const [manualLibrary, setManualLibrary] = useState(() => manualRequestStore?.getLibrary?.() ?? {
     schemaVersion: 1,
     requests: [],
@@ -4095,6 +4174,82 @@ export function App({
     });
   };
 
+  const getExportLog = () => {
+    return isListFocused && !isDetailModalOpen ? selectedLog : inspectedLog;
+  };
+
+  const startTrafficExport = (action) => {
+    const exportLog = getExportLog();
+    const exportIsListFocused = isListFocused && !isDetailModalOpen;
+    const target = resolveTrafficExportTarget({
+      detailRows,
+      detailTab,
+      focusedRow: focusedDetailRow,
+      isListFocused: exportIsListFocused,
+      log: exportLog
+    });
+
+    if (!target) {
+      setPendingExport(null);
+      setExportStatus('export unavailable');
+      return;
+    }
+
+    setPendingExport({
+      action,
+      log: exportLog,
+      target
+    });
+    setExportStatus(`${action === 'copy' ? 'copy' : 'download'} ${target.label ?? target.kind}`);
+    setIsFilterOpen(false);
+    setIsDetailSearchOpen(false);
+    setIsHelpOpen(false);
+  };
+
+  const formatSavedExportPath = (filePath) => {
+    const cwd = `${process.cwd()}/`;
+
+    return String(filePath).startsWith(cwd)
+      ? String(filePath).slice(cwd.length)
+      : String(filePath);
+  };
+
+  const finishTrafficExport = (secretPolicy) => {
+    if (!pendingExport) {
+      return;
+    }
+
+    try {
+      const exportData = createTrafficExport({
+        context: {
+          publicTargetUrl,
+          proxyOrigin
+        },
+        log: pendingExport.log,
+        secretPolicy,
+        target: pendingExport.target
+      });
+
+      if (pendingExport.action === 'copy') {
+        copyTextToClipboard(exportData.content, { stdout: process.stdout });
+        setExportStatus(`copied ${exportData.label}`);
+      } else {
+        const result = writeTrafficExportFile(exportData);
+
+        setExportStatus(`saved ${formatSavedExportPath(result.path)}`);
+      }
+    } catch (error) {
+      setExportStatus(`export failed: ${error?.message ?? String(error)}`);
+    } finally {
+      setPendingExport(null);
+    }
+  };
+
+  const cancelTrafficExport = () => {
+    setPendingExport(null);
+    setExportStatus('export cancelled');
+  };
+
   const openComposer = (mode) => {
     if (!isLiveMode) {
       return;
@@ -4255,6 +4410,7 @@ export function App({
         isFilterOpen,
         isDetailSearchOpen,
         isDetailModalOpen,
+        isExportPromptOpen: Boolean(pendingExport),
         isReplayMode,
         isLiveMode,
         isComposerOpen: composer.isOpen,
@@ -4283,6 +4439,7 @@ export function App({
           setSearchQuery((current) => current.slice(0, -1));
           setIsFollowingLatest(false);
         },
+        onCancelExport: cancelTrafficExport,
         onClearFilters: clearFilters,
         onClearLogs: () => {
           stateStore.clear();
@@ -4330,6 +4487,7 @@ export function App({
           setFilterFocus((current) => cycleValue(FILTER_FOCUS_ORDER, current, direction));
           setIsFollowingLatest(false);
         },
+        onFinishExport: finishTrafficExport,
         onFinishDetailSearch: () => setIsDetailSearchOpen(false),
         onFinishSearch: () => setIsFilterOpen(false),
         onQuit,
@@ -4421,6 +4579,7 @@ export function App({
         },
         onSaveComposerRequest: saveComposerRequest,
         onSelectComposerTab: (tab) => setComposer((current) => selectComposerTab(current, tab)),
+        onStartExport: startTrafficExport,
         onScrollDetails: (direction) => {
           moveDetailFocus(direction);
         },
@@ -4570,11 +4729,13 @@ export function App({
           query: detailSearchQuery
         })
           : h(Footer, {
+          exportStatus,
           isComposerConfirmOpen: composer.isConfirmOpen,
           isComposerOpen: composer.isOpen,
           isComposerTextFocused: getFocusedComposerDescriptor(composer)?.kind === 'text',
           isDetailModalOpen,
           isDetailSearchActive: detailSearchQuery.trim().length > 0,
+          isExportPromptOpen: Boolean(pendingExport),
           isHelpOpen,
           isListFocused: isDetailModalOpen ? false : isListFocused,
           isRawModeSupported

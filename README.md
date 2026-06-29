@@ -105,12 +105,23 @@ Load a recorded session without live or demo capture:
 clinspect --load ./.clinspect/recordings/clinspect-YYYYMMDD-HHmmss.ndjson
 ```
 
+## Copy And Download
+
+Exports work from the in-memory traffic view and do not require recording to be enabled.
+
+- `y` copies the current export target.
+- `D` writes the current export target under `./.clinspect/exports/`.
+- After either key, press `m` for masked headers/cookies or `r` for raw captured values.
+
+When the traffic list is focused, the export target is the selected full request/response exchange. When details are focused, the export target follows the focused section, header, body field, or body row. Body downloads use an appropriate extension when possible, such as `.json`, `.jsonl`, `.html`, `.xml`, or `.txt`.
+
 ## Privacy And Security Notes
 
 - `clinspect` is intended for local development and debugging, not as a hardened production proxy.
 - Captured traffic can include credentials, cookies, bearer tokens, API keys, and request or response bodies.
 - `.clinspect/` is ignored by git in this repository. Keep it that way unless you are intentionally sharing sanitized captures.
 - Cookie values are masked by default in the UI and search.
+- Copy/download exports can include raw secrets when you choose raw export mode.
 - Recordings write raw cookie values by default when `--record` is enabled. Use recordings only for trusted local captures.
 - Request collections may store secret values in `./.clinspect/requests.json`; masking is a UI behavior, not encryption.
 - Absolute manual requests are sent directly from your machine. Only send requests to endpoints you are authorized to call.
@@ -145,6 +156,9 @@ Main UI:
 - `enter` inspects a traffic row or toggles a detail node.
 - `r` switches request/response details.
 - `/` searches traffic or details, depending on focus.
+- `y` copies the focused traffic item or detail.
+- `D` downloads the focused traffic item or detail to `./.clinspect/exports/`.
+- `m`/`r` chooses masked or raw values after starting an export.
 - `m` opens method filters; `s` opens status filters; `x` clears filters.
 - `p` pauses capture.
 - `P` starts, pauses, or resumes recording.
