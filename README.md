@@ -57,7 +57,7 @@ Current MVP behavior:
 - seeds realistic mock request/response entries
 - appends new mock traffic on an interval
 - shows a traffic list and selected payload details
-- supports up/down selection, tab focus toggle, `q` quit, and Ctrl-C cleanup
+- supports up/down inspection, stable held selection, `f` follow-latest mode, tab focus toggle, `q` quit, and Ctrl-C cleanup
 - caps stored text bodies and marks truncated payloads
 
 Live HTTP proxying is planned after the mock UI is stable.

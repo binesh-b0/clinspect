@@ -90,7 +90,7 @@ function Header({ context = {}, logsCount }) {
   );
 }
 
-function TrafficList({ logs, selectedIndex, isFocused }) {
+function TrafficList({ logs, selectedIndex, isFocused, isFollowingLatest }) {
   const rows = process.stdout.rows || 24;
   const visibleCount = Math.max(5, rows - 11);
   const startIndex = Math.max(0, Math.min(
@@ -110,7 +110,7 @@ function TrafficList({ logs, selectedIndex, isFocused }) {
       paddingX: 1,
       marginRight: 1
     },
-    h(Text, { bold: true }, `Traffic ${isFocused ? '(focused)' : ''}`),
+    h(Text, { bold: true }, `Traffic ${isFocused ? 'focused' : 'idle'} | ${isFollowingLatest ? 'follow latest' : 'hold'}`),
     h(Text, { color: 'gray' }, '  time     meth   st  path'),
     logs.length === 0
       ? h(Text, { color: 'gray' }, 'Waiting for traffic...')
@@ -179,9 +179,9 @@ function DetailPane({ log, isFocused }) {
   );
 }
 
-function Footer({ isListFocused, isRawModeSupported }) {
+function Footer({ isListFocused, isRawModeSupported, isFollowingLatest }) {
   const text = isRawModeSupported
-    ? `up/down select | tab focus: ${isListFocused ? 'traffic' : 'details'} | q quit`
+    ? `up/down inspect | tab focus: ${isListFocused ? 'traffic' : 'details'} | follow: ${isFollowingLatest ? 'on' : 'off'} | f latest | q quit`
     : 'keyboard input unavailable in this shell | Ctrl-C or SIGTERM quit';
 
   return h(
@@ -195,10 +195,55 @@ function Footer({ isListFocused, isRawModeSupported }) {
   );
 }
 
-function KeyboardControls({ logsLength, isListFocused, onQuit, onToggleFocus, onMoveSelection }) {
+export function getSelectedIndex(logs, selectedLogId) {
+  if (logs.length === 0) {
+    return -1;
+  }
+
+  const selectedIndex = logs.findIndex((log) => log.id === selectedLogId);
+
+  return selectedIndex === -1 ? 0 : selectedIndex;
+}
+
+export function resolveSelectedLogId(logs, selectedLogId, options = {}) {
+  if (logs.length === 0) {
+    return null;
+  }
+
+  if (options.followLatest) {
+    return logs[logs.length - 1].id;
+  }
+
+  if (logs.some((log) => log.id === selectedLogId)) {
+    return selectedLogId;
+  }
+
+  return logs[0].id;
+}
+
+export function moveSelectedLogId(logs, selectedLogId, direction) {
+  if (logs.length === 0) {
+    return null;
+  }
+
+  const selectedIndex = getSelectedIndex(logs, selectedLogId);
+  const nextIndex = Math.min(
+    Math.max(0, logs.length - 1),
+    Math.max(0, selectedIndex + direction)
+  );
+
+  return logs[nextIndex].id;
+}
+
+function KeyboardControls({ isListFocused, onQuit, onToggleFocus, onMoveSelection, onFollowLatest }) {
   useInput((input, key) => {
     if (input === 'q' || (input === 'c' && key.ctrl)) {
       onQuit();
+      return;
+    }
+
+    if (input === 'f') {
+      onFollowLatest();
       return;
     }
 
@@ -212,11 +257,11 @@ function KeyboardControls({ logsLength, isListFocused, onQuit, onToggleFocus, on
     }
 
     if (key.upArrow) {
-      onMoveSelection(-1, logsLength);
+      onMoveSelection(-1);
     }
 
     if (key.downArrow) {
-      onMoveSelection(1, logsLength);
+      onMoveSelection(1);
     }
   });
 
@@ -226,7 +271,12 @@ function KeyboardControls({ logsLength, isListFocused, onQuit, onToggleFocus, on
 export function App({ stateStore, context = {}, onQuit = () => {} }) {
   const { isRawModeSupported } = useStdin();
   const [logs, setLogs] = useState(() => stateStore.getLogs());
-  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedLogId, setSelectedLogId] = useState(() => {
+    const initialLogs = stateStore.getLogs();
+
+    return initialLogs[initialLogs.length - 1]?.id ?? null;
+  });
+  const [isFollowingLatest, setIsFollowingLatest] = useState(false);
   const [isListFocused, setIsListFocused] = useState(true);
 
   useEffect(() => {
@@ -238,9 +288,12 @@ export function App({ stateStore, context = {}, onQuit = () => {} }) {
   }, [stateStore]);
 
   useEffect(() => {
-    setSelectedIndex((currentIndex) => Math.min(currentIndex, Math.max(0, logs.length - 1)));
-  }, [logs.length]);
+    setSelectedLogId((currentId) => resolveSelectedLogId(logs, currentId, {
+      followLatest: isFollowingLatest
+    }));
+  }, [logs, isFollowingLatest]);
 
+  const selectedIndex = useMemo(() => getSelectedIndex(logs, selectedLogId), [logs, selectedLogId]);
   const selectedLog = useMemo(() => logs[selectedIndex] ?? null, [logs, selectedIndex]);
 
   return h(
@@ -252,15 +305,16 @@ export function App({ stateStore, context = {}, onQuit = () => {} }) {
     },
     isRawModeSupported
       ? h(KeyboardControls, {
-        logsLength: logs.length,
         isListFocused,
         onQuit,
         onToggleFocus: () => setIsListFocused((current) => !current),
-        onMoveSelection: (direction, logsLength) => {
-          setSelectedIndex((current) => Math.min(
-            Math.max(0, logsLength - 1),
-            Math.max(0, current + direction)
-          ));
+        onMoveSelection: (direction) => {
+          setIsFollowingLatest(false);
+          setSelectedLogId((currentId) => moveSelectedLogId(logs, currentId, direction));
+        },
+        onFollowLatest: () => {
+          setIsFollowingLatest(true);
+          setSelectedLogId(resolveSelectedLogId(logs, selectedLogId, { followLatest: true }));
         }
       })
       : null,
@@ -268,9 +322,9 @@ export function App({ stateStore, context = {}, onQuit = () => {} }) {
     h(
       Box,
       { flexDirection: 'row', flexGrow: 1 },
-      h(TrafficList, { logs, selectedIndex, isFocused: isListFocused }),
+      h(TrafficList, { logs, selectedIndex, isFocused: isListFocused, isFollowingLatest }),
       h(DetailPane, { log: selectedLog, isFocused: !isListFocused })
     ),
-    h(Footer, { isListFocused, isRawModeSupported })
+    h(Footer, { isListFocused, isRawModeSupported, isFollowingLatest })
   );
 }
