@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { DEFAULT_PORT, parseCliOptions, parsePort, parseTargetUrl } from '../src/cli/options.js';
+import {
+  DEFAULT_PORT,
+  getCliHelpText,
+  isHelpRequested,
+  parseCliOptions,
+  parsePort,
+  parseTargetUrl
+} from '../src/cli/options.js';
 
 test('parsePort accepts valid TCP ports', () => {
   assert.equal(parsePort('1'), 1);
@@ -45,4 +52,16 @@ test('parseCliOptions validates optional future live-mode context', () => {
     port: 9090,
     targetUrl: 'http://localhost:5173/'
   });
+});
+
+test('help helpers detect help requests and expose command help', () => {
+  assert.equal(isHelpRequested(['node', 'clinspect', '--help']), true);
+  assert.equal(isHelpRequested(['node', 'clinspect', '-h']), true);
+  assert.equal(isHelpRequested(['node', 'clinspect']), false);
+
+  const helpText = getCliHelpText();
+
+  assert.match(helpText, /Usage: clinspect/);
+  assert.match(helpText, /--target <url>/);
+  assert.match(helpText, /--port <number>/);
 });

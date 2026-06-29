@@ -34,6 +34,16 @@ export function createProgram() {
     .option('-t, --target <url>', 'upstream target URL for future live mode', parseTargetUrl);
 }
 
+export function isHelpRequested(argv = process.argv) {
+  return argv.slice(2).some((arg) => arg === '--help' || arg === '-h');
+}
+
+export function getCliHelpText() {
+  const helpText = createProgram().helpInformation();
+
+  return helpText.endsWith('\n') ? helpText : `${helpText}\n`;
+}
+
 export function parseCliOptions(argv = process.argv) {
   const program = createProgram();
 

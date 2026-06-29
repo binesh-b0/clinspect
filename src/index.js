@@ -3,7 +3,12 @@ import { fileURLToPath } from 'url';
 import React from 'react';
 import { render } from 'ink';
 import chalk from 'chalk';
-import { parseCliOptions, formatCliError } from './cli/options.js';
+import {
+  parseCliOptions,
+  formatCliError,
+  getCliHelpText,
+  isHelpRequested
+} from './cli/options.js';
 import { startMockTrafficFeed } from './engine/proxy.js';
 import { DEFAULT_BODY_LIMIT, StateStore } from './store/state.js';
 import { App } from './ui/App.js';
@@ -67,6 +72,11 @@ export function startInspector(options, runtime = {}) {
 }
 
 export function run(argv = process.argv) {
+  if (isHelpRequested(argv)) {
+    process.stdout.write(getCliHelpText());
+    return 0;
+  }
+
   let options;
 
   try {
