@@ -4,7 +4,6 @@ A local reverse proxy and terminal traffic inspector for development workflows.
 
 `clinspect` is intended to sit between a client and an upstream service, forward HTTP traffic, and display captured request and response details in an Ink-based terminal UI.
 
-The current MVP is UI-first: it launches a terminal inspector with mock traffic so the interaction model can be tested before live proxy capture is added.
 
 ## Requirements
 
@@ -45,22 +44,24 @@ Or run the package binary directly:
 node bin/cli.js
 ```
 
-The CLI accepts optional future live-mode context and displays it in the mock UI:
+Launch a live proxy inspector:
 
 ```sh
 clinspect --target http://localhost:3000 --port 8080
 ```
 
+Then send traffic to `http://localhost:8080`; requests are forwarded to the target and captured in the terminal UI.
+
 Current MVP behavior:
 
 - starts an Ink terminal UI
-- seeds realistic mock request/response entries
-- appends new mock traffic on an interval
+- defaults to mock/demo traffic when `--target` is omitted
+- starts live reverse proxy mode when `--target` is provided
+- forwards live HTTP requests to the upstream target
+- captures request/response headers, status, timing, and capped text bodies
 - shows a traffic list and selected payload details
-- supports up/down inspection, stable held selection, `f` follow-latest mode, tab focus toggle, `q` quit, and Ctrl-C cleanup
+- supports up/down inspection, stable held selection, `f` follow-latest mode, tab focus toggle, detail scrolling, request/response tab switching, pause/resume, filters, search, clear logs, `q` quit, and Ctrl-C cleanup
 - caps stored text bodies and marks truncated payloads
-
-Live HTTP proxying is planned after the mock UI is stable.
 
 ## Project Layout
 
@@ -88,14 +89,15 @@ Included:
 
 - mock traffic generation
 - terminal two-pane navigation
+- live reverse proxying
+- request/response capture from real upstreams
+- filtering and search
 - capped body storage
 - ring-buffer log state
-- CLI option validation for future `--target` and `--port` use
+- CLI option validation for `--target` and `--port`
 - Node built-in tests
 
 Deferred:
 
-- live reverse proxying
-- request/response capture from real upstreams
-- filtering and search
+- WebSocket and CONNECT tunneling
 - export/persistence

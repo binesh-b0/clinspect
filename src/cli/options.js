@@ -29,9 +29,9 @@ export function parseTargetUrl(value) {
 export function createProgram() {
   return new Command()
     .name('clinspect')
-    .description('Mock terminal traffic inspector MVP')
-    .option('-p, --port <number>', 'local proxy port for future live mode', parsePort, DEFAULT_PORT)
-    .option('-t, --target <url>', 'upstream target URL for future live mode', parseTargetUrl);
+    .description('Terminal HTTP traffic inspector')
+    .option('-p, --port <number>', 'local proxy port for live mode', parsePort, DEFAULT_PORT)
+    .option('-t, --target <url>', 'upstream target URL for live proxy mode', parseTargetUrl);
 }
 
 export function isHelpRequested(argv = process.argv) {
@@ -56,11 +56,12 @@ export function parseCliOptions(argv = process.argv) {
   program.parse(argv, { from: 'node' });
 
   const options = program.opts();
+  const targetUrl = options.target ?? null;
 
   return {
-    mode: 'demo',
+    mode: targetUrl ? 'live' : 'demo',
     port: options.port,
-    targetUrl: options.target ?? null
+    targetUrl
   };
 }
 

@@ -39,7 +39,7 @@ test('parseCliOptions defaults to demo mode without a target', () => {
   });
 });
 
-test('parseCliOptions validates optional future live-mode context', () => {
+test('parseCliOptions uses live mode when a target is provided', () => {
   assert.deepEqual(parseCliOptions([
     'node',
     'clinspect',
@@ -48,7 +48,7 @@ test('parseCliOptions validates optional future live-mode context', () => {
     '--port',
     '9090'
   ]), {
-    mode: 'demo',
+    mode: 'live',
     port: 9090,
     targetUrl: 'http://localhost:5173/'
   });

@@ -3,6 +3,10 @@ import { Box, Text, useInput, useStdin } from 'ink';
 
 const h = React.createElement;
 
+const METHOD_FILTERS = ['all', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+const STATUS_FILTERS = ['all', '2xx', '3xx', '4xx', '5xx'];
+const DETAIL_TABS = ['request', 'response'];
+
 const METHOD_COLORS = {
   GET: 'green',
   POST: 'cyan',
@@ -54,6 +58,14 @@ function statusColor(statusCode) {
   return 'gray';
 }
 
+function rowColor(log) {
+  if (log.statusCode >= 400) {
+    return statusColor(log.statusCode);
+  }
+
+  return METHOD_COLORS[log.method] ?? 'white';
+}
+
 function formatHeaders(headers) {
   const entries = Object.entries(headers ?? {});
 
@@ -61,59 +73,160 @@ function formatHeaders(headers) {
     return ['(none)'];
   }
 
-  return entries.slice(0, 5).map(([key, value]) => `${key}: ${value}`);
+  return entries.map(([key, value]) => `${key}: ${value}`);
 }
 
-function previewBody(payload, maxLines = 7) {
-  const lines = String(payload.body || '(empty)').split('\n');
-  const preview = lines.slice(0, maxLines);
+function formatPayloadBody(payload = {}) {
+  const body = String(payload.body || '');
+  const lines = body.length > 0 ? body.split('\n') : ['(empty)'];
 
   if (payload.truncated) {
-    preview.push('[body truncated]');
-  } else if (lines.length > maxLines) {
-    preview.push('[preview shortened]');
+    lines.push('[body truncated]');
   }
 
-  return preview;
+  return lines;
 }
 
-function Header({ context = {}, logsCount }) {
+function headersToSearchText(headers = {}) {
+  return Object.entries(headers)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join('\n');
+}
+
+function matchesStatusFilter(log, statusFilter) {
+  if (statusFilter === 'all') {
+    return true;
+  }
+
+  const statusCode = Number(log.statusCode);
+
+  if (!Number.isInteger(statusCode)) {
+    return false;
+  }
+
+  return Math.floor(statusCode / 100) === Number(statusFilter[0]);
+}
+
+function matchesSearch(log, searchQuery) {
+  const query = searchQuery.trim().toLowerCase();
+
+  if (!query) {
+    return true;
+  }
+
+  return [
+    log.method,
+    log.path,
+    String(log.statusCode ?? ''),
+    headersToSearchText(log.request?.headers),
+    log.request?.body,
+    headersToSearchText(log.response?.headers),
+    log.response?.body
+  ].some((value) => String(value ?? '').toLowerCase().includes(query));
+}
+
+export function filterLogs(logs, options = {}) {
+  const methodFilter = options.methodFilter ?? 'all';
+  const statusFilter = options.statusFilter ?? 'all';
+  const searchQuery = options.searchQuery ?? '';
+
+  return logs.filter((log) => {
+    if (methodFilter !== 'all' && log.method !== methodFilter) {
+      return false;
+    }
+
+    return matchesStatusFilter(log, statusFilter) && matchesSearch(log, searchQuery);
+  });
+}
+
+export function cycleValue(values, currentValue) {
+  const index = values.indexOf(currentValue);
+
+  return values[(index + 1) % values.length] ?? values[0];
+}
+
+export function getDetailLines(log, detailTab = 'request') {
+  if (!log) {
+    return [];
+  }
+
+  const payload = detailTab === 'response' ? log.response : log.request;
+  const title = detailTab === 'response' ? 'Response' : 'Request';
+
+  return [
+    `${title} headers`,
+    ...formatHeaders(payload.headers),
+    '',
+    `${title} body`,
+    ...formatPayloadBody(payload)
+  ];
+}
+
+export function getMaxScrollOffset(lines, visibleCount) {
+  return Math.max(0, lines.length - Math.max(1, visibleCount));
+}
+
+function Header({ context = {}, logsCount, visibleCount, isPaused }) {
+  const mode = context.mode === 'live' ? 'live proxy' : 'demo mode';
   const target = context.targetUrl ?? 'mock traffic';
   const port = context.port ?? 8080;
-  const subtitle = `demo mode | port ${port} | ${target} | ${logsCount} entries`;
+  const captureState = isPaused ? 'paused' : 'capturing';
+  const countText = visibleCount === logsCount
+    ? `${logsCount} entries`
+    : `${visibleCount}/${logsCount} entries`;
+  const subtitle = `${mode} | ${captureState} | port ${port} | ${target} | ${countText}`;
 
   return h(
     Box,
     { flexDirection: 'column', marginBottom: 1 },
     h(Text, { color: 'cyan', bold: true }, 'clinspect'),
-    h(Text, { color: 'gray' }, subtitle)
+    h(Text, { color: 'gray', wrap: 'truncate' }, subtitle)
   );
 }
 
-function TrafficList({ logs, selectedIndex, isFocused, isFollowingLatest }) {
+function formatFilterLabel(methodFilter, statusFilter, searchQuery) {
+  const filters = `${methodFilter}/${statusFilter}`;
+  const search = searchQuery.trim() ? `/${truncate(searchQuery, 16)}` : '';
+
+  return `${filters}${search}`;
+}
+
+function TrafficList({
+  logs,
+  totalCount,
+  selectedIndex,
+  isFocused,
+  isFollowingLatest,
+  methodFilter,
+  statusFilter,
+  searchQuery
+}) {
   const rows = process.stdout.rows || 24;
-  const visibleCount = Math.max(5, rows - 11);
+  const visibleCount = Math.max(5, rows - 12);
   const startIndex = Math.max(0, Math.min(
     selectedIndex - Math.floor(visibleCount / 2),
     Math.max(0, logs.length - visibleCount)
   ));
   const visibleLogs = logs.slice(startIndex, startIndex + visibleCount);
+  const filterLabel = formatFilterLabel(methodFilter, statusFilter, searchQuery);
+  const emptyText = totalCount === 0 ? 'Waiting for traffic...' : 'No matching traffic';
 
   return h(
     Box,
     {
       flexDirection: 'column',
-      width: 48,
+      width: 50,
       flexShrink: 0,
       borderStyle: 'single',
       borderColor: isFocused ? 'cyan' : 'gray',
       paddingX: 1,
       marginRight: 1
     },
-    h(Text, { bold: true }, `Traffic ${isFocused ? 'focused' : 'idle'} | ${isFollowingLatest ? 'follow latest' : 'hold'}`),
+    h(Text, { bold: true }, `Traffic ${isFocused ? 'focused' : 'idle'} | ${isFollowingLatest ? 'follow' : 'hold'}`),
+    h(Text, { color: 'gray', wrap: 'truncate' }, `filters ${filterLabel}`),
     h(Text, { color: 'gray' }, '  time     meth   st  path'),
     logs.length === 0
-      ? h(Text, { color: 'gray' }, 'Waiting for traffic...')
+      ? h(Text, { color: 'gray' }, emptyText)
       : visibleLogs.map((log, offset) => {
         const absoluteIndex = startIndex + offset;
         const selected = absoluteIndex === selectedIndex;
@@ -126,7 +239,7 @@ function TrafficList({ logs, selectedIndex, isFocused, isFollowingLatest }) {
           Text,
           {
             key: log.id,
-            color: selected ? 'black' : METHOD_COLORS[log.method] ?? 'white',
+            color: selected ? 'black' : rowColor(log),
             backgroundColor: selected ? 'cyan' : undefined,
             wrap: 'truncate'
           },
@@ -136,17 +249,7 @@ function TrafficList({ logs, selectedIndex, isFocused, isFollowingLatest }) {
   );
 }
 
-function DetailSection({ title, headers, payload }) {
-  return h(
-    Box,
-    { flexDirection: 'column', marginBottom: 1 },
-    h(Text, { color: 'cyan', bold: true }, title),
-    ...formatHeaders(headers).map((line) => h(Text, { key: `${title}-${line}`, color: 'gray', wrap: 'truncate' }, line)),
-    ...previewBody(payload).map((line, index) => h(Text, { key: `${title}-body-${index}`, wrap: 'truncate' }, line))
-  );
-}
-
-function DetailPane({ log, isFocused }) {
+function DetailPane({ log, isFocused, detailTab, scrollOffset }) {
   if (!log) {
     return h(
       Box,
@@ -161,8 +264,18 @@ function DetailPane({ log, isFocused }) {
     );
   }
 
+  const rows = process.stdout.rows || 24;
+  const visibleCount = Math.max(4, rows - 12);
+  const lines = getDetailLines(log, detailTab);
+  const maxScrollOffset = getMaxScrollOffset(lines, visibleCount);
+  const safeScrollOffset = Math.min(scrollOffset, maxScrollOffset);
+  const visibleLines = lines.slice(safeScrollOffset, safeScrollOffset + visibleCount);
   const timing = `${log.statusCode ?? '---'} in ${log.responseTimeMs}ms`;
   const summary = `${log.method} ${log.path} | ${timing}`;
+  const tabLabel = `${detailTab === 'request' ? '[Request]' : ' Request '} ${detailTab === 'response' ? '[Response]' : ' Response '}`;
+  const scrollLabel = maxScrollOffset === 0
+    ? 'top'
+    : `${safeScrollOffset + 1}-${Math.min(lines.length, safeScrollOffset + visibleCount)}/${lines.length}`;
 
   return h(
     Box,
@@ -174,14 +287,30 @@ function DetailPane({ log, isFocused }) {
       paddingX: 1
     },
     h(Text, { bold: true, color: statusColor(log.statusCode), wrap: 'truncate' }, summary),
-    h(DetailSection, { title: 'Request', headers: log.request.headers, payload: log.request }),
-    h(DetailSection, { title: 'Response', headers: log.response.headers, payload: log.response })
+    h(Text, { color: 'gray', wrap: 'truncate' }, `${tabLabel} | scroll ${scrollLabel}`),
+    ...visibleLines.map((line, index) => h(
+      Text,
+      {
+        key: `${detailTab}-${safeScrollOffset + index}`,
+        color: line.endsWith('headers') || line.endsWith('body') ? 'cyan' : undefined,
+        bold: line.endsWith('headers') || line.endsWith('body'),
+        wrap: 'truncate'
+      },
+      line
+    ))
   );
 }
 
-function Footer({ isListFocused, isRawModeSupported, isFollowingLatest }) {
+function Footer({
+  isListFocused,
+  isRawModeSupported,
+  isFollowingLatest,
+  isPaused,
+  isSearchEditing,
+  searchQuery
+}) {
   const text = isRawModeSupported
-    ? `up/down inspect | tab focus: ${isListFocused ? 'traffic' : 'details'} | follow: ${isFollowingLatest ? 'on' : 'off'} | f latest | q quit`
+    ? `up/down ${isListFocused ? 'inspect' : 'scroll'} | tab ${isListFocused ? 'traffic' : 'details'} | r req/res | p ${isPaused ? 'resume' : 'pause'} | m method | s status | / search ${isSearchEditing ? `[${searchQuery}]` : ''} | c clear | f latest | q quit`
     : 'keyboard input unavailable in this shell | Ctrl-C or SIGTERM quit';
 
   return h(
@@ -189,7 +318,7 @@ function Footer({ isListFocused, isRawModeSupported, isFollowingLatest }) {
     { marginTop: 1 },
     h(
       Text,
-      { color: 'gray' },
+      { color: 'gray', wrap: 'truncate' },
       text
     )
   );
@@ -235,10 +364,60 @@ export function moveSelectedLogId(logs, selectedLogId, direction) {
   return logs[nextIndex].id;
 }
 
-function KeyboardControls({ isListFocused, onQuit, onToggleFocus, onMoveSelection, onFollowLatest }) {
+function KeyboardControls({
+  isListFocused,
+  isSearchEditing,
+  onAppendSearch,
+  onBackspaceSearch,
+  onClearLogs,
+  onCycleMethod,
+  onCycleStatus,
+  onFinishSearch,
+  onFollowLatest,
+  onMoveSelection,
+  onQuit,
+  onScrollDetails,
+  onStartSearch,
+  onToggleDetailTab,
+  onToggleFocus,
+  onTogglePause
+}) {
   useInput((input, key) => {
-    if (input === 'q' || (input === 'c' && key.ctrl)) {
+    if (input === 'c' && key.ctrl) {
       onQuit();
+      return;
+    }
+
+    if (isSearchEditing) {
+      if (key.escape || key.return) {
+        onFinishSearch();
+        return;
+      }
+
+      if (key.backspace || key.delete) {
+        onBackspaceSearch();
+        return;
+      }
+
+      if (input && !key.ctrl && !key.meta) {
+        onAppendSearch(input);
+      }
+
+      return;
+    }
+
+    if (input === 'q') {
+      onQuit();
+      return;
+    }
+
+    if (input === '/') {
+      onStartSearch();
+      return;
+    }
+
+    if (input === 'c') {
+      onClearLogs();
       return;
     }
 
@@ -247,28 +426,65 @@ function KeyboardControls({ isListFocused, onQuit, onToggleFocus, onMoveSelectio
       return;
     }
 
+    if (input === 'm') {
+      onCycleMethod();
+      return;
+    }
+
+    if (input === 'p') {
+      onTogglePause();
+      return;
+    }
+
+    if (input === 'r') {
+      onToggleDetailTab();
+      return;
+    }
+
+    if (input === 's') {
+      onCycleStatus();
+      return;
+    }
+
     if (key.tab) {
       onToggleFocus();
       return;
     }
 
-    if (!isListFocused) {
-      return;
-    }
-
     if (key.upArrow) {
-      onMoveSelection(-1);
+      if (isListFocused) {
+        onMoveSelection(-1);
+      } else {
+        onScrollDetails(-1);
+      }
     }
 
     if (key.downArrow) {
-      onMoveSelection(1);
+      if (isListFocused) {
+        onMoveSelection(1);
+      } else {
+        onScrollDetails(1);
+      }
+    }
+
+    if (key.pageUp && !isListFocused) {
+      onScrollDetails(-5);
+    }
+
+    if (key.pageDown && !isListFocused) {
+      onScrollDetails(5);
     }
   });
 
   return null;
 }
 
-export function App({ stateStore, context = {}, onQuit = () => {} }) {
+export function App({
+  stateStore,
+  context = {},
+  captureController = null,
+  onQuit = () => {}
+}) {
   const { isRawModeSupported } = useStdin();
   const [logs, setLogs] = useState(() => stateStore.getLogs());
   const [selectedLogId, setSelectedLogId] = useState(() => {
@@ -278,6 +494,19 @@ export function App({ stateStore, context = {}, onQuit = () => {} }) {
   });
   const [isFollowingLatest, setIsFollowingLatest] = useState(false);
   const [isListFocused, setIsListFocused] = useState(true);
+  const [isPaused, setIsPaused] = useState(() => captureController?.isPaused?.() ?? false);
+  const [methodFilter, setMethodFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchEditing, setIsSearchEditing] = useState(false);
+  const [detailTab, setDetailTab] = useState('request');
+  const [detailScrollOffset, setDetailScrollOffset] = useState(0);
+
+  const filteredLogs = useMemo(() => filterLogs(logs, {
+    methodFilter,
+    statusFilter,
+    searchQuery
+  }), [logs, methodFilter, statusFilter, searchQuery]);
 
   useEffect(() => {
     const handleUpdate = (updatedLogs) => setLogs(updatedLogs);
@@ -288,13 +517,24 @@ export function App({ stateStore, context = {}, onQuit = () => {} }) {
   }, [stateStore]);
 
   useEffect(() => {
-    setSelectedLogId((currentId) => resolveSelectedLogId(logs, currentId, {
+    setSelectedLogId((currentId) => resolveSelectedLogId(filteredLogs, currentId, {
       followLatest: isFollowingLatest
     }));
-  }, [logs, isFollowingLatest]);
+  }, [filteredLogs, isFollowingLatest]);
 
-  const selectedIndex = useMemo(() => getSelectedIndex(logs, selectedLogId), [logs, selectedLogId]);
-  const selectedLog = useMemo(() => logs[selectedIndex] ?? null, [logs, selectedIndex]);
+  useEffect(() => {
+    setDetailScrollOffset(0);
+  }, [selectedLogId, detailTab]);
+
+  const selectedIndex = useMemo(() => getSelectedIndex(filteredLogs, selectedLogId), [filteredLogs, selectedLogId]);
+  const selectedLog = useMemo(() => filteredLogs[selectedIndex] ?? null, [filteredLogs, selectedIndex]);
+  const detailLines = useMemo(() => getDetailLines(selectedLog, detailTab), [selectedLog, detailTab]);
+  const detailVisibleCount = Math.max(4, (process.stdout.rows || 24) - 12);
+  const maxDetailScrollOffset = getMaxScrollOffset(detailLines, detailVisibleCount);
+
+  useEffect(() => {
+    setDetailScrollOffset((current) => Math.min(current, maxDetailScrollOffset));
+  }, [maxDetailScrollOffset]);
 
   return h(
     Box,
@@ -306,25 +546,95 @@ export function App({ stateStore, context = {}, onQuit = () => {} }) {
     isRawModeSupported
       ? h(KeyboardControls, {
         isListFocused,
+        isSearchEditing,
+        onAppendSearch: (value) => {
+          setSearchQuery((current) => `${current}${value}`);
+          setIsFollowingLatest(false);
+        },
+        onBackspaceSearch: () => {
+          setSearchQuery((current) => current.slice(0, -1));
+          setIsFollowingLatest(false);
+        },
+        onClearLogs: () => {
+          stateStore.clear();
+          setSelectedLogId(null);
+          setIsFollowingLatest(false);
+          setDetailScrollOffset(0);
+        },
+        onCycleMethod: () => {
+          setMethodFilter((current) => cycleValue(METHOD_FILTERS, current));
+          setIsFollowingLatest(false);
+        },
+        onCycleStatus: () => {
+          setStatusFilter((current) => cycleValue(STATUS_FILTERS, current));
+          setIsFollowingLatest(false);
+        },
+        onFinishSearch: () => setIsSearchEditing(false),
         onQuit,
         onToggleFocus: () => setIsListFocused((current) => !current),
         onMoveSelection: (direction) => {
           setIsFollowingLatest(false);
-          setSelectedLogId((currentId) => moveSelectedLogId(logs, currentId, direction));
+          setSelectedLogId((currentId) => moveSelectedLogId(filteredLogs, currentId, direction));
+        },
+        onScrollDetails: (direction) => {
+          setDetailScrollOffset((current) => Math.min(
+            maxDetailScrollOffset,
+            Math.max(0, current + direction)
+          ));
+        },
+        onStartSearch: () => {
+          setIsSearchEditing(true);
+          setIsFollowingLatest(false);
         },
         onFollowLatest: () => {
           setIsFollowingLatest(true);
-          setSelectedLogId(resolveSelectedLogId(logs, selectedLogId, { followLatest: true }));
+          setSelectedLogId(resolveSelectedLogId(filteredLogs, selectedLogId, { followLatest: true }));
+        },
+        onToggleDetailTab: () => {
+          setDetailTab((current) => cycleValue(DETAIL_TABS, current));
+        },
+        onTogglePause: () => {
+          setIsPaused((current) => {
+            const next = !current;
+            captureController?.setPaused?.(next);
+            return next;
+          });
         }
       })
       : null,
-    h(Header, { context, logsCount: logs.length }),
+    h(Header, {
+      context,
+      logsCount: logs.length,
+      visibleCount: filteredLogs.length,
+      isPaused
+    }),
     h(
       Box,
       { flexDirection: 'row', flexGrow: 1 },
-      h(TrafficList, { logs, selectedIndex, isFocused: isListFocused, isFollowingLatest }),
-      h(DetailPane, { log: selectedLog, isFocused: !isListFocused })
+      h(TrafficList, {
+        logs: filteredLogs,
+        totalCount: logs.length,
+        selectedIndex,
+        isFocused: isListFocused,
+        isFollowingLatest,
+        methodFilter,
+        statusFilter,
+        searchQuery
+      }),
+      h(DetailPane, {
+        log: selectedLog,
+        isFocused: !isListFocused,
+        detailTab,
+        scrollOffset: detailScrollOffset
+      })
     ),
-    h(Footer, { isListFocused, isRawModeSupported, isFollowingLatest })
+    h(Footer, {
+      isListFocused,
+      isRawModeSupported,
+      isFollowingLatest,
+      isPaused,
+      isSearchEditing,
+      searchQuery
+    })
   );
 }

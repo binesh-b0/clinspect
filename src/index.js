@@ -9,11 +9,31 @@ import {
   getCliHelpText,
   isHelpRequested
 } from './cli/options.js';
-import { startMockTrafficFeed } from './engine/proxy.js';
+import { startLiveProxy, startMockTrafficFeed } from './engine/proxy.js';
 import { DEFAULT_BODY_LIMIT, StateStore } from './store/state.js';
 import { App } from './ui/App.js';
 
 const h = React.createElement;
+
+function createCaptureController() {
+  let paused = false;
+
+  return {
+    isPaused() {
+      return paused;
+    },
+    setPaused(value) {
+      paused = Boolean(value);
+    },
+    togglePaused() {
+      paused = !paused;
+      return paused;
+    },
+    shouldCapture() {
+      return !paused;
+    }
+  };
+}
 
 function isDirectExecution() {
   if (!process.argv[1]) {
@@ -26,19 +46,30 @@ function isDirectExecution() {
 export function startInspector(options, runtime = {}) {
   const stateStore = runtime.stateStore ?? new StateStore({ bodyLimit: DEFAULT_BODY_LIMIT });
   const renderApp = runtime.renderApp ?? render;
-  const startFeed = runtime.startFeed ?? startMockTrafficFeed;
+  const startDemoFeed = runtime.startDemoFeed ?? runtime.startFeed ?? startMockTrafficFeed;
+  const startProxy = runtime.startLiveProxy ?? startLiveProxy;
   const exitProcess = runtime.exitProcess ?? process.exit;
-  const feed = startFeed(stateStore, { bodyLimit: DEFAULT_BODY_LIMIT });
+  const captureController = runtime.captureController ?? createCaptureController();
+  const engine = options.mode === 'live'
+    ? startProxy(stateStore, {
+      bodyLimit: DEFAULT_BODY_LIMIT,
+      port: options.port,
+      shouldCapture: () => captureController.shouldCapture(),
+      targetUrl: options.targetUrl
+    })
+    : startDemoFeed(stateStore, {
+      bodyLimit: DEFAULT_BODY_LIMIT,
+      shouldCapture: () => captureController.shouldCapture()
+    });
   let inkInstance;
   let stopped = false;
 
   const shutdown = (code = 0) => {
     if (stopped) {
-      return;
+      return Promise.resolve();
     }
 
     stopped = true;
-    feed.stop();
     process.off('SIGINT', handleSignal);
     process.off('SIGTERM', handleSignal);
 
@@ -47,7 +78,14 @@ export function startInspector(options, runtime = {}) {
     }
 
     process.stdout.write('\n');
-    exitProcess(code);
+
+    return Promise.resolve(engine.stop())
+      .catch((error) => {
+        process.stderr.write(`${chalk.red(`Error during shutdown: ${formatCliError(error)}`)}\n`);
+      })
+      .finally(() => {
+        exitProcess(code);
+      });
   };
 
   const handleSignal = () => shutdown(0);
@@ -59,12 +97,15 @@ export function startInspector(options, runtime = {}) {
     h(App, {
       stateStore,
       context: options,
+      captureController,
       onQuit: () => shutdown(0)
     }),
     { exitOnCtrlC: false }
   );
 
   return {
+    captureController,
+    engine,
     stateStore,
     stop: shutdown,
     view: inkInstance
