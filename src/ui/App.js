@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { XMLParser } from 'fast-xml-parser';
+import { parseDocument } from 'htmlparser2';
 import { Box, Text, useInput, useStdin } from 'ink';
 import { isCookieHeaderName, maskCookieHeaderValue } from '../cookies.js';
 import {
@@ -589,19 +591,509 @@ function formatJsonRows(value, options = {}, pathParts = [], label = null, depth
   return rows;
 }
 
+function withPreviewLabel(rows, label) {
+  if (label) {
+    rows.previewLabel = label;
+  }
+
+  return rows;
+}
+
 function appendTruncationRow(rows, payload = {}) {
+  const { previewLabel } = rows;
+
   if (!payload.truncated) {
     return rows;
   }
 
-  return [
+  return withPreviewLabel([
     ...rows,
     createDetailRow({
       id: 'body-truncated',
       segments: [{ text: '[body truncated]', color: 'yellow' }],
       type: 'warning'
     })
-  ];
+  ], previewLabel);
+}
+
+function trimmedPayloadBody(body) {
+  return String(body ?? '').trim();
+}
+
+function looksLikeJsonBody(body) {
+  const trimmed = trimmedPayloadBody(body);
+
+  return trimmed.startsWith('{') || trimmed.startsWith('[');
+}
+
+function isNdjsonContentType(contentType) {
+  return /(?:^|[+/.-])(?:x-)?ndjson$/.test(contentType) ||
+    /(?:^|[+/.-])jsonl$/.test(contentType) ||
+    contentType === 'application/jsonlines' ||
+    contentType === 'text/jsonlines';
+}
+
+function isReactFlightContentType(contentType) {
+  return contentType === 'text/x-component' ||
+    contentType === 'application/x-component' ||
+    contentType === 'application/react-flight';
+}
+
+function isServerSentEventContentType(contentType) {
+  return contentType === 'text/event-stream';
+}
+
+function isUrlEncodedContentType(contentType) {
+  return contentType === 'application/x-www-form-urlencoded';
+}
+
+function isHtmlContentType(contentType) {
+  return contentType === 'text/html' || contentType === 'application/xhtml+xml';
+}
+
+function isXmlContentType(contentType) {
+  return /(?:^|[+/.-])xml$/.test(contentType) ||
+    contentType === 'image/svg+xml' ||
+    contentType === 'application/rss+xml' ||
+    contentType === 'application/atom+xml';
+}
+
+function looksLikeReactFlightBody(body) {
+  const lines = String(body ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 5);
+
+  return lines.length > 0 && lines.every((line) => /^\d+:[A-Z]?/.test(line));
+}
+
+function looksLikeSseBody(body) {
+  return String(body ?? '')
+    .split(/\r?\n/)
+    .some((line) => /^(event|data|id|retry):/.test(line.trim()));
+}
+
+function looksLikeUrlEncodedBody(body) {
+  const trimmed = trimmedPayloadBody(body);
+
+  return /^[^=\s&]+=[\s\S]*$/.test(trimmed) && !trimmed.includes('\n');
+}
+
+function looksLikeHtmlBody(body) {
+  return /^<!doctype\s+html/i.test(trimmedPayloadBody(body)) ||
+    /^<html(?:\s|>)/i.test(trimmedPayloadBody(body));
+}
+
+function looksLikeXmlBody(body) {
+  const trimmed = trimmedPayloadBody(body);
+
+  return /^<\?xml(?:\s|>)/i.test(trimmed) ||
+    (/^<[A-Za-z_][\w:.-]*(?:\s|>)/.test(trimmed) && !looksLikeHtmlBody(trimmed));
+}
+
+function parseJsonPayload(body) {
+  return JSON.parse(String(body));
+}
+
+function parseMaybeJsonValue(value) {
+  const trimmed = String(value ?? '').trim();
+
+  if (!trimmed) {
+    return {
+      parsed: false,
+      value: ''
+    };
+  }
+
+  if (!/^(?:[\[{"]|-?\d|true\b|false\b|null\b)/.test(trimmed)) {
+    return {
+      parsed: false,
+      value: sanitizeTerminalText(value)
+    };
+  }
+
+  try {
+    return {
+      parsed: true,
+      value: JSON.parse(trimmed)
+    };
+  } catch {
+    return {
+      parsed: false,
+      value: sanitizeTerminalText(value)
+    };
+  }
+}
+
+function formatRootedJsonRows(value, options, rootName) {
+  return formatJsonRows(value, options, [rootName], rootName, 0);
+}
+
+function formatJsonPayloadRows(body, options) {
+  return formatJsonRows(parseJsonPayload(body), options);
+}
+
+function parseNdjsonRecords(body, allowSingleLine = false) {
+  const lines = String(body ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!allowSingleLine && lines.length < 2) {
+    throw new Error('not ndjson');
+  }
+
+  return lines.map((line) => JSON.parse(line));
+}
+
+function formatNdjsonRows(body, options, contentType) {
+  return formatRootedJsonRows(
+    parseNdjsonRecords(body, isNdjsonContentType(contentType)),
+    options,
+    'records'
+  );
+}
+
+function parseReactFlightRecords(body, requireFlightLine = false) {
+  const lines = String(body ?? '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  let sawFlightLine = false;
+
+  const records = lines.map((line, index) => {
+    const match = line.match(/^([^:]+):([A-Z])?([\s\S]*)$/);
+
+    if (!match) {
+      return {
+        line: index + 1,
+        malformed: true,
+        raw: sanitizeTerminalText(line)
+      };
+    }
+
+    sawFlightLine = true;
+
+    const parsedPayload = parseMaybeJsonValue(match[3]);
+
+    return {
+      id: match[1],
+      line: index + 1,
+      payload: parsedPayload.value,
+      payloadType: parsedPayload.parsed ? jsonValueType(parsedPayload.value) : 'raw',
+      tag: match[2] || 'data'
+    };
+  });
+
+  if (requireFlightLine && !sawFlightLine) {
+    throw new Error('not react flight');
+  }
+
+  return records;
+}
+
+function formatReactFlightRows(body, options, contentType) {
+  return formatRootedJsonRows(
+    parseReactFlightRecords(body, !isReactFlightContentType(contentType)),
+    options,
+    'flight'
+  );
+}
+
+function parseSseEvents(body) {
+  const events = [];
+  let event = {};
+  let dataLines = [];
+
+  const flush = () => {
+    if (Object.keys(event).length === 0 && dataLines.length === 0) {
+      return;
+    }
+
+    const data = dataLines.join('\n');
+    const parsedData = parseMaybeJsonValue(data);
+
+    events.push({
+      ...event,
+      ...(dataLines.length > 0
+        ? {
+          data: parsedData.value,
+          dataType: parsedData.parsed ? jsonValueType(parsedData.value) : 'text'
+        }
+        : {})
+    });
+    event = {};
+    dataLines = [];
+  };
+
+  String(body ?? '').split(/\r?\n/).forEach((rawLine) => {
+    const line = rawLine.trimEnd();
+
+    if (line.length === 0) {
+      flush();
+      return;
+    }
+
+    if (line.startsWith(':')) {
+      event.comment = event.comment
+        ? `${event.comment}\n${line.slice(1).trimStart()}`
+        : line.slice(1).trimStart();
+      return;
+    }
+
+    const separatorIndex = line.indexOf(':');
+    const field = separatorIndex === -1 ? line : line.slice(0, separatorIndex);
+    const rawValue = separatorIndex === -1 ? '' : line.slice(separatorIndex + 1);
+    const value = rawValue.startsWith(' ') ? rawValue.slice(1) : rawValue;
+
+    if (field === 'data') {
+      dataLines.push(value);
+    } else if (field === 'event') {
+      event.event = value;
+    } else if (field === 'id') {
+      event.id = value;
+    } else if (field === 'retry') {
+      event.retry = Number.isNaN(Number(value)) ? value : Number(value);
+    } else if (field) {
+      event[field] = value;
+    }
+  });
+  flush();
+
+  if (events.length === 0) {
+    throw new Error('not sse');
+  }
+
+  return events;
+}
+
+function formatSseRows(body, options) {
+  return formatRootedJsonRows(parseSseEvents(body), options, 'events');
+}
+
+function parseUrlEncodedForm(body) {
+  if (!looksLikeUrlEncodedBody(body)) {
+    throw new Error('not urlencoded');
+  }
+
+  const form = {};
+
+  for (const [key, value] of new URLSearchParams(String(body))) {
+    if (Object.prototype.hasOwnProperty.call(form, key)) {
+      form[key] = Array.isArray(form[key])
+        ? [...form[key], value]
+        : [form[key], value];
+    } else {
+      form[key] = value;
+    }
+  }
+
+  if (Object.keys(form).length === 0) {
+    throw new Error('not urlencoded');
+  }
+
+  return form;
+}
+
+function formatUrlEncodedRows(body, options) {
+  return formatRootedJsonRows(parseUrlEncodedForm(body), options, 'form');
+}
+
+function parseXmlBody(body) {
+  const parser = new XMLParser({
+    allowBooleanAttributes: true,
+    attributeNamePrefix: '@',
+    ignoreAttributes: false,
+    parseAttributeValue: true,
+    parseTagValue: true,
+    textNodeName: '#text',
+    trimValues: true
+  });
+  const parsed = parser.parse(String(body));
+
+  if (!parsed || typeof parsed !== 'object' || Object.keys(parsed).length === 0) {
+    throw new Error('not xml');
+  }
+
+  return parsed;
+}
+
+function formatXmlRows(body, options) {
+  return formatRootedJsonRows(parseXmlBody(body), options, 'xml');
+}
+
+function isHtmlElementNode(node) {
+  return node?.type === 'tag' || node?.type === 'script' || node?.type === 'style';
+}
+
+function getHtmlElementChildren(node) {
+  return (node?.children ?? []).filter(isHtmlElementNode);
+}
+
+function getHtmlDirectText(node) {
+  return (node?.children ?? [])
+    .filter((child) => child.type === 'text')
+    .map((child) => child.data)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function formatHtmlAttributeSummary(attributes = {}) {
+  const entries = Object.entries(attributes);
+
+  if (entries.length === 0) {
+    return '';
+  }
+
+  return ` ${entries
+    .slice(0, 4)
+    .map(([key, value]) => `${key}=${JSON.stringify(String(value))}`)
+    .join(' ')}${entries.length > 4 ? ' ...' : ''}`;
+}
+
+function htmlChildPath(parentPath, tagName, siblingIndex) {
+  if (!parentPath) {
+    return tagName;
+  }
+
+  if (parentPath === 'html' && (tagName === 'head' || tagName === 'body')) {
+    return `${parentPath}.${tagName}`;
+  }
+
+  return `${parentPath}.${tagName}[${siblingIndex}]`;
+}
+
+function formatHtmlElementRows(nodes, options = {}, parentPath = '', depth = 0) {
+  const rows = [];
+  const collapsedPaths = new Set(options.collapsedPaths ?? []);
+  const siblingCounts = new Map();
+
+  nodes.filter(isHtmlElementNode).forEach((node) => {
+    const tagName = String(node.name ?? 'element').toLowerCase();
+    const siblingIndex = siblingCounts.get(tagName) ?? 0;
+    const path = htmlChildPath(parentPath, tagName, siblingIndex);
+    const childElements = getHtmlElementChildren(node);
+    const directText = getHtmlDirectText(node);
+    const attributes = formatHtmlAttributeSummary(node.attribs);
+    const isCollapsible = childElements.length > 0;
+    const collapsed = isCollapsible && collapsedPaths.has(path);
+    const indent = '  '.repeat(depth);
+    const summaryParts = [
+      `<${tagName}${attributes}>`,
+      ...(childElements.length > 0 ? [`${childElements.length} children`] : []),
+      ...(directText ? [JSON.stringify(truncate(directText, 64))] : [])
+    ];
+    const summary = summaryParts.join(' ');
+
+    siblingCounts.set(tagName, siblingIndex + 1);
+    rows.push(createDetailRow({
+      collapsible: isCollapsible,
+      collapsed,
+      id: `html-${path}`,
+      matchText: summary,
+      path,
+      searchText: [path, summary, directText].filter(Boolean).join(' '),
+      segments: [
+        { text: indent },
+        { text: isCollapsible ? (collapsed ? '> ' : 'v ') : '  ', color: 'gray' },
+        { text: `<${tagName}`, color: 'cyan' },
+        ...(attributes ? [{ text: attributes, color: 'gray' }] : []),
+        { text: '>', color: 'gray' },
+        ...(childElements.length > 0 ? [{ text: ` ${childElements.length} children`, color: 'gray' }] : []),
+        ...(directText ? [{ text: ` ${JSON.stringify(truncate(directText, 64))}`, color: 'green' }] : [])
+      ],
+      text: `${indent}${isCollapsible ? (collapsed ? '> ' : 'v ') : '  '}${summary}`,
+      type: 'html-element'
+    }));
+
+    if (!collapsed) {
+      rows.push(...formatHtmlElementRows(childElements, options, path, depth + 1));
+    }
+  });
+
+  return rows;
+}
+
+function formatHtmlRows(body, options) {
+  const document = parseDocument(String(body), {
+    lowerCaseAttributeNames: true,
+    lowerCaseTags: true
+  });
+  const rows = formatHtmlElementRows(document.children ?? [], options);
+
+  if (rows.length === 0) {
+    throw new Error('not html');
+  }
+
+  return rows;
+}
+
+const PAYLOAD_PARSERS = [
+  {
+    label: 'React Flight',
+    detect: (body, contentType) => isReactFlightContentType(contentType) || looksLikeReactFlightBody(body),
+    format: formatReactFlightRows
+  },
+  {
+    label: 'SSE',
+    detect: (body, contentType) => isServerSentEventContentType(contentType) || looksLikeSseBody(body),
+    format: formatSseRows
+  },
+  {
+    label: 'NDJSON',
+    detect: (body, contentType) => isNdjsonContentType(contentType) || parseNdjsonRecords(body).length > 0,
+    format: formatNdjsonRows
+  },
+  {
+    label: 'JSON',
+    detect: (body, contentType) => isJsonContentType(contentType) || looksLikeJsonBody(body),
+    format: formatJsonPayloadRows
+  },
+  {
+    label: 'Form',
+    detect: (body, contentType) => isUrlEncodedContentType(contentType) || looksLikeUrlEncodedBody(body),
+    format: formatUrlEncodedRows
+  },
+  {
+    label: 'HTML',
+    detect: (body, contentType) => isHtmlContentType(contentType) || looksLikeHtmlBody(body),
+    format: formatHtmlRows
+  },
+  {
+    label: 'XML',
+    detect: (body, contentType) => isXmlContentType(contentType) || looksLikeXmlBody(body),
+    format: formatXmlRows
+  }
+];
+
+function formatParsedPayloadRows(body, contentType, options = {}) {
+  for (const parser of PAYLOAD_PARSERS) {
+    let detected = false;
+
+    try {
+      detected = parser.detect(body, contentType);
+    } catch {
+      detected = false;
+    }
+
+    if (!detected) {
+      continue;
+    }
+
+    try {
+      const rows = parser.format(body, options, contentType);
+
+      if (rows.length > 0) {
+        return withPreviewLabel(rows, parser.label);
+      }
+    } catch {
+      // Parser detection can be heuristic; fall through to the next parser.
+    }
+  }
+
+  return null;
 }
 
 export function formatStructuredPayloadRows(payload = {}, options = {}) {
@@ -619,13 +1111,12 @@ export function formatStructuredPayloadRows(payload = {}, options = {}) {
   } else if (!isTextualContentType(contentType)) {
     lines = [`(binary body omitted: ${contentType})`];
     return appendTruncationRow(createPlainDetailRows(lines, { idPrefix: 'body-binary', type: 'warning' }), payload);
-  } else if (isJsonContentType(contentType)) {
-    try {
-      return appendTruncationRow(formatJsonRows(JSON.parse(body), options), payload);
-    } catch {
-      lines = splitBodyLines(body);
-      return appendTruncationRow(createPlainDetailRows(lines, { idPrefix: 'body-text', type: 'body' }), payload);
-    }
+  }
+
+  const parsedRows = formatParsedPayloadRows(body, contentType, options);
+
+  if (parsedRows) {
+    return appendTruncationRow(parsedRows, payload);
   }
 
   lines = splitBodyLines(body);
@@ -802,6 +1293,10 @@ export function getDetailRows(log, detailTab = 'request', options = {}) {
 
   const payload = detailTab === 'response' ? log.response : log.request;
   const title = detailTab === 'response' ? 'Response' : 'Request';
+  const bodyRows = formatStructuredPayloadRows(payload, options);
+  const bodyTitle = bodyRows.previewLabel
+    ? `${title} body | ${bodyRows.previewLabel}`
+    : `${title} body`;
   const headerOptions = detailTab === 'request'
     ? {
       ...options,
@@ -820,10 +1315,10 @@ export function getDetailRows(log, detailTab = 'request', options = {}) {
     createDetailRow({ id: `${detailTab}-spacer`, text: '', type: 'blank' }),
     createDetailRow({
       id: `${detailTab}-body-title`,
-      segments: [{ text: `${title} body`, color: 'cyan', bold: true }],
+      segments: [{ text: bodyTitle, color: 'cyan', bold: true }],
       type: 'section'
     }),
-    ...formatStructuredPayloadRows(payload, options)
+    ...bodyRows
   ];
 }
 

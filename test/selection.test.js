@@ -978,7 +978,7 @@ test('response details pretty-print JSON bodies and split long text lines', () =
   };
 
   assert.deepEqual(getDetailLines(jsonLog, 'response').slice(3), [
-    'Response body',
+    'Response body | JSON',
     'v $ { 2 keys',
     '  id: "one"',
     '  v items: [ 1 items',
@@ -993,6 +993,99 @@ test('response details pretty-print JSON bodies and split long text lines', () =
     'a'.repeat(120),
     'b'
   ]);
+});
+
+test('response details parse React Flight component streams', () => {
+  const log = {
+    request: { headers: {}, body: '' },
+    response: {
+      headers: { 'content-type': 'text/x-component' },
+      body: [
+        '0:["b","39d969ac",{"children":["business",{"name":"Ada"}]}]',
+        '1:I{"module":"app/business"}',
+        'not-a-flight-record'
+      ].join('\n'),
+      truncated: false
+    }
+  };
+  const lines = getDetailLines(log, 'response');
+  const rows = getDetailRows(log, 'response');
+
+  assert.equal(lines[3], 'Response body | React Flight');
+  assert.equal(lines.some((line) => line.includes('v flight: [ 3 items')), true);
+  assert.equal(lines.some((line) => line.includes('malformed: true')), true);
+  assert.equal(findDetailMatches(rows, 'flight[0].payload[2].children[1].name').length > 0, true);
+});
+
+test('response details parse mislabeled JSON, NDJSON, SSE, and form bodies', () => {
+  const jsonRows = getDetailRows({
+    request: { headers: {}, body: '' },
+    response: {
+      headers: { 'content-type': 'text/plain' },
+      body: '{"ok":true}',
+      truncated: false
+    }
+  }, 'response');
+  const ndjsonRows = getDetailRows({
+    request: { headers: {}, body: '' },
+    response: {
+      headers: { 'content-type': 'text/plain' },
+      body: '{"id":1}\n{"id":2}',
+      truncated: false
+    }
+  }, 'response');
+  const sseRows = getDetailRows({
+    request: { headers: {}, body: '' },
+    response: {
+      headers: { 'content-type': 'text/event-stream' },
+      body: 'event: update\ndata: {"id":1,"name":"Ada"}\nid: a\n\n:data-only-comment\ndata: done\n',
+      truncated: false
+    }
+  }, 'response');
+  const formRows = getDetailRows({
+    request: { headers: {}, body: '' },
+    response: {
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'locationId=abc&tag=one&tag=two',
+      truncated: false
+    }
+  }, 'response');
+
+  assert.equal(jsonRows[3].text, 'Response body | JSON');
+  assert.equal(ndjsonRows[3].text, 'Response body | NDJSON');
+  assert.equal(sseRows[3].text, 'Response body | SSE');
+  assert.equal(formRows[3].text, 'Response body | Form');
+  assert.equal(findDetailMatches(jsonRows, 'ok').length > 0, true);
+  assert.equal(findDetailMatches(ndjsonRows, 'records[1].id').length > 0, true);
+  assert.equal(findDetailMatches(sseRows, 'events[0].data.name').length > 0, true);
+  assert.equal(findDetailMatches(formRows, 'form.locationId').length > 0, true);
+  assert.equal(findDetailMatches(formRows, 'form.tag[1]').length > 0, true);
+});
+
+test('response details parse XML and HTML previews', () => {
+  const xmlRows = getDetailRows({
+    request: { headers: {}, body: '' },
+    response: {
+      headers: { 'content-type': 'application/xml' },
+      body: '<root><item id="a">Ada</item></root>',
+      truncated: false
+    }
+  }, 'response');
+  const htmlRows = getDetailRows({
+    request: { headers: {}, body: '' },
+    response: {
+      headers: { 'content-type': 'text/html' },
+      body: '<!doctype html><html><body><div id="app"><p>Hello</p></div></body></html>',
+      truncated: false
+    }
+  }, 'response');
+
+  assert.equal(xmlRows[3].text, 'Response body | XML');
+  assert.equal(htmlRows[3].text, 'Response body | HTML');
+  assert.equal(findDetailMatches(xmlRows, 'xml.root.item').length > 0, true);
+  assert.equal(findDetailMatches(xmlRows, 'Ada').length > 0, true);
+  assert.equal(findDetailMatches(htmlRows, 'html.body.div[0]').length > 0, true);
+  assert.equal(findDetailMatches(htmlRows, 'Hello').length > 0, true);
 });
 
 test('detail headers wrap long values without overflowing the pane', () => {
