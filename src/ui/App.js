@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Text, useInput, useStdin } from 'ink';
+import { getProxyOrigin, isPublicTargetUrl } from '../target.js';
 
 const h = React.createElement;
 
@@ -174,13 +175,20 @@ function Header({ context = {}, logsCount, visibleCount, isPaused }) {
   const countText = visibleCount === logsCount
     ? `${logsCount} entries`
     : `${visibleCount}/${logsCount} entries`;
-  const subtitle = `${mode} | ${captureState} | port ${port} | ${target} | ${countText}`;
+  const targetKind = isPublicTargetUrl(context.targetUrl) ? 'public target' : 'local target';
+  const proxyOrigin = getProxyOrigin(port);
+  const subtitle = context.mode === 'live'
+    ? `${mode} | ${captureState} | ${targetKind} | proxy ${proxyOrigin} | ${countText}`
+    : `${mode} | ${captureState} | ${target} | ${countText}`;
 
   return h(
     Box,
     { flexDirection: 'column', marginBottom: 1 },
     h(Text, { color: 'cyan', bold: true }, 'clinspect'),
-    h(Text, { color: 'gray', wrap: 'truncate' }, subtitle)
+    h(Text, { color: 'gray', wrap: 'truncate' }, subtitle),
+    context.mode === 'live'
+      ? h(Text, { color: 'gray', wrap: 'truncate' }, `target ${target}`)
+      : null
   );
 }
 
@@ -192,6 +200,7 @@ function formatFilterLabel(methodFilter, statusFilter, searchQuery) {
 }
 
 function TrafficList({
+  emptyText,
   logs,
   totalCount,
   selectedIndex,
@@ -202,14 +211,14 @@ function TrafficList({
   searchQuery
 }) {
   const rows = process.stdout.rows || 24;
-  const visibleCount = Math.max(5, rows - 12);
+  const visibleCount = Math.max(5, rows - 13);
   const startIndex = Math.max(0, Math.min(
     selectedIndex - Math.floor(visibleCount / 2),
     Math.max(0, logs.length - visibleCount)
   ));
   const visibleLogs = logs.slice(startIndex, startIndex + visibleCount);
   const filterLabel = formatFilterLabel(methodFilter, statusFilter, searchQuery);
-  const emptyText = totalCount === 0 ? 'Waiting for traffic...' : 'No matching traffic';
+  const noRowsText = totalCount === 0 ? emptyText : 'No matching traffic';
 
   return h(
     Box,
@@ -226,7 +235,7 @@ function TrafficList({
     h(Text, { color: 'gray', wrap: 'truncate' }, `filters ${filterLabel}`),
     h(Text, { color: 'gray' }, '  time     meth   st  path'),
     logs.length === 0
-      ? h(Text, { color: 'gray' }, emptyText)
+      ? h(Text, { color: 'gray', wrap: 'truncate' }, noRowsText)
       : visibleLogs.map((log, offset) => {
         const absoluteIndex = startIndex + offset;
         const selected = absoluteIndex === selectedIndex;
@@ -265,7 +274,7 @@ function DetailPane({ log, isFocused, detailTab, scrollOffset }) {
   }
 
   const rows = process.stdout.rows || 24;
-  const visibleCount = Math.max(4, rows - 12);
+  const visibleCount = Math.max(4, rows - 13);
   const lines = getDetailLines(log, detailTab);
   const maxScrollOffset = getMaxScrollOffset(lines, visibleCount);
   const safeScrollOffset = Math.min(scrollOffset, maxScrollOffset);
@@ -529,8 +538,12 @@ export function App({
   const selectedIndex = useMemo(() => getSelectedIndex(filteredLogs, selectedLogId), [filteredLogs, selectedLogId]);
   const selectedLog = useMemo(() => filteredLogs[selectedIndex] ?? null, [filteredLogs, selectedIndex]);
   const detailLines = useMemo(() => getDetailLines(selectedLog, detailTab), [selectedLog, detailTab]);
-  const detailVisibleCount = Math.max(4, (process.stdout.rows || 24) - 12);
+  const detailVisibleCount = Math.max(4, (process.stdout.rows || 24) - 13);
   const maxDetailScrollOffset = getMaxScrollOffset(detailLines, detailVisibleCount);
+  const proxyOrigin = getProxyOrigin(context.port ?? 8080);
+  const emptyText = context.mode === 'live'
+    ? `Waiting for traffic at ${proxyOrigin}`
+    : 'Waiting for traffic...';
 
   useEffect(() => {
     setDetailScrollOffset((current) => Math.min(current, maxDetailScrollOffset));
@@ -612,6 +625,7 @@ export function App({
       Box,
       { flexDirection: 'row', flexGrow: 1 },
       h(TrafficList, {
+        emptyText,
         logs: filteredLogs,
         totalCount: logs.length,
         selectedIndex,

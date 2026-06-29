@@ -52,12 +52,22 @@ clinspect --target http://localhost:3000 --port 8080
 
 Then send traffic to `http://localhost:8080`; requests are forwarded to the target and captured in the terminal UI.
 
+Inspect a public website the same way:
+
+```sh
+clinspect --target https://www.example.com --port 8080
+```
+
+Open `http://localhost:8080`, not the public URL directly. Non-loopback targets are labeled as public in the header, and upstream redirects from that target are rewritten back to the local proxy origin where possible.
+
 Current MVP behavior:
 
 - starts an Ink terminal UI
 - defaults to mock/demo traffic when `--target` is omitted
 - starts live reverse proxy mode when `--target` is provided
+- labels non-loopback live targets as public targets
 - forwards live HTTP requests to the upstream target
+- rewrites target redirects back to the local proxy origin where possible
 - captures request/response headers, status, timing, and capped text bodies
 - shows a traffic list and selected payload details
 - supports up/down inspection, stable held selection, `f` follow-latest mode, tab focus toggle, detail scrolling, request/response tab switching, pause/resume, filters, search, clear logs, `q` quit, and Ctrl-C cleanup

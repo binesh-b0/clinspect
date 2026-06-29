@@ -2,6 +2,7 @@ import http from 'http';
 import { randomUUID } from 'crypto';
 import httpProxy from 'http-proxy';
 import { DEFAULT_BODY_LIMIT, truncateTextBody } from '../store/state.js';
+import { isPublicTargetUrl } from '../target.js';
 
 const BAD_GATEWAY_BODY = 'Bad Gateway: upstream target server is unreachable.';
 
@@ -95,9 +96,17 @@ export function startLiveProxy(stateStore, options = {}) {
     throw new Error('targetUrl is required for live proxy mode');
   }
 
-  const proxy = httpProxy.createProxyServer({
-    changeOrigin: true
-  });
+  const proxyOptions = {
+    autoRewrite: true,
+    changeOrigin: true,
+    protocolRewrite: 'http'
+  };
+
+  if (isPublicTargetUrl(targetUrl)) {
+    proxyOptions.cookieDomainRewrite = '';
+  }
+
+  const proxy = httpProxy.createProxyServer(proxyOptions);
   const sockets = new Set();
   let stopped = false;
 

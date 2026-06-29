@@ -193,6 +193,46 @@ test('startLiveProxy can forward while capture is paused', async () => {
   }
 });
 
+test('startLiveProxy rewrites target redirects back to the proxy origin', async () => {
+  let upstreamUrl;
+  const upstream = await startServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.statusCode = 302;
+      res.setHeader('location', `${upstreamUrl}/next`);
+      res.end('redirect');
+    });
+  });
+  upstreamUrl = upstream.url;
+
+  const store = new StateStore({ maxEntries: 10, bodyLimit: 1000 });
+  const proxy = startLiveProxy(store, {
+    bodyLimit: 1000,
+    port: 0,
+    targetUrl: upstream.url
+  });
+
+  try {
+    await proxy.ready;
+
+    const origin = proxyUrl(proxy);
+    const response = await fetch(`${origin}/redirect`, {
+      redirect: 'manual'
+    });
+
+    assert.equal(response.status, 302);
+    assert.equal(response.headers.get('location'), `${origin}/next`);
+
+    const [log] = store.getLogs();
+
+    assert.equal(log.statusCode, 302);
+    assert.equal(log.response.headers.location, `${origin}/next`);
+  } finally {
+    await proxy.stop();
+    await closeServer(upstream.server);
+  }
+});
+
 test('startLiveProxy returns and logs 502 when upstream is unavailable', async () => {
   const unavailablePort = await getUnusedPort();
   const store = new StateStore({ maxEntries: 10, bodyLimit: 1000 });
