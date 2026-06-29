@@ -16,8 +16,10 @@ test('truncateTextBody caps long text and marks truncation', () => {
 
 test('StateStore emits immutable snapshots and normalizes bodies', () => {
   const store = new StateStore({ maxEntries: 5, bodyLimit: 5 });
+  const added = [];
   const updates = [];
 
+  store.on('add', (log) => added.push(log));
   store.on('update', (logs) => updates.push(logs));
 
   const returned = store.addLog({
@@ -44,7 +46,9 @@ test('StateStore emits immutable snapshots and normalizes bodies', () => {
   assert.equal(returned.response.truncated, true);
 
   updates[0][0].path = '/mutated';
+  added[0].path = '/mutated-add';
   assert.equal(store.getLogs()[0].path, '/submit');
+  assert.equal(added[0].request.body, 'abcde');
 });
 
 test('StateStore enforces a ring-buffer limit', () => {

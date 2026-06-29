@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  createDefaultRecordingPath,
   DEFAULT_PORT,
+  formatRecordingTimestamp,
   getCliHelpText,
   isHelpRequested,
   parseCliOptions,
   parsePort,
+  parseRecordMode,
   parseTargetUrl
 } from '../src/cli/options.js';
 
@@ -31,11 +34,26 @@ test('parseTargetUrl rejects missing or unsupported URLs', () => {
   assert.throws(() => parseTargetUrl('ftp://example.com'), /target must be a valid/);
 });
 
+test('recording option helpers validate modes and format default paths', () => {
+  assert.equal(parseRecordMode('full'), 'full');
+  assert.equal(parseRecordMode('partial'), 'partial');
+  assert.throws(() => parseRecordMode('all'), /record must be one of/);
+  assert.equal(formatRecordingTimestamp(new Date(2026, 5, 29, 16, 30, 5)), '20260629-163005');
+  assert.equal(
+    createDefaultRecordingPath(new Date(2026, 5, 29, 16, 30, 5)),
+    './.clinspect/recordings/clinspect-20260629-163005.ndjson'
+  );
+});
+
 test('parseCliOptions defaults to demo mode without a target', () => {
   assert.deepEqual(parseCliOptions(['node', 'clinspect']), {
     mode: 'demo',
     openBrowser: false,
     port: DEFAULT_PORT,
+    recording: {
+      mode: 'off',
+      path: null
+    },
     targetUrl: null
   });
 });
@@ -52,6 +70,10 @@ test('parseCliOptions uses live mode when a target is provided', () => {
     mode: 'live',
     openBrowser: false,
     port: 9090,
+    recording: {
+      mode: 'off',
+      path: null
+    },
     targetUrl: 'http://localhost:5173/'
   });
 });
@@ -67,8 +89,36 @@ test('parseCliOptions enables browser open flag', () => {
     mode: 'live',
     openBrowser: true,
     port: DEFAULT_PORT,
+    recording: {
+      mode: 'off',
+      path: null
+    },
     targetUrl: 'https://example.com/'
   });
+});
+
+test('parseCliOptions supports full and partial recording', () => {
+  const fullOptions = parseCliOptions(['node', 'clinspect', '--record', 'full']);
+
+  assert.equal(fullOptions.recording.mode, 'full');
+  assert.match(fullOptions.recording.path, /^\.\/\.clinspect\/recordings\/clinspect-\d{8}-\d{6}\.ndjson$/);
+
+  assert.deepEqual(parseCliOptions([
+    'node',
+    'clinspect',
+    '--record',
+    'partial',
+    '--record-path',
+    './captures/session.ndjson'
+  ]).recording, {
+    mode: 'partial',
+    path: './captures/session.ndjson'
+  });
+
+  assert.throws(
+    () => parseCliOptions(['node', 'clinspect', '--record-path', './captures/session.ndjson']),
+    /record-path requires --record/
+  );
 });
 
 test('help helpers detect help requests and expose command help', () => {
@@ -82,4 +132,6 @@ test('help helpers detect help requests and expose command help', () => {
   assert.match(helpText, /--target <url>/);
   assert.match(helpText, /--port <number>/);
   assert.match(helpText, /--open/);
+  assert.match(helpText, /--record <mode>/);
+  assert.match(helpText, /--record-path <path>/);
 });

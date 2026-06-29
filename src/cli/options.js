@@ -1,6 +1,27 @@
 import { Command, InvalidArgumentError } from 'commander';
 
 export const DEFAULT_PORT = 8080;
+export const RECORDING_MODES = ['full', 'partial'];
+
+function padTimestampPart(value) {
+  return String(value).padStart(2, '0');
+}
+
+export function formatRecordingTimestamp(date = new Date()) {
+  return [
+    date.getFullYear(),
+    padTimestampPart(date.getMonth() + 1),
+    padTimestampPart(date.getDate())
+  ].join('') + '-' + [
+    padTimestampPart(date.getHours()),
+    padTimestampPart(date.getMinutes()),
+    padTimestampPart(date.getSeconds())
+  ].join('');
+}
+
+export function createDefaultRecordingPath(date = new Date()) {
+  return `./.clinspect/recordings/clinspect-${formatRecordingTimestamp(date)}.ndjson`;
+}
 
 export function parsePort(value) {
   const port = Number(value);
@@ -26,13 +47,25 @@ export function parseTargetUrl(value) {
   }
 }
 
+export function parseRecordMode(value) {
+  const mode = String(value ?? '').toLowerCase();
+
+  if (!RECORDING_MODES.includes(mode)) {
+    throw new InvalidArgumentError('record must be one of: full, partial');
+  }
+
+  return mode;
+}
+
 export function createProgram() {
   return new Command()
     .name('clinspect')
     .description('Terminal HTTP traffic inspector')
     .option('-p, --port <number>', 'local proxy port for live mode', parsePort, DEFAULT_PORT)
     .option('-t, --target <url>', 'upstream target URL for live proxy mode', parseTargetUrl)
-    .option('--open', 'open the local proxy URL in a browser for public live targets');
+    .option('--open', 'open the local proxy URL in a browser for public live targets')
+    .option('--record <mode>', 'record traffic to disk (full|partial)', parseRecordMode)
+    .option('--record-path <path>', 'exact NDJSON file path for --record output');
 }
 
 export function isHelpRequested(argv = process.argv) {
@@ -58,11 +91,22 @@ export function parseCliOptions(argv = process.argv) {
 
   const options = program.opts();
   const targetUrl = options.target ?? null;
+  const recordMode = options.record ?? 'off';
+
+  if (recordMode === 'off' && options.recordPath) {
+    throw new InvalidArgumentError('record-path requires --record');
+  }
 
   return {
     mode: targetUrl ? 'live' : 'demo',
     openBrowser: Boolean(options.open),
     port: options.port,
+    recording: {
+      mode: recordMode,
+      path: recordMode === 'off'
+        ? null
+        : (options.recordPath ?? createDefaultRecordingPath())
+    },
     targetUrl
   };
 }

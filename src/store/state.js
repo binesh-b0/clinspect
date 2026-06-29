@@ -99,6 +99,7 @@ export class StateStore extends EventEmitter {
     const normalized = normalizeLogEntry(logEntry, { bodyLimit: this.bodyLimit });
 
     this.logs = [...this.logs, normalized].slice(-this.maxEntries);
+    this.emit('add', cloneLogEntry(normalized));
     this.emit('update', this.getLogs());
 
     return cloneLogEntry(normalized);

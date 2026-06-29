@@ -66,6 +66,24 @@ To open the local proxy URL automatically for a public target:
 clinspect --target https://www.example.com --port 8080 --open
 ```
 
+Record every captured request to disk:
+
+```sh
+clinspect --target http://localhost:3000 --record full
+```
+
+Record only requests inspected with `Enter`:
+
+```sh
+clinspect --target http://localhost:3000 --record partial
+```
+
+By default recordings are written to `./.clinspect/recordings/clinspect-YYYYMMDD-HHmmss.ndjson`. To choose an exact file path:
+
+```sh
+clinspect --target http://localhost:3000 --record full --record-path ./captures/session.ndjson
+```
+
 Current MVP behavior:
 
 - starts an Ink terminal UI
@@ -80,6 +98,7 @@ Current MVP behavior:
 - supports up/down inspection, stable held selection, `f` follow-latest mode, tab focus toggle, detail scrolling, request/response tab switching, pause/resume, clear logs, `q` quit, and Ctrl-C cleanup
 - opens a bottom filter panel with `/`, supports multi-select method/status options, and searches all, path, status, method, time, host, port, headers, or body
 - supports quick filter controls: `m` opens method filters, `s` opens status filters, `space` toggles options, and `x` clears active filters
+- supports opt-in NDJSON disk recording for all captured traffic or only inspected entries
 - caps stored text bodies and marks truncated payloads
 
 ## Project Layout
@@ -88,6 +107,7 @@ Current MVP behavior:
 bin/cli.js             CLI executable entrypoint
 src/index.js           Application bootstrap and argument validation
 src/engine/proxy.js    Reverse proxy engine
+src/recording/         NDJSON disk recording
 src/store/state.js     In-memory traffic log store
 src/ui/App.js          Ink terminal UI
 ```
@@ -113,10 +133,10 @@ Included:
 - filtering and search
 - capped body storage
 - ring-buffer log state
+- opt-in NDJSON recording
 - CLI option validation for `--target` and `--port`
 - Node built-in tests
 
 Deferred:
 
 - WebSocket and CONNECT tunneling
-- export/persistence

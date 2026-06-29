@@ -56,6 +56,136 @@ test('startInspector selects the live proxy engine for live mode', async () => {
   ]);
 });
 
+test('startInspector wires full recording to StateStore add events and shutdown', async () => {
+  const { startInspector } = await import('../src/index.js');
+  const calls = [];
+  const stateStore = new StateStore();
+  const recorder = {
+    getStatus() {
+      return {
+        mode: 'full',
+        path: './capture.ndjson',
+        state: 'recording',
+        error: null
+      };
+    },
+    recordCapture(log) {
+      calls.push(['record', log.id]);
+    },
+    recordInteraction() {},
+    stop() {
+      calls.push(['recorder-stop']);
+    }
+  };
+  const inspector = startInspector(
+    {
+      mode: 'demo',
+      openBrowser: false,
+      port: 8080,
+      recording: {
+        mode: 'full',
+        path: './capture.ndjson'
+      },
+      targetUrl: null
+    },
+    {
+      stateStore,
+      recorder,
+      renderApp: (node) => {
+        calls.push(['render', node.props.trafficRecorder === recorder]);
+
+        return {
+          unmount() {
+            calls.push(['unmount']);
+          }
+        };
+      },
+      startDemoFeed: () => ({
+        stop() {
+          calls.push(['engine-stop']);
+        }
+      }),
+      exitProcess: (code) => {
+        calls.push(['exit', code]);
+      }
+    }
+  );
+
+  stateStore.addLog({ id: 'one', path: '/one' });
+
+  assert.deepEqual(calls, [
+    ['render', true],
+    ['record', 'one']
+  ]);
+
+  await inspector.stop();
+
+  assert.deepEqual(calls, [
+    ['render', true],
+    ['record', 'one'],
+    ['unmount'],
+    ['engine-stop'],
+    ['recorder-stop'],
+    ['exit', 0]
+  ]);
+});
+
+test('startInspector passes partial recorder into App without full capture subscription', async () => {
+  const { startInspector } = await import('../src/index.js');
+  const calls = [];
+  const stateStore = new StateStore();
+  const recorder = {
+    getStatus() {
+      return {
+        mode: 'partial',
+        path: './capture.ndjson',
+        state: 'recording',
+        error: null
+      };
+    },
+    recordCapture(log) {
+      calls.push(['record', log.id]);
+    },
+    recordInteraction() {},
+    stop() {
+      calls.push(['recorder-stop']);
+    }
+  };
+  const inspector = startInspector(
+    {
+      mode: 'demo',
+      openBrowser: false,
+      port: 8080,
+      recording: {
+        mode: 'partial',
+        path: './capture.ndjson'
+      },
+      targetUrl: null
+    },
+    {
+      stateStore,
+      recorder,
+      renderApp: (node) => {
+        calls.push(['render', node.props.trafficRecorder === recorder]);
+
+        return {
+          unmount() {}
+        };
+      },
+      startDemoFeed: () => ({
+        stop() {}
+      }),
+      exitProcess: () => {}
+    }
+  );
+
+  stateStore.addLog({ id: 'one', path: '/one' });
+
+  assert.deepEqual(calls, [['render', true]]);
+
+  await inspector.stop();
+});
+
 test('shouldOpenProxyUrl only enables public live targets with --open', async () => {
   const { shouldOpenProxyUrl } = await import('../src/index.js');
 

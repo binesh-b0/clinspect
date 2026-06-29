@@ -9,6 +9,12 @@ const STATUS_OPTIONS = ['2xx', '3xx', '4xx', '5xx'];
 const DETAIL_TABS = ['request', 'response'];
 const SEARCH_FIELDS = ['all', 'path', 'status', 'method', 'time', 'host', 'port', 'headers', 'body'];
 const FILTER_FOCUS_ORDER = ['query', 'field', 'method', 'status'];
+const OFF_RECORDING_STATUS = {
+  mode: 'off',
+  path: null,
+  state: 'off',
+  error: null
+};
 
 const METHOD_COLORS = {
   GET: 'green',
@@ -91,6 +97,24 @@ function formatTrafficRow(log, selected = false) {
   const duration = padLeft(`${log.responseTimeMs}ms`, 6);
 
   return `${marker} ${formatTime(log.timestamp)} ${method} ${status} ${path} ${duration}`;
+}
+
+function getRecordingStatus(trafficRecorder) {
+  return trafficRecorder?.getStatus?.() ?? OFF_RECORDING_STATUS;
+}
+
+function formatRecordingLabel(recordingStatus = OFF_RECORDING_STATUS) {
+  if (recordingStatus.state === 'error') {
+    return recordingStatus.path
+      ? `rec error -> ${recordingStatus.path}`
+      : 'rec error';
+  }
+
+  if (recordingStatus.mode === 'full' || recordingStatus.mode === 'partial') {
+    return `rec ${recordingStatus.mode} -> ${recordingStatus.path}`;
+  }
+
+  return 'rec off';
 }
 
 function formatHeaders(headers) {
@@ -292,7 +316,13 @@ export function getMaxScrollOffset(lines, visibleCount) {
   return Math.max(0, lines.length - Math.max(1, visibleCount));
 }
 
-const Header = React.memo(function Header({ context = {}, logsCount, visibleCount, isPaused }) {
+const Header = React.memo(function Header({
+  context = {},
+  logsCount,
+  recordingStatus,
+  visibleCount,
+  isPaused
+}) {
   const mode = context.mode === 'live' ? 'live proxy' : 'demo mode';
   const target = context.targetUrl ?? 'mock traffic';
   const port = context.port ?? 8080;
@@ -303,8 +333,8 @@ const Header = React.memo(function Header({ context = {}, logsCount, visibleCoun
   const targetKind = isPublicTargetUrl(context.targetUrl) ? 'public target' : 'local target';
   const proxyOrigin = getProxyOrigin(port);
   const subtitle = context.mode === 'live'
-    ? `${mode} | ${captureState} | ${targetKind} | proxy ${proxyOrigin} | ${countText}`
-    : `${mode} | ${captureState} | ${target} | ${countText}`;
+    ? `${mode} | ${captureState} | ${targetKind} | proxy ${proxyOrigin} | ${countText} | ${formatRecordingLabel(recordingStatus)}`
+    : `${mode} | ${captureState} | ${target} | ${countText} | ${formatRecordingLabel(recordingStatus)}`;
 
   return h(
     Box,
@@ -760,11 +790,13 @@ export function App({
   stateStore,
   context = {},
   captureController = null,
+  trafficRecorder = null,
   onQuit = () => {}
 }) {
   const { isRawModeSupported } = useStdin();
   const renderHeight = getRenderHeight();
   const [logs, setLogs] = useState(() => stateStore.getLogs());
+  const [recordingStatus, setRecordingStatus] = useState(() => getRecordingStatus(trafficRecorder));
   const [selectedLogId, setSelectedLogId] = useState(() => {
     const initialLogs = stateStore.getLogs();
 
@@ -803,6 +835,16 @@ export function App({
 
     return () => stateStore.off('update', handleUpdate);
   }, [stateStore]);
+
+  useEffect(() => {
+    setRecordingStatus(getRecordingStatus(trafficRecorder));
+
+    const handleRecordingStatus = (status) => setRecordingStatus(status);
+
+    trafficRecorder?.on?.('status', handleRecordingStatus);
+
+    return () => trafficRecorder?.off?.('status', handleRecordingStatus);
+  }, [trafficRecorder]);
 
   useEffect(() => {
     const resolveOptions = { followLatest: isFollowingLatest };
@@ -919,6 +961,10 @@ export function App({
         onInspectSelected: () => {
           setInspectedLogId(selectedLog?.id ?? null);
           setDetailScrollOffset(0);
+          if (selectedLog) {
+            trafficRecorder?.recordInteraction?.(selectedLog, 'inspect');
+          }
+          setRecordingStatus(getRecordingStatus(trafficRecorder));
         },
         onToggleFilterOption: () => {
           if (filterFocus === 'field') {
@@ -952,6 +998,7 @@ export function App({
     h(Header, {
       context,
       logsCount: logs.length,
+      recordingStatus,
       visibleCount: filteredLogs.length,
       isPaused
     }),

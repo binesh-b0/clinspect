@@ -15,6 +15,7 @@ import { DEFAULT_BODY_LIMIT, StateStore } from './store/state.js';
 import { getProxyOrigin, isPublicTargetUrl } from './target.js';
 import { App } from './ui/App.js';
 import { createStableStdout } from './ui/stable-output.js';
+import { createTrafficRecorder } from './recording/recorder.js';
 
 const h = React.createElement;
 
@@ -63,6 +64,13 @@ export function startInspector(options, runtime = {}) {
   const openBrowserUrl = runtime.openUrl ?? openUrl;
   const captureController = runtime.captureController ?? createCaptureController();
   const stdout = runtime.stdout ?? createStableStdout(process.stdout);
+  const trafficRecorder = runtime.trafficRecorder ?? runtime.recorder ?? createTrafficRecorder(options.recording);
+  const handleRecordAdd = (logEntry) => trafficRecorder.recordCapture?.(logEntry);
+
+  if (trafficRecorder.getStatus?.().mode === 'full') {
+    stateStore.on('add', handleRecordAdd);
+  }
+
   const engine = options.mode === 'live'
     ? startProxy(stateStore, {
       bodyLimit: DEFAULT_BODY_LIMIT,
@@ -96,6 +104,14 @@ export function startInspector(options, runtime = {}) {
       .catch((error) => {
         process.stderr.write(`${chalk.red(`Error during shutdown: ${formatCliError(error)}`)}\n`);
       })
+      .then(() => {
+        stateStore.off('add', handleRecordAdd);
+
+        return Promise.resolve(trafficRecorder.stop?.())
+          .catch((error) => {
+            process.stderr.write(`${chalk.red(`Error closing recording: ${formatCliError(error)}`)}\n`);
+          });
+      })
       .finally(() => {
         exitProcess(code);
       });
@@ -123,6 +139,7 @@ export function startInspector(options, runtime = {}) {
       stateStore,
       context: options,
       captureController,
+      trafficRecorder,
       onQuit: () => shutdown(0)
     }),
     {
@@ -134,6 +151,7 @@ export function startInspector(options, runtime = {}) {
   return {
     captureController,
     engine,
+    recorder: trafficRecorder,
     stateStore,
     stop: shutdown,
     view: inkInstance
