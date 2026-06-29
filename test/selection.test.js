@@ -2,17 +2,24 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   countActiveFilters,
+  clampScrollOffset,
   cycleValue,
   extractPortFromHost,
   filterLogs,
+  formatFooterText,
   formatFilterLabel,
   formatRecordingLabel,
+  getBoundaryLogId,
+  getDetailVisibleCount,
   getDetailLines,
+  getKeyboardAction,
   getMaxScrollOffset,
   getMouseWheelTarget,
+  getPageStep,
   getRenderHeight,
   getSelectedIndex,
   getSearchValues,
+  getTrafficVisibleCount,
   moveSelectedLogId,
   resolveSelectedLogId,
   toggleFilterValue
@@ -50,12 +57,99 @@ test('moveSelectedLogId moves relative to stable selected id', () => {
   assert.equal(moveSelectedLogId(logs, 'two', 1), 'three');
   assert.equal(moveSelectedLogId(logs, 'three', 1), 'three');
   assert.equal(moveSelectedLogId(logs, 'one', -1), 'one');
+  assert.equal(moveSelectedLogId(logs, 'one', getPageStep(20)), 'three');
+  assert.equal(moveSelectedLogId(logs, 'three', -getPageStep(20)), 'one');
 });
 
 test('getSelectedIndex resolves missing selections to the first row', () => {
   assert.equal(getSelectedIndex(logs, 'two'), 1);
   assert.equal(getSelectedIndex(logs, 'missing'), 0);
   assert.equal(getSelectedIndex([], 'missing'), -1);
+});
+
+test('navigation helpers resolve page sizes and boundaries', () => {
+  assert.equal(getTrafficVisibleCount(13, 40), 27);
+  assert.equal(getTrafficVisibleCount(30, 20), 5);
+  assert.equal(getDetailVisibleCount(13, 40), 27);
+  assert.equal(getDetailVisibleCount(30, 20), 4);
+  assert.equal(getPageStep(21), 21);
+  assert.equal(getPageStep(21, 'half'), 10);
+  assert.equal(getPageStep(1, 'half'), 1);
+  assert.equal(getBoundaryLogId(logs, 'first'), 'one');
+  assert.equal(getBoundaryLogId(logs, 'last'), 'three');
+  assert.equal(getBoundaryLogId([], 'last'), null);
+});
+
+test('detail scroll helper clamps page-wise scrolling', () => {
+  assert.equal(clampScrollOffset(3, 5, 10), 8);
+  assert.equal(clampScrollOffset(3, -10, 10), 0);
+  assert.equal(clampScrollOffset(8, 5, 10), 10);
+  assert.equal(clampScrollOffset(Number.NaN, 5, 10), 5);
+  assert.equal(clampScrollOffset(8, 5, Number.NaN), 0);
+});
+
+test('keyboard action helper resolves navigation aliases and page movement', () => {
+  assert.deepEqual(
+    getKeyboardAction('j', {}, { isListFocused: true }),
+    { type: 'moveSelection', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('k', {}, { isListFocused: false }),
+    { type: 'scrollDetails', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { pageDown: true }, { isListFocused: true, trafficPageSize: 12 }),
+    { type: 'moveSelection', direction: 12 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { pageUp: true }, { isListFocused: false, detailPageSize: 8 }),
+    { type: 'scrollDetails', direction: -8 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('d', { ctrl: true }, { isListFocused: true, trafficPageSize: 11 }),
+    { type: 'moveSelection', direction: 5 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('u', { ctrl: true }, { isListFocused: false, detailPageSize: 7 }),
+    { type: 'scrollDetails', direction: -3 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('g', {}, { isListFocused: true }),
+    { type: 'moveSelectionTo', boundary: 'first' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('G', {}, { isListFocused: false }),
+    { type: 'scrollDetailsTo', boundary: 'bottom' }
+  );
+});
+
+test('keyboard action helper gates help modal and preserves filter query input', () => {
+  assert.deepEqual(getKeyboardAction('h'), { type: 'openHelp' });
+  assert.deepEqual(getKeyboardAction('?'), { type: 'none' });
+  assert.deepEqual(
+    getKeyboardAction('h', {}, { isHelpOpen: true }),
+    { type: 'closeHelp' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('q', {}, { isHelpOpen: true }),
+    { type: 'closeHelp' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { escape: true }, { isHelpOpen: true }),
+    { type: 'closeHelp' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('j', {}, { isHelpOpen: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('?', {}, { isFilterOpen: true, filterFocus: 'query' }),
+    { type: 'appendSearch', value: '?' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('?', {}, { isFilterOpen: true, filterFocus: 'method' }),
+    { type: 'none' }
+  );
 });
 
 test('mouse wheel routing maps the fixed traffic pane by terminal column', () => {
@@ -69,6 +163,18 @@ test('getRenderHeight keeps one terminal row free for Ink updates', () => {
   assert.equal(getRenderHeight(40), 39);
   assert.equal(getRenderHeight(2), 1);
   assert.equal(getRenderHeight(undefined), 23);
+});
+
+test('footer text shows mode-aware essential keymaps', () => {
+  assert.equal(
+    formatFooterText({ isListFocused: true }),
+    'j/k move  Pg/C-u/C-d scroll  enter inspect  tab details  h help  q quit'
+  );
+  assert.equal(
+    formatFooterText({ isListFocused: false }),
+    'j/k scroll  Pg/C-u/C-d scroll  g/G top/bottom  r req/res  tab traffic  h help  q quit'
+  );
+  assert.equal(formatFooterText({ isHelpOpen: true }), 'help | esc/h/q close');
 });
 
 test('filterLogs narrows by method, status family, and search text', () => {

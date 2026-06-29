@@ -28,6 +28,12 @@ const METHOD_COLORS = {
   DELETE: 'red'
 };
 
+function getTerminalRows(terminalRows = process.stdout.rows) {
+  return Number.isFinite(terminalRows) && terminalRows > 0
+    ? Math.floor(terminalRows)
+    : 24;
+}
+
 function truncate(value, maxLength) {
   const text = String(value ?? '');
 
@@ -47,9 +53,7 @@ function padLeft(value, length) {
 }
 
 export function getRenderHeight(terminalRows = process.stdout.rows) {
-  const rows = Number.isFinite(terminalRows) && terminalRows > 0
-    ? Math.floor(terminalRows)
-    : 24;
+  const rows = getTerminalRows(terminalRows);
 
   // Ink clears the whole terminal when rendered output is >= stdout.rows.
   // Keep one row free so routine UI updates use incremental line erases.
@@ -436,6 +440,39 @@ export function getMaxScrollOffset(lines, visibleCount) {
   return Math.max(0, lines.length - Math.max(1, visibleCount));
 }
 
+export function getTrafficVisibleCount(bottomOffset, terminalRows = process.stdout.rows) {
+  return Math.max(5, getTerminalRows(terminalRows) - bottomOffset);
+}
+
+export function getDetailVisibleCount(bottomOffset, terminalRows = process.stdout.rows) {
+  return Math.max(4, getTerminalRows(terminalRows) - bottomOffset);
+}
+
+export function getPageStep(visibleCount, amount = 'page') {
+  const pageSize = Math.max(1, Math.floor(Number(visibleCount) || 1));
+
+  return amount === 'half' ? Math.max(1, Math.floor(pageSize / 2)) : pageSize;
+}
+
+export function clampScrollOffset(currentOffset, direction, maxScrollOffset) {
+  const current = Number.isFinite(Number(currentOffset)) ? Number(currentOffset) : 0;
+  const delta = Number.isFinite(Number(direction)) ? Number(direction) : 0;
+  const max = Number.isFinite(Number(maxScrollOffset)) ? Number(maxScrollOffset) : 0;
+
+  return Math.min(
+    Math.max(0, max),
+    Math.max(0, current + delta)
+  );
+}
+
+export function getBoundaryLogId(logs, boundary) {
+  if (logs.length === 0) {
+    return null;
+  }
+
+  return boundary === 'last' ? logs[logs.length - 1].id : logs[0].id;
+}
+
 const Header = React.memo(function Header({
   context = {},
   logsCount,
@@ -524,8 +561,7 @@ const TrafficList = React.memo(function TrafficList({
   searchField,
   searchQuery
 }) {
-  const rows = process.stdout.rows || 24;
-  const visibleCount = Math.max(5, rows - bottomOffset);
+  const visibleCount = getTrafficVisibleCount(bottomOffset);
   const startIndex = Math.max(0, Math.min(
     selectedIndex - Math.floor(visibleCount / 2),
     Math.max(0, logs.length - visibleCount)
@@ -594,8 +630,7 @@ const DetailPane = React.memo(function DetailPane({
     );
   }
 
-  const rows = process.stdout.rows || 24;
-  const visibleCount = Math.max(4, rows - bottomOffset);
+  const visibleCount = getDetailVisibleCount(bottomOffset);
   const lines = getDetailLines(log, detailTab, {
     publicTargetUrl,
     proxyOrigin,
@@ -714,38 +749,143 @@ const FilterBar = React.memo(function FilterBar({
   );
 });
 
-const Footer = React.memo(function Footer({
-  isListFocused,
-  isRawModeSupported,
-  isFollowingLatest,
-  isPaused,
-  isReplayMode,
-  methodFilters,
-  recordingStatus = OFF_RECORDING_STATUS,
-  searchField,
-  searchQuery,
-  statusFilters
-}) {
-  const activeFilters = countActiveFilters({ methodFilters, statusFilters, searchQuery });
-  const filterSummary = activeFilters > 0
-    ? ` | filters ${activeFilters} (${formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery)}) | x clear filters`
-    : '';
-  const recordingHelp = recordingStatus.mode === 'full' || recordingStatus.mode === 'partial'
-    ? ` | P ${recordingStatus.state === 'paused' ? 'rec resume' : 'rec pause'}`
-    : '';
-  const captureHelp = isReplayMode ? '' : ` | p ${isPaused ? 'resume' : 'pause'}${recordingHelp}`;
-  const navigationHelp = isListFocused ? 'up/down move | enter inspect' : 'up/down scroll';
-  const text = isRawModeSupported
-    ? `${navigationHelp} | tab ${isListFocused ? 'details' : 'traffic'} | r req/res${captureHelp} | m methods | s statuses | / filter | c clear logs | f latest | q quit${filterSummary}`
-    : 'keyboard input unavailable in this shell | Ctrl-C or SIGTERM quit';
+const HELP_SECTIONS = [
+  {
+    title: 'Navigation',
+    rows: [
+      ['j/k', 'move line'],
+      ['up/down', 'move line'],
+      ['PgUp/PgDn', 'move page'],
+      ['Ctrl-u/d', 'move half page'],
+      ['g/G', 'top / bottom'],
+      ['tab', 'switch pane']
+    ]
+  },
+  {
+    title: 'Inspect',
+    rows: [
+      ['enter', 'inspect row'],
+      ['r', 'request / response'],
+      ['wheel', 'scroll hovered pane']
+    ]
+  },
+  {
+    title: 'Filters',
+    rows: [
+      ['/', 'text search'],
+      ['m / s', 'method / status'],
+      ['space', 'toggle option'],
+      ['x', 'clear filters']
+    ]
+  },
+  {
+    title: 'Capture',
+    rows: [
+      ['p', 'pause capture'],
+      ['P', 'pause recording']
+    ]
+  },
+  {
+    title: 'Session',
+    rows: [
+      ['f', 'follow latest'],
+      ['c', 'clear logs'],
+      ['h', 'help'],
+      ['q', 'quit']
+    ]
+  }
+];
 
+function renderHelpSections(sections, width) {
+  return sections.flatMap((section) => [
+    h(Text, { key: `${section.title}-title`, bold: true, color: 'cyan' }, section.title),
+    ...section.rows.map(([keys, description]) => h(
+      Box,
+      { key: `${section.title}-${keys}`, width },
+      h(Text, { color: 'cyan' }, pad(keys, 12)),
+      h(Text, { wrap: 'truncate' }, description)
+    )),
+    h(Text, { key: `${section.title}-space` }, '')
+  ]);
+}
+
+const HelpModal = React.memo(function HelpModal() {
+  const columns = Number.isFinite(process.stdout.columns) && process.stdout.columns > 0
+    ? process.stdout.columns
+    : 80;
+  const width = Math.max(34, Math.min(86, columns - 4));
+  const useColumns = width >= 72;
+  const contentWidth = Math.max(26, width - 6);
+  const columnWidth = useColumns ? Math.floor((contentWidth - 2) / 2) : contentWidth;
+  const leftSections = HELP_SECTIONS.filter((_, index) => index % 2 === 0);
+  const rightSections = HELP_SECTIONS.filter((_, index) => index % 2 === 1);
+
+  return h(
+    Box,
+    {
+      flexGrow: 1,
+      justifyContent: 'center',
+      alignItems: 'center'
+    },
+    h(
+      Box,
+      {
+        flexDirection: 'column',
+        borderStyle: 'single',
+        borderColor: 'cyan',
+        paddingX: 2,
+        paddingY: 1,
+        width
+      },
+      h(Text, { bold: true, color: 'cyan' }, 'Help'),
+      h(Text, { color: 'gray' }, 'Essential key bindings'),
+      h(Text, {}, ''),
+      useColumns
+        ? h(
+          Box,
+          { flexDirection: 'row' },
+          h(Box, { flexDirection: 'column', width: columnWidth }, ...renderHelpSections(leftSections, columnWidth)),
+          h(Box, { width: 2 }, h(Text, {}, '')),
+          h(Box, { flexDirection: 'column', width: columnWidth }, ...renderHelpSections(rightSections, columnWidth))
+        )
+        : h(Box, { flexDirection: 'column' }, ...renderHelpSections(HELP_SECTIONS, contentWidth)),
+      h(Text, { color: 'gray' }, 'esc/h/q close')
+    )
+  );
+});
+
+export function formatFooterText({
+  isHelpOpen = false,
+  isListFocused = true,
+  isRawModeSupported = true
+} = {}) {
+  if (!isRawModeSupported) {
+    return 'keyboard input unavailable in this shell | Ctrl-C or SIGTERM quit';
+  }
+
+  if (isHelpOpen) {
+    return 'help | esc/h/q close';
+  }
+
+  if (isListFocused) {
+    return 'j/k move  Pg/C-u/C-d scroll  enter inspect  tab details  h help  q quit';
+  }
+
+  return 'j/k scroll  Pg/C-u/C-d scroll  g/G top/bottom  r req/res  tab traffic  h help  q quit';
+}
+
+const Footer = React.memo(function Footer({
+  isHelpOpen,
+  isListFocused,
+  isRawModeSupported
+}) {
   return h(
     Box,
     { marginTop: 1 },
     h(
       Text,
       { color: 'gray', wrap: 'truncate' },
-      text
+      formatFooterText({ isHelpOpen, isListFocused, isRawModeSupported })
     )
   );
 });
@@ -801,24 +941,215 @@ export function getMouseWheelTarget(column) {
   return 'details';
 }
 
+export function getKeyboardAction(input = '', key = {}, options = {}) {
+  const {
+    filterFocus = 'query',
+    isListFocused = true,
+    isHelpOpen = false,
+    isFilterOpen = false,
+    isReplayMode = false,
+    detailPageSize = 1,
+    trafficPageSize = 1
+  } = options;
+  const value = input ?? '';
+  const keyState = key ?? {};
+
+  if (value === 'c' && keyState.ctrl) {
+    return { type: 'quit' };
+  }
+
+  if (isHelpOpen) {
+    if (keyState.escape || value === 'h' || value === 'q') {
+      return { type: 'closeHelp' };
+    }
+
+    return { type: 'none' };
+  }
+
+  const mouseEvent = parseInkMouseInput(value);
+
+  if (mouseEvent) {
+    if (getMouseWheelTarget(mouseEvent.x) === 'traffic') {
+      return { type: 'moveSelection', direction: mouseEvent.direction };
+    }
+
+    return { type: 'scrollDetails', direction: mouseEvent.direction };
+  }
+
+  if (isInkMouseInput(value)) {
+    return { type: 'none' };
+  }
+
+  if (isFilterOpen) {
+    if (keyState.escape || keyState.return) {
+      return { type: 'finishSearch' };
+    }
+
+    if (value === 'x') {
+      return { type: 'clearFilters' };
+    }
+
+    if (keyState.tab || keyState.downArrow) {
+      return { type: 'cycleFilterFocus', direction: 1 };
+    }
+
+    if (keyState.upArrow) {
+      return { type: 'cycleFilterFocus', direction: -1 };
+    }
+
+    if (keyState.rightArrow) {
+      return { type: 'moveFilterOption', direction: 1 };
+    }
+
+    if (keyState.leftArrow) {
+      return { type: 'moveFilterOption', direction: -1 };
+    }
+
+    if (value === ' ' && filterFocus !== 'query') {
+      return { type: 'toggleFilterOption' };
+    }
+
+    if (keyState.backspace || keyState.delete) {
+      return filterFocus === 'query'
+        ? { type: 'backspaceSearch' }
+        : { type: 'none' };
+    }
+
+    if (value && !keyState.ctrl && !keyState.meta && filterFocus === 'query') {
+      return { type: 'appendSearch', value };
+    }
+
+    return { type: 'none' };
+  }
+
+  if (value === 'h') {
+    return { type: 'openHelp' };
+  }
+
+  if (value === 'q') {
+    return { type: 'quit' };
+  }
+
+  if (value === '/') {
+    return { type: 'openFilter', focus: 'query' };
+  }
+
+  if (value === 'x') {
+    return { type: 'clearFilters' };
+  }
+
+  if (value === 'c') {
+    return { type: 'clearLogs' };
+  }
+
+  if (value === 'f') {
+    return { type: 'followLatest' };
+  }
+
+  if (keyState.return) {
+    return { type: 'inspectSelected' };
+  }
+
+  if (value === 'm') {
+    return { type: 'openFilter', focus: 'method' };
+  }
+
+  if (value === 'p') {
+    return isReplayMode ? { type: 'none' } : { type: 'togglePause' };
+  }
+
+  if (value === 'P') {
+    return isReplayMode ? { type: 'none' } : { type: 'toggleRecordingPause' };
+  }
+
+  if (value === 'r') {
+    return { type: 'toggleDetailTab' };
+  }
+
+  if (value === 's') {
+    return { type: 'openFilter', focus: 'status' };
+  }
+
+  if (keyState.tab) {
+    return { type: 'toggleFocus' };
+  }
+
+  if (keyState.upArrow || value === 'k') {
+    return isListFocused
+      ? { type: 'moveSelection', direction: -1 }
+      : { type: 'scrollDetails', direction: -1 };
+  }
+
+  if (keyState.downArrow || value === 'j') {
+    return isListFocused
+      ? { type: 'moveSelection', direction: 1 }
+      : { type: 'scrollDetails', direction: 1 };
+  }
+
+  if (keyState.pageUp) {
+    return isListFocused
+      ? { type: 'moveSelection', direction: -getPageStep(trafficPageSize) }
+      : { type: 'scrollDetails', direction: -getPageStep(detailPageSize) };
+  }
+
+  if (keyState.pageDown) {
+    return isListFocused
+      ? { type: 'moveSelection', direction: getPageStep(trafficPageSize) }
+      : { type: 'scrollDetails', direction: getPageStep(detailPageSize) };
+  }
+
+  if (value === 'u' && keyState.ctrl) {
+    return isListFocused
+      ? { type: 'moveSelection', direction: -getPageStep(trafficPageSize, 'half') }
+      : { type: 'scrollDetails', direction: -getPageStep(detailPageSize, 'half') };
+  }
+
+  if (value === 'd' && keyState.ctrl) {
+    return isListFocused
+      ? { type: 'moveSelection', direction: getPageStep(trafficPageSize, 'half') }
+      : { type: 'scrollDetails', direction: getPageStep(detailPageSize, 'half') };
+  }
+
+  if (value === 'g') {
+    return isListFocused
+      ? { type: 'moveSelectionTo', boundary: 'first' }
+      : { type: 'scrollDetailsTo', boundary: 'top' };
+  }
+
+  if (value === 'G') {
+    return isListFocused
+      ? { type: 'moveSelectionTo', boundary: 'last' }
+      : { type: 'scrollDetailsTo', boundary: 'bottom' };
+  }
+
+  return { type: 'none' };
+}
+
 function KeyboardControls({
   filterFocus,
   isListFocused,
+  isHelpOpen,
   isFilterOpen,
   isReplayMode,
+  detailPageSize,
+  trafficPageSize,
   onAppendSearch,
   onBackspaceSearch,
   onClearFilters,
   onClearLogs,
+  onCloseHelp,
   onCycleFilterFocus,
   onFinishSearch,
   onFollowLatest,
   onInspectSelected,
+  onMoveSelectionTo,
   onMoveFilterOption,
   onMoveSelection,
   onOpenFilter,
+  onOpenHelp,
   onQuit,
   onScrollDetails,
+  onScrollDetailsTo,
   onToggleFilterOption,
   onToggleDetailTab,
   onToggleFocus,
@@ -826,167 +1157,85 @@ function KeyboardControls({
   onToggleRecordingPause
 }) {
   useInput((input, key) => {
-    const mouseEvent = parseInkMouseInput(input);
+    const action = getKeyboardAction(input, key, {
+      filterFocus,
+      isListFocused,
+      isHelpOpen,
+      isFilterOpen,
+      isReplayMode,
+      detailPageSize,
+      trafficPageSize
+    });
 
-    if (mouseEvent) {
-      if (getMouseWheelTarget(mouseEvent.x) === 'traffic') {
-        onMoveSelection(mouseEvent.direction);
-      } else {
-        onScrollDetails(mouseEvent.direction);
-      }
-
-      return;
-    }
-
-    if (isInkMouseInput(input)) {
-      return;
-    }
-
-    if (input === 'c' && key.ctrl) {
-      onQuit();
-      return;
-    }
-
-    if (isFilterOpen) {
-      if (key.escape || key.return) {
-        onFinishSearch();
-        return;
-      }
-
-      if (input === 'x') {
+    switch (action.type) {
+      case 'appendSearch':
+        onAppendSearch(action.value);
+        break;
+      case 'backspaceSearch':
+        onBackspaceSearch();
+        break;
+      case 'clearFilters':
         onClearFilters();
-        return;
-      }
-
-      if (key.tab || key.downArrow) {
-        onCycleFilterFocus(1);
-        return;
-      }
-
-      if (key.upArrow) {
-        onCycleFilterFocus(-1);
-        return;
-      }
-
-      if (key.rightArrow) {
-        onMoveFilterOption(1);
-        return;
-      }
-
-      if (key.leftArrow) {
-        onMoveFilterOption(-1);
-        return;
-      }
-
-      if (input === ' ' && filterFocus !== 'query') {
+        break;
+      case 'clearLogs':
+        onClearLogs();
+        break;
+      case 'closeHelp':
+        onCloseHelp();
+        break;
+      case 'cycleFilterFocus':
+        onCycleFilterFocus(action.direction);
+        break;
+      case 'finishSearch':
+        onFinishSearch();
+        break;
+      case 'followLatest':
+        onFollowLatest();
+        break;
+      case 'inspectSelected':
+        onInspectSelected();
+        break;
+      case 'moveFilterOption':
+        onMoveFilterOption(action.direction);
+        break;
+      case 'moveSelection':
+        onMoveSelection(action.direction);
+        break;
+      case 'moveSelectionTo':
+        onMoveSelectionTo(action.boundary);
+        break;
+      case 'openFilter':
+        onOpenFilter(action.focus);
+        break;
+      case 'openHelp':
+        onOpenHelp();
+        break;
+      case 'quit':
+        onQuit();
+        break;
+      case 'scrollDetails':
+        onScrollDetails(action.direction);
+        break;
+      case 'scrollDetailsTo':
+        onScrollDetailsTo(action.boundary);
+        break;
+      case 'toggleDetailTab':
+        onToggleDetailTab();
+        break;
+      case 'toggleFilterOption':
         onToggleFilterOption();
-        return;
-      }
-
-      if (key.backspace || key.delete) {
-        if (filterFocus === 'query') {
-          onBackspaceSearch();
-        }
-        return;
-      }
-
-      if (input && !key.ctrl && !key.meta && filterFocus === 'query') {
-        onAppendSearch(input);
-      }
-
-      return;
-    }
-
-    if (input === 'q') {
-      onQuit();
-      return;
-    }
-
-    if (input === '/') {
-      onOpenFilter('query');
-      return;
-    }
-
-    if (input === 'x') {
-      onClearFilters();
-      return;
-    }
-
-    if (input === 'c') {
-      onClearLogs();
-      return;
-    }
-
-    if (input === 'f') {
-      onFollowLatest();
-      return;
-    }
-
-    if (key.return) {
-      onInspectSelected();
-      return;
-    }
-
-    if (input === 'm') {
-      onOpenFilter('method');
-      return;
-    }
-
-    if (input === 'p') {
-      if (isReplayMode) {
-        return;
-      }
-
-      onTogglePause();
-      return;
-    }
-
-    if (input === 'P') {
-      if (isReplayMode) {
-        return;
-      }
-
-      onToggleRecordingPause();
-      return;
-    }
-
-    if (input === 'r') {
-      onToggleDetailTab();
-      return;
-    }
-
-    if (input === 's') {
-      onOpenFilter('status');
-      return;
-    }
-
-    if (key.tab) {
-      onToggleFocus();
-      return;
-    }
-
-    if (key.upArrow) {
-      if (isListFocused) {
-        onMoveSelection(-1);
-      } else {
-        onScrollDetails(-1);
-      }
-    }
-
-    if (key.downArrow) {
-      if (isListFocused) {
-        onMoveSelection(1);
-      } else {
-        onScrollDetails(1);
-      }
-    }
-
-    if (key.pageUp && !isListFocused) {
-      onScrollDetails(-5);
-    }
-
-    if (key.pageDown && !isListFocused) {
-      onScrollDetails(5);
+        break;
+      case 'toggleFocus':
+        onToggleFocus();
+        break;
+      case 'togglePause':
+        onTogglePause();
+        break;
+      case 'toggleRecordingPause':
+        onToggleRecordingPause();
+        break;
+      default:
+        break;
     }
   });
 
@@ -1027,6 +1276,7 @@ export function App({
   const [statusOptionIndex, setStatusOptionIndex] = useState(0);
   const [detailTab, setDetailTab] = useState('request');
   const [detailScrollOffset, setDetailScrollOffset] = useState(0);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
   const isReplayMode = context.mode === 'replay';
   const showCookieValues = Boolean(context.showCookieValues);
   const proxyOrigin = getProxyOrigin(context.port ?? 8080);
@@ -1083,7 +1333,8 @@ export function App({
     [detailTab, inspectedLog, publicTargetUrl, proxyOrigin, showCookieValues]
   );
   const bottomOffset = isFilterOpen ? 19 : 13;
-  const detailVisibleCount = Math.max(4, (process.stdout.rows || 24) - bottomOffset);
+  const trafficVisibleCount = getTrafficVisibleCount(bottomOffset);
+  const detailVisibleCount = getDetailVisibleCount(bottomOffset);
   const maxDetailScrollOffset = getMaxScrollOffset(detailLines, detailVisibleCount);
   const emptyText = context.mode === 'live'
     ? `Waiting for traffic at ${proxyOrigin}`
@@ -1115,8 +1366,11 @@ export function App({
       ? h(KeyboardControls, {
         filterFocus,
         isListFocused,
+        isHelpOpen,
         isFilterOpen,
         isReplayMode,
+        detailPageSize: detailVisibleCount,
+        trafficPageSize: trafficVisibleCount,
         onAppendSearch: (value) => {
           setSearchQuery((current) => `${current}${value}`);
           setIsFollowingLatest(false);
@@ -1133,6 +1387,7 @@ export function App({
           setIsFollowingLatest(false);
           setDetailScrollOffset(0);
         },
+        onCloseHelp: () => setIsHelpOpen(false),
         onCycleFilterFocus: (direction) => {
           setFilterFocus((current) => cycleValue(FILTER_FOCUS_ORDER, current, direction));
           setIsFollowingLatest(false);
@@ -1159,16 +1414,21 @@ export function App({
           setIsFollowingLatest(false);
           setSelectedLogId((currentId) => moveSelectedLogId(filteredLogs, currentId, direction));
         },
+        onMoveSelectionTo: (boundary) => {
+          setIsFollowingLatest(false);
+          setSelectedLogId(getBoundaryLogId(filteredLogs, boundary));
+        },
         onOpenFilter: (focus) => {
           setFilterFocus(focus);
           setIsFilterOpen(true);
           setIsFollowingLatest(false);
         },
+        onOpenHelp: () => setIsHelpOpen(true),
         onScrollDetails: (direction) => {
-          setDetailScrollOffset((current) => Math.min(
-            maxDetailScrollOffset,
-            Math.max(0, current + direction)
-          ));
+          setDetailScrollOffset((current) => clampScrollOffset(current, direction, maxDetailScrollOffset));
+        },
+        onScrollDetailsTo: (boundary) => {
+          setDetailScrollOffset(boundary === 'bottom' ? maxDetailScrollOffset : 0);
         },
         onFollowLatest: () => {
           setIsFollowingLatest(true);
@@ -1228,29 +1488,35 @@ export function App({
     h(
       Box,
       { flexDirection: 'row', flexGrow: 1 },
-      h(TrafficList, {
-        bottomOffset,
-        emptyText,
-        logs: filteredLogs,
-        totalCount: logs.length,
-        selectedIndex,
-        isFocused: isListFocused,
-        isFollowingLatest,
-        methodFilters,
-        searchField,
-        statusFilters,
-        searchQuery
-      }),
-      h(DetailPane, {
-        bottomOffset,
-        log: inspectedLog,
-        isFocused: !isListFocused,
-        detailTab,
-        scrollOffset: detailScrollOffset,
-        publicTargetUrl,
-        proxyOrigin,
-        showCookieValues
-      })
+      isHelpOpen
+        ? h(HelpModal)
+        : [
+          h(TrafficList, {
+            key: 'traffic',
+            bottomOffset,
+            emptyText,
+            logs: filteredLogs,
+            totalCount: logs.length,
+            selectedIndex,
+            isFocused: isListFocused,
+            isFollowingLatest,
+            methodFilters,
+            searchField,
+            statusFilters,
+            searchQuery
+          }),
+          h(DetailPane, {
+            key: 'details',
+            bottomOffset,
+            log: inspectedLog,
+            isFocused: !isListFocused,
+            detailTab,
+            scrollOffset: detailScrollOffset,
+            publicTargetUrl,
+            proxyOrigin,
+            showCookieValues
+          })
+        ]
     ),
     isFilterOpen
       ? h(FilterBar, {
@@ -1265,16 +1531,9 @@ export function App({
         visibleCount: filteredLogs.length
       })
       : h(Footer, {
+        isHelpOpen,
         isListFocused,
-        isRawModeSupported,
-        isFollowingLatest,
-        isPaused,
-        isReplayMode,
-        methodFilters,
-        recordingStatus,
-        searchField,
-        searchQuery,
-        statusFilters
+        isRawModeSupported
       })
   );
 }
