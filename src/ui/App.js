@@ -4,9 +4,11 @@ import { getProxyOrigin, isPublicTargetUrl } from '../target.js';
 
 const h = React.createElement;
 
-const METHOD_FILTERS = ['all', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
-const STATUS_FILTERS = ['all', '2xx', '3xx', '4xx', '5xx'];
+const METHOD_OPTIONS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+const STATUS_OPTIONS = ['2xx', '3xx', '4xx', '5xx'];
 const DETAIL_TABS = ['request', 'response'];
+const SEARCH_FIELDS = ['all', 'path', 'status', 'method', 'time', 'host', 'port', 'headers', 'body'];
+const FILTER_FOCUS_ORDER = ['query', 'field', 'method', 'status'];
 
 const METHOD_COLORS = {
   GET: 'green',
@@ -94,8 +96,77 @@ function headersToSearchText(headers = {}) {
     .join('\n');
 }
 
-function matchesStatusFilter(log, statusFilter) {
-  if (statusFilter === 'all') {
+function normalizeFilterValues(values, allowedValues) {
+  if (!values || values === 'all') {
+    return [];
+  }
+
+  const list = Array.isArray(values) ? values : [values];
+  const selected = new Set(list.filter((value) => allowedValues.includes(value)));
+
+  return allowedValues.filter((value) => selected.has(value));
+}
+
+function formatSelectedValues(values) {
+  return values.length === 0 ? 'all' : values.join(',');
+}
+
+function formatSearchFieldLabel(searchField) {
+  return searchField === 'all' ? 'all fields' : searchField;
+}
+
+export function toggleFilterValue(values, value, allowedValues) {
+  if (value === 'all') {
+    return [];
+  }
+
+  const selected = new Set(normalizeFilterValues(values, allowedValues));
+
+  if (selected.has(value)) {
+    selected.delete(value);
+  } else if (allowedValues.includes(value)) {
+    selected.add(value);
+  }
+
+  return allowedValues.filter((allowedValue) => selected.has(allowedValue));
+}
+
+export function countActiveFilters(options = {}) {
+  const methodFilters = normalizeFilterValues(options.methodFilters ?? options.methodFilter, METHOD_OPTIONS);
+  const statusFilters = normalizeFilterValues(options.statusFilters ?? options.statusFilter, STATUS_OPTIONS);
+  const hasSearch = Boolean(String(options.searchQuery ?? '').trim());
+
+  return methodFilters.length + statusFilters.length + (hasSearch ? 1 : 0);
+}
+
+export function extractPortFromHost(host = '') {
+  const value = String(host ?? '');
+
+  if (!value) {
+    return '';
+  }
+
+  if (value.startsWith('[')) {
+    const match = value.match(/\]:(\d+)$/);
+
+    return match?.[1] ?? '';
+  }
+
+  const parts = value.split(':');
+
+  return parts.length > 1 ? parts[parts.length - 1] : '';
+}
+
+function matchesMethodFilters(log, methodFilters) {
+  if (methodFilters.length === 0) {
+    return true;
+  }
+
+  return methodFilters.includes(log.method);
+}
+
+function matchesStatusFilters(log, statusFilters) {
+  if (statusFilters.length === 0) {
     return true;
   }
 
@@ -105,45 +176,75 @@ function matchesStatusFilter(log, statusFilter) {
     return false;
   }
 
-  return Math.floor(statusCode / 100) === Number(statusFilter[0]);
+  return statusFilters.some((statusFilter) => Math.floor(statusCode / 100) === Number(statusFilter[0]));
 }
 
-function matchesSearch(log, searchQuery) {
+export function getSearchValues(log, searchField = 'all') {
+  const requestHeaders = log.request?.headers ?? {};
+  const responseHeaders = log.response?.headers ?? {};
+  const host = requestHeaders.host ?? '';
+  const values = {
+    all: [
+      log.method,
+      log.path,
+      String(log.statusCode ?? ''),
+      formatTime(log.timestamp),
+      host,
+      extractPortFromHost(host),
+      headersToSearchText(requestHeaders),
+      log.request?.body,
+      headersToSearchText(responseHeaders),
+      log.response?.body
+    ],
+    body: [
+      log.request?.body,
+      log.response?.body
+    ],
+    headers: [
+      headersToSearchText(requestHeaders),
+      headersToSearchText(responseHeaders)
+    ],
+    host: [host],
+    method: [log.method],
+    path: [log.path],
+    port: [extractPortFromHost(host)],
+    status: [String(log.statusCode ?? '')],
+    time: [formatTime(log.timestamp)]
+  };
+
+  return values[searchField] ?? values.all;
+}
+
+function matchesSearch(log, searchQuery, searchField = 'all') {
   const query = searchQuery.trim().toLowerCase();
 
   if (!query) {
     return true;
   }
 
-  return [
-    log.method,
-    log.path,
-    String(log.statusCode ?? ''),
-    headersToSearchText(log.request?.headers),
-    log.request?.body,
-    headersToSearchText(log.response?.headers),
-    log.response?.body
-  ].some((value) => String(value ?? '').toLowerCase().includes(query));
+  return getSearchValues(log, searchField)
+    .some((value) => String(value ?? '').toLowerCase().includes(query));
 }
 
 export function filterLogs(logs, options = {}) {
-  const methodFilter = options.methodFilter ?? 'all';
-  const statusFilter = options.statusFilter ?? 'all';
+  const methodFilters = normalizeFilterValues(options.methodFilters ?? options.methodFilter, METHOD_OPTIONS);
+  const statusFilters = normalizeFilterValues(options.statusFilters ?? options.statusFilter, STATUS_OPTIONS);
   const searchQuery = options.searchQuery ?? '';
+  const searchField = options.searchField ?? 'all';
 
   return logs.filter((log) => {
-    if (methodFilter !== 'all' && log.method !== methodFilter) {
-      return false;
-    }
-
-    return matchesStatusFilter(log, statusFilter) && matchesSearch(log, searchQuery);
+    return matchesMethodFilters(log, methodFilters) &&
+      matchesStatusFilters(log, statusFilters) &&
+      matchesSearch(log, searchQuery, searchField);
   });
 }
 
-export function cycleValue(values, currentValue) {
+export function cycleValue(values, currentValue, direction = 1) {
   const index = values.indexOf(currentValue);
+  const currentIndex = index === -1 ? 0 : index;
+  const nextIndex = (currentIndex + direction + values.length) % values.length;
 
-  return values[(index + 1) % values.length] ?? values[0];
+  return values[nextIndex] ?? values[0];
 }
 
 export function getDetailLines(log, detailTab = 'request') {
@@ -192,32 +293,45 @@ function Header({ context = {}, logsCount, visibleCount, isPaused }) {
   );
 }
 
-function formatFilterLabel(methodFilter, statusFilter, searchQuery) {
-  const filters = `${methodFilter}/${statusFilter}`;
-  const search = searchQuery.trim() ? `/${truncate(searchQuery, 16)}` : '';
+export function formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery) {
+  const parts = [];
 
-  return `${filters}${search}`;
+  if (methodFilters.length > 0) {
+    parts.push(`method ${formatSelectedValues(methodFilters)}`);
+  }
+
+  if (statusFilters.length > 0) {
+    parts.push(`status ${formatSelectedValues(statusFilters)}`);
+  }
+
+  if (searchQuery.trim()) {
+    parts.push(`search "${truncate(searchQuery, 16)}" in ${formatSearchFieldLabel(searchField)}`);
+  }
+
+  return parts.length > 0 ? parts.join(' | ') : 'none';
 }
 
 function TrafficList({
+  bottomOffset,
   emptyText,
   logs,
   totalCount,
   selectedIndex,
   isFocused,
   isFollowingLatest,
-  methodFilter,
-  statusFilter,
+  methodFilters,
+  statusFilters,
+  searchField,
   searchQuery
 }) {
   const rows = process.stdout.rows || 24;
-  const visibleCount = Math.max(5, rows - 13);
+  const visibleCount = Math.max(5, rows - bottomOffset);
   const startIndex = Math.max(0, Math.min(
     selectedIndex - Math.floor(visibleCount / 2),
     Math.max(0, logs.length - visibleCount)
   ));
   const visibleLogs = logs.slice(startIndex, startIndex + visibleCount);
-  const filterLabel = formatFilterLabel(methodFilter, statusFilter, searchQuery);
+  const filterLabel = formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery);
   const noRowsText = totalCount === 0 ? emptyText : 'No matching traffic';
 
   return h(
@@ -258,7 +372,7 @@ function TrafficList({
   );
 }
 
-function DetailPane({ log, isFocused, detailTab, scrollOffset }) {
+function DetailPane({ bottomOffset, log, isFocused, detailTab, scrollOffset }) {
   if (!log) {
     return h(
       Box,
@@ -274,7 +388,7 @@ function DetailPane({ log, isFocused, detailTab, scrollOffset }) {
   }
 
   const rows = process.stdout.rows || 24;
-  const visibleCount = Math.max(4, rows - 13);
+  const visibleCount = Math.max(4, rows - bottomOffset);
   const lines = getDetailLines(log, detailTab);
   const maxScrollOffset = getMaxScrollOffset(lines, visibleCount);
   const safeScrollOffset = Math.min(scrollOffset, maxScrollOffset);
@@ -310,16 +424,101 @@ function DetailPane({ log, isFocused, detailTab, scrollOffset }) {
   );
 }
 
+function formatOptionToken(value, options = {}) {
+  const displayValue = options.label ?? value;
+  const label = options.selected ? `[${displayValue}]` : displayValue;
+
+  return options.cursor ? `<${label}>` : ` ${label} `;
+}
+
+function formatOptionsLine(values, selectedValues, cursorIndex, isFocused) {
+  return ['all', ...values]
+    .map((value, index) => formatOptionToken(value, {
+      cursor: isFocused && index === cursorIndex,
+      label: value === 'all' ? 'any' : value,
+      selected: value === 'all' ? selectedValues.length === 0 : selectedValues.includes(value)
+    }))
+    .join(' ');
+}
+
+function formatFieldLine(searchField, isFocused) {
+  return SEARCH_FIELDS
+    .map((value) => formatOptionToken(value, {
+      cursor: isFocused && value === searchField,
+      label: formatSearchFieldLabel(value),
+      selected: value === searchField
+    }))
+    .join(' ');
+}
+
+function focusedMarker(row, filterFocus) {
+  return row === filterFocus ? '>' : ' ';
+}
+
+function FilterBar({
+  filterFocus,
+  logsCount,
+  methodFilters,
+  methodOptionIndex,
+  searchField,
+  searchQuery,
+  statusFilters,
+  statusOptionIndex,
+  visibleCount
+}) {
+  const query = searchQuery.length > 0 ? searchQuery : '(empty)';
+  const activeFilters = countActiveFilters({
+    methodFilters,
+    statusFilters,
+    searchQuery
+  });
+
+  return h(
+    Box,
+    {
+      flexDirection: 'column',
+      borderStyle: 'single',
+      borderColor: 'cyan',
+      paddingX: 1,
+      marginTop: 1
+    },
+    h(Text, { color: 'cyan', bold: true }, `Filters ${visibleCount}/${logsCount} matches | ${activeFilters} active`),
+    h(Text, { wrap: 'truncate' }, `${focusedMarker('query', filterFocus)} query ${query}${filterFocus === 'query' ? '_' : ''}`),
+    h(
+      Text,
+      { wrap: 'truncate' },
+      `${focusedMarker('field', filterFocus)} field ${formatFieldLine(searchField, filterFocus === 'field')}`
+    ),
+    h(
+      Text,
+      { wrap: 'truncate' },
+      `${focusedMarker('method', filterFocus)} method ${formatOptionsLine(METHOD_OPTIONS, methodFilters, methodOptionIndex, filterFocus === 'method')}`
+    ),
+    h(
+      Text,
+      { wrap: 'truncate' },
+      `${focusedMarker('status', filterFocus)} status ${formatOptionsLine(STATUS_OPTIONS, statusFilters, statusOptionIndex, filterFocus === 'status')}`
+    ),
+    h(Text, { color: 'gray', wrap: 'truncate' }, 'up/down row | left/right option | space select | x clear filters | enter/esc close')
+  );
+}
+
 function Footer({
   isListFocused,
   isRawModeSupported,
   isFollowingLatest,
   isPaused,
-  isSearchEditing,
-  searchQuery
+  methodFilters,
+  searchField,
+  searchQuery,
+  statusFilters
 }) {
+  const activeFilters = countActiveFilters({ methodFilters, statusFilters, searchQuery });
+  const filterSummary = activeFilters > 0
+    ? ` | filters ${activeFilters} (${formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery)}) | x clear filters`
+    : '';
   const text = isRawModeSupported
-    ? `up/down ${isListFocused ? 'inspect' : 'scroll'} | tab ${isListFocused ? 'traffic' : 'details'} | r req/res | p ${isPaused ? 'resume' : 'pause'} | m method | s status | / search ${isSearchEditing ? `[${searchQuery}]` : ''} | c clear | f latest | q quit`
+    ? `up/down ${isListFocused ? 'inspect' : 'scroll'} | tab ${isListFocused ? 'traffic' : 'details'} | r req/res | p ${isPaused ? 'resume' : 'pause'} | m methods | s statuses | / filter | c clear logs | f latest | q quit${filterSummary}`
     : 'keyboard input unavailable in this shell | Ctrl-C or SIGTERM quit';
 
   return h(
@@ -374,19 +573,22 @@ export function moveSelectedLogId(logs, selectedLogId, direction) {
 }
 
 function KeyboardControls({
+  filterFocus,
   isListFocused,
-  isSearchEditing,
+  isFilterOpen,
   onAppendSearch,
   onBackspaceSearch,
+  onClearFilters,
   onClearLogs,
-  onCycleMethod,
-  onCycleStatus,
+  onCycleFilterFocus,
   onFinishSearch,
   onFollowLatest,
+  onMoveFilterOption,
   onMoveSelection,
+  onOpenFilter,
   onQuit,
   onScrollDetails,
-  onStartSearch,
+  onToggleFilterOption,
   onToggleDetailTab,
   onToggleFocus,
   onTogglePause
@@ -397,18 +599,50 @@ function KeyboardControls({
       return;
     }
 
-    if (isSearchEditing) {
+    if (isFilterOpen) {
       if (key.escape || key.return) {
         onFinishSearch();
         return;
       }
 
-      if (key.backspace || key.delete) {
-        onBackspaceSearch();
+      if (input === 'x') {
+        onClearFilters();
         return;
       }
 
-      if (input && !key.ctrl && !key.meta) {
+      if (key.tab || key.downArrow) {
+        onCycleFilterFocus(1);
+        return;
+      }
+
+      if (key.upArrow) {
+        onCycleFilterFocus(-1);
+        return;
+      }
+
+      if (key.rightArrow) {
+        onMoveFilterOption(1);
+        return;
+      }
+
+      if (key.leftArrow) {
+        onMoveFilterOption(-1);
+        return;
+      }
+
+      if (input === ' ' && filterFocus !== 'query') {
+        onToggleFilterOption();
+        return;
+      }
+
+      if (key.backspace || key.delete) {
+        if (filterFocus === 'query') {
+          onBackspaceSearch();
+        }
+        return;
+      }
+
+      if (input && !key.ctrl && !key.meta && filterFocus === 'query') {
         onAppendSearch(input);
       }
 
@@ -421,7 +655,12 @@ function KeyboardControls({
     }
 
     if (input === '/') {
-      onStartSearch();
+      onOpenFilter('query');
+      return;
+    }
+
+    if (input === 'x') {
+      onClearFilters();
       return;
     }
 
@@ -436,7 +675,7 @@ function KeyboardControls({
     }
 
     if (input === 'm') {
-      onCycleMethod();
+      onOpenFilter('method');
       return;
     }
 
@@ -451,7 +690,7 @@ function KeyboardControls({
     }
 
     if (input === 's') {
-      onCycleStatus();
+      onOpenFilter('status');
       return;
     }
 
@@ -504,18 +743,23 @@ export function App({
   const [isFollowingLatest, setIsFollowingLatest] = useState(false);
   const [isListFocused, setIsListFocused] = useState(true);
   const [isPaused, setIsPaused] = useState(() => captureController?.isPaused?.() ?? false);
-  const [methodFilter, setMethodFilter] = useState('all');
-  const [statusFilter, setStatusFilter] = useState('all');
+  const [methodFilters, setMethodFilters] = useState([]);
+  const [statusFilters, setStatusFilters] = useState([]);
+  const [searchField, setSearchField] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [isSearchEditing, setIsSearchEditing] = useState(false);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [filterFocus, setFilterFocus] = useState('query');
+  const [methodOptionIndex, setMethodOptionIndex] = useState(0);
+  const [statusOptionIndex, setStatusOptionIndex] = useState(0);
   const [detailTab, setDetailTab] = useState('request');
   const [detailScrollOffset, setDetailScrollOffset] = useState(0);
 
   const filteredLogs = useMemo(() => filterLogs(logs, {
-    methodFilter,
-    statusFilter,
+    methodFilters,
+    searchField,
+    statusFilters,
     searchQuery
-  }), [logs, methodFilter, statusFilter, searchQuery]);
+  }), [logs, methodFilters, searchField, statusFilters, searchQuery]);
 
   useEffect(() => {
     const handleUpdate = (updatedLogs) => setLogs(updatedLogs);
@@ -538,7 +782,8 @@ export function App({
   const selectedIndex = useMemo(() => getSelectedIndex(filteredLogs, selectedLogId), [filteredLogs, selectedLogId]);
   const selectedLog = useMemo(() => filteredLogs[selectedIndex] ?? null, [filteredLogs, selectedIndex]);
   const detailLines = useMemo(() => getDetailLines(selectedLog, detailTab), [selectedLog, detailTab]);
-  const detailVisibleCount = Math.max(4, (process.stdout.rows || 24) - 13);
+  const bottomOffset = isFilterOpen ? 19 : 13;
+  const detailVisibleCount = Math.max(4, (process.stdout.rows || 24) - bottomOffset);
   const maxDetailScrollOffset = getMaxScrollOffset(detailLines, detailVisibleCount);
   const proxyOrigin = getProxyOrigin(context.port ?? 8080);
   const emptyText = context.mode === 'live'
@@ -549,6 +794,17 @@ export function App({
     setDetailScrollOffset((current) => Math.min(current, maxDetailScrollOffset));
   }, [maxDetailScrollOffset]);
 
+  const clearFilters = () => {
+    setMethodFilters([]);
+    setStatusFilters([]);
+    setSearchField('all');
+    setSearchQuery('');
+    setFilterFocus('query');
+    setMethodOptionIndex(0);
+    setStatusOptionIndex(0);
+    setIsFollowingLatest(false);
+  };
+
   return h(
     Box,
     {
@@ -558,8 +814,9 @@ export function App({
     },
     isRawModeSupported
       ? h(KeyboardControls, {
+        filterFocus,
         isListFocused,
-        isSearchEditing,
+        isFilterOpen,
         onAppendSearch: (value) => {
           setSearchQuery((current) => `${current}${value}`);
           setIsFollowingLatest(false);
@@ -568,26 +825,43 @@ export function App({
           setSearchQuery((current) => current.slice(0, -1));
           setIsFollowingLatest(false);
         },
+        onClearFilters: clearFilters,
         onClearLogs: () => {
           stateStore.clear();
           setSelectedLogId(null);
           setIsFollowingLatest(false);
           setDetailScrollOffset(0);
         },
-        onCycleMethod: () => {
-          setMethodFilter((current) => cycleValue(METHOD_FILTERS, current));
+        onCycleFilterFocus: (direction) => {
+          setFilterFocus((current) => cycleValue(FILTER_FOCUS_ORDER, current, direction));
           setIsFollowingLatest(false);
         },
-        onCycleStatus: () => {
-          setStatusFilter((current) => cycleValue(STATUS_FILTERS, current));
-          setIsFollowingLatest(false);
-        },
-        onFinishSearch: () => setIsSearchEditing(false),
+        onFinishSearch: () => setIsFilterOpen(false),
         onQuit,
         onToggleFocus: () => setIsListFocused((current) => !current),
+        onMoveFilterOption: (direction) => {
+          if (filterFocus === 'field') {
+            setSearchField((current) => cycleValue(SEARCH_FIELDS, current, direction));
+          }
+
+          if (filterFocus === 'method') {
+            setMethodOptionIndex((current) => (current + direction + METHOD_OPTIONS.length + 1) % (METHOD_OPTIONS.length + 1));
+          }
+
+          if (filterFocus === 'status') {
+            setStatusOptionIndex((current) => (current + direction + STATUS_OPTIONS.length + 1) % (STATUS_OPTIONS.length + 1));
+          }
+
+          setIsFollowingLatest(false);
+        },
         onMoveSelection: (direction) => {
           setIsFollowingLatest(false);
           setSelectedLogId((currentId) => moveSelectedLogId(filteredLogs, currentId, direction));
+        },
+        onOpenFilter: (focus) => {
+          setFilterFocus(focus);
+          setIsFilterOpen(true);
+          setIsFollowingLatest(false);
         },
         onScrollDetails: (direction) => {
           setDetailScrollOffset((current) => Math.min(
@@ -595,13 +869,26 @@ export function App({
             Math.max(0, current + direction)
           ));
         },
-        onStartSearch: () => {
-          setIsSearchEditing(true);
-          setIsFollowingLatest(false);
-        },
         onFollowLatest: () => {
           setIsFollowingLatest(true);
           setSelectedLogId(resolveSelectedLogId(filteredLogs, selectedLogId, { followLatest: true }));
+        },
+        onToggleFilterOption: () => {
+          if (filterFocus === 'field') {
+            setSearchField((current) => cycleValue(SEARCH_FIELDS, current));
+          }
+
+          if (filterFocus === 'method') {
+            const value = ['all', ...METHOD_OPTIONS][methodOptionIndex];
+            setMethodFilters((current) => toggleFilterValue(current, value, METHOD_OPTIONS));
+          }
+
+          if (filterFocus === 'status') {
+            const value = ['all', ...STATUS_OPTIONS][statusOptionIndex];
+            setStatusFilters((current) => toggleFilterValue(current, value, STATUS_OPTIONS));
+          }
+
+          setIsFollowingLatest(false);
         },
         onToggleDetailTab: () => {
           setDetailTab((current) => cycleValue(DETAIL_TABS, current));
@@ -625,30 +912,47 @@ export function App({
       Box,
       { flexDirection: 'row', flexGrow: 1 },
       h(TrafficList, {
+        bottomOffset,
         emptyText,
         logs: filteredLogs,
         totalCount: logs.length,
         selectedIndex,
         isFocused: isListFocused,
         isFollowingLatest,
-        methodFilter,
-        statusFilter,
+        methodFilters,
+        searchField,
+        statusFilters,
         searchQuery
       }),
       h(DetailPane, {
+        bottomOffset,
         log: selectedLog,
         isFocused: !isListFocused,
         detailTab,
         scrollOffset: detailScrollOffset
       })
     ),
-    h(Footer, {
-      isListFocused,
-      isRawModeSupported,
-      isFollowingLatest,
-      isPaused,
-      isSearchEditing,
-      searchQuery
-    })
+    isFilterOpen
+      ? h(FilterBar, {
+        filterFocus,
+        logsCount: logs.length,
+        methodFilters,
+        methodOptionIndex,
+        searchField,
+        searchQuery,
+        statusFilters,
+        statusOptionIndex,
+        visibleCount: filteredLogs.length
+      })
+      : h(Footer, {
+        isListFocused,
+        isRawModeSupported,
+        isFollowingLatest,
+        isPaused,
+        methodFilters,
+        searchField,
+        searchQuery,
+        statusFilters
+      })
   );
 }

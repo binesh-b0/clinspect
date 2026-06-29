@@ -77,7 +77,9 @@ Current MVP behavior:
 - rewrites target redirects back to the local proxy origin where possible
 - captures request/response headers, status, timing, and capped text bodies
 - shows a traffic list and selected payload details
-- supports up/down inspection, stable held selection, `f` follow-latest mode, tab focus toggle, detail scrolling, request/response tab switching, pause/resume, filters, search, clear logs, `q` quit, and Ctrl-C cleanup
+- supports up/down inspection, stable held selection, `f` follow-latest mode, tab focus toggle, detail scrolling, request/response tab switching, pause/resume, clear logs, `q` quit, and Ctrl-C cleanup
+- opens a bottom filter panel with `/`, supports multi-select method/status options, and searches all, path, status, method, time, host, port, headers, or body
+- supports quick filter controls: `m` opens method filters, `s` opens status filters, `space` toggles options, and `x` clears active filters
 - caps stored text bodies and marks truncated payloads
 
 ## Project Layout
