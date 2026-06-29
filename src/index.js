@@ -11,13 +11,15 @@ import {
 } from './cli/options.js';
 import { openUrl } from './browser.js';
 import { startLiveProxy, startMockTrafficFeed } from './engine/proxy.js';
-import { DEFAULT_BODY_LIMIT, StateStore } from './store/state.js';
+import { DEFAULT_BODY_LIMIT, DEFAULT_MAX_ENTRIES, StateStore } from './store/state.js';
 import { getProxyOrigin, isPublicTargetUrl } from './target.js';
 import { App } from './ui/App.js';
 import { createStableStdout } from './ui/stable-output.js';
-import { createTrafficRecorder } from './recording/recorder.js';
+import { createNoopRecorder, createTrafficRecorder } from './recording/recorder.js';
+import { loadRecordedSession } from './recording/session-loader.js';
 
 const h = React.createElement;
+const CLINSPECT_VERSION = '1.0.0';
 
 function createCaptureController() {
   let paused = false;
@@ -55,8 +57,38 @@ export function shouldOpenProxyUrl(options = {}) {
   );
 }
 
+function createNoopEngine() {
+  return {
+    ready: Promise.resolve(),
+    stop() {
+      return Promise.resolve();
+    }
+  };
+}
+
+function getTargetKind(options = {}) {
+  if (!options.targetUrl) {
+    return 'mock';
+  }
+
+  return isPublicTargetUrl(options.targetUrl) ? 'public' : 'local';
+}
+
 export function startInspector(options, runtime = {}) {
-  const stateStore = runtime.stateStore ?? new StateStore({ bodyLimit: DEFAULT_BODY_LIMIT });
+  const loadSession = runtime.loadRecordedSession ?? loadRecordedSession;
+  const loadedSession = options.mode === 'replay'
+    ? loadSession(options.sessionPath, {
+      bodyLimit: DEFAULT_BODY_LIMIT,
+      showCookieValues: options.showCookieValues
+    })
+    : null;
+  const maxEntries = options.mode === 'replay'
+    ? Math.max(DEFAULT_MAX_ENTRIES, loadedSession.entries.length)
+    : DEFAULT_MAX_ENTRIES;
+  const stateStore = runtime.stateStore ?? new StateStore({
+    bodyLimit: DEFAULT_BODY_LIMIT,
+    maxEntries
+  });
   const renderApp = runtime.renderApp ?? render;
   const startDemoFeed = runtime.startDemoFeed ?? runtime.startFeed ?? startMockTrafficFeed;
   const startProxy = runtime.startLiveProxy ?? startLiveProxy;
@@ -64,24 +96,58 @@ export function startInspector(options, runtime = {}) {
   const openBrowserUrl = runtime.openUrl ?? openUrl;
   const captureController = runtime.captureController ?? createCaptureController();
   const stdout = runtime.stdout ?? createStableStdout(process.stdout);
-  const trafficRecorder = runtime.trafficRecorder ?? runtime.recorder ?? createTrafficRecorder(options.recording);
+  const trafficRecorder = options.mode === 'replay'
+    ? (runtime.trafficRecorder ?? runtime.recorder ?? createNoopRecorder())
+    : (runtime.trafficRecorder ?? runtime.recorder ?? createTrafficRecorder({
+      ...options.recording,
+      bodyLimit: DEFAULT_BODY_LIMIT,
+      clinspectVersion: CLINSPECT_VERSION,
+      cookieValuePolicy: options.recording?.cookieValuePolicy ?? 'masked',
+      recordCookieValues: options.recordCookieValues,
+      port: options.port,
+      proxyOrigin: getProxyOrigin(options.port ?? 8080),
+      sourceMode: options.mode,
+      targetKind: getTargetKind(options),
+      targetUrl: options.targetUrl
+    }));
   const handleRecordAdd = (logEntry) => trafficRecorder.recordCapture?.(logEntry);
+  const appContext = options.mode === 'replay'
+    ? {
+      ...options,
+      loadedSession: {
+        endedAt: loadedSession.endedAt,
+        metadata: loadedSession.metadata,
+        skippedLines: loadedSession.skippedLines,
+        totalEntries: loadedSession.totalEntries
+      }
+    }
+    : options;
+
+  if (loadedSession) {
+    loadedSession.entries.forEach((entry) => stateStore.addLog(entry));
+  }
 
   if (trafficRecorder.getStatus?.().mode === 'full') {
     stateStore.on('add', handleRecordAdd);
   }
 
-  const engine = options.mode === 'live'
-    ? startProxy(stateStore, {
+  let engine;
+
+  if (options.mode === 'replay') {
+    engine = createNoopEngine();
+  } else if (options.mode === 'live') {
+    engine = startProxy(stateStore, {
       bodyLimit: DEFAULT_BODY_LIMIT,
       port: options.port,
       shouldCapture: () => captureController.shouldCapture(),
       targetUrl: options.targetUrl
-    })
-    : startDemoFeed(stateStore, {
+    });
+  } else {
+    engine = startDemoFeed(stateStore, {
       bodyLimit: DEFAULT_BODY_LIMIT,
       shouldCapture: () => captureController.shouldCapture()
     });
+  }
   let inkInstance;
   let stopped = false;
 
@@ -137,7 +203,7 @@ export function startInspector(options, runtime = {}) {
   inkInstance = renderApp(
     h(App, {
       stateStore,
-      context: options,
+      context: appContext,
       captureController,
       trafficRecorder,
       onQuit: () => shutdown(0)
@@ -151,6 +217,7 @@ export function startInspector(options, runtime = {}) {
   return {
     captureController,
     engine,
+    loadedSession,
     recorder: trafficRecorder,
     stateStore,
     stop: shutdown,
@@ -173,8 +240,13 @@ export function run(argv = process.argv) {
     return 1;
   }
 
-  startInspector(options);
-  return 0;
+  try {
+    startInspector(options);
+    return 0;
+  } catch (error) {
+    process.stderr.write(`${chalk.red(`Error: ${formatCliError(error)}`)}\n`);
+    return 1;
+  }
 }
 
 if (isDirectExecution()) {

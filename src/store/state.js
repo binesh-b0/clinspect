@@ -27,7 +27,7 @@ function cloneHeaders(headers = {}) {
   return Object.fromEntries(
     Object.entries(headers).map(([key, value]) => [
       key,
-      Array.isArray(value) ? value.join(', ') : String(value)
+      Array.isArray(value) ? value.map((item) => String(item)) : String(value)
     ])
   );
 }
@@ -78,11 +78,11 @@ export function cloneLogEntry(entry) {
     ...entry,
     request: {
       ...entry.request,
-      headers: { ...entry.request.headers }
+      headers: cloneHeaders(entry.request.headers)
     },
     response: {
       ...entry.response,
-      headers: { ...entry.response.headers }
+      headers: cloneHeaders(entry.response.headers)
     }
   };
 }

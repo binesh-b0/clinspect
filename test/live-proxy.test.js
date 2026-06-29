@@ -165,6 +165,49 @@ test('startLiveProxy caps captured request and response bodies', async () => {
   }
 });
 
+test('startLiveProxy preserves Cookie and multiple Set-Cookie headers in logs', async () => {
+  const upstream = await startServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.statusCode = 200;
+      res.setHeader('set-cookie', [
+        'sid=abc; Path=/; HttpOnly',
+        'theme=dark; Path=/'
+      ]);
+      res.end(req.headers.cookie ?? '');
+    });
+  });
+  const store = new StateStore({ maxEntries: 10, bodyLimit: 1000 });
+  const proxy = startLiveProxy(store, {
+    bodyLimit: 1000,
+    port: 0,
+    targetUrl: upstream.url
+  });
+
+  try {
+    await proxy.ready;
+
+    const response = await fetch(`${proxyUrl(proxy)}/cookies`, {
+      headers: {
+        cookie: 'sid=abc; theme=dark'
+      }
+    });
+
+    assert.equal(await response.text(), 'sid=abc; theme=dark');
+
+    const [log] = store.getLogs();
+
+    assert.equal(log.request.headers.cookie, 'sid=abc; theme=dark');
+    assert.deepEqual(log.response.headers['set-cookie'], [
+      'sid=abc; Path=/; HttpOnly',
+      'theme=dark; Path=/'
+    ]);
+  } finally {
+    await proxy.stop();
+    await closeServer(upstream.server);
+  }
+});
+
 test('startLiveProxy can forward while capture is paused', async () => {
   const upstream = await startServer((req, res) => {
     req.resume();

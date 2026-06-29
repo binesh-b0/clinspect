@@ -61,11 +61,26 @@ export function createProgram() {
   return new Command()
     .name('clinspect')
     .description('Terminal HTTP traffic inspector')
+    .option('--load <path>', 'load a recorded NDJSON session without starting live or demo capture')
     .option('-p, --port <number>', 'local proxy port for live mode', parsePort, DEFAULT_PORT)
     .option('-t, --target <url>', 'upstream target URL for live proxy mode', parseTargetUrl)
     .option('--open', 'open the local proxy URL in a browser for public live targets')
     .option('--record <mode>', 'record traffic to disk (full|partial)', parseRecordMode)
-    .option('--record-path <path>', 'exact NDJSON file path for --record output');
+    .option('--record-path <path>', 'exact NDJSON file path for --record output')
+    .option('--show-cookie-values', 'show raw Cookie and Set-Cookie values in the UI and search')
+    .option('--record-cookie-values', 'write raw Cookie and Set-Cookie values to recordings');
+}
+
+function hasExplicitOption(argv, optionNames) {
+  return argv.slice(2).some((arg) => {
+    return optionNames.some((optionName) => {
+      if (optionName.startsWith('--')) {
+        return arg === optionName || arg.startsWith(`${optionName}=`);
+      }
+
+      return arg === optionName || arg.startsWith(optionName);
+    });
+  });
 }
 
 export function isHelpRequested(argv = process.argv) {
@@ -90,11 +105,49 @@ export function parseCliOptions(argv = process.argv) {
   program.parse(argv, { from: 'node' });
 
   const options = program.opts();
+  const sessionPath = options.load ?? null;
   const targetUrl = options.target ?? null;
   const recordMode = options.record ?? 'off';
+  const showCookieValues = Boolean(options.showCookieValues);
+  const recordCookieValues = Boolean(options.recordCookieValues);
+
+  if (sessionPath) {
+    const hasReplayConflict = Boolean(
+      targetUrl ||
+      options.open ||
+      options.record ||
+      options.recordPath ||
+      recordCookieValues ||
+      hasExplicitOption(argv, ['--port', '-p'])
+    );
+
+    if (hasReplayConflict) {
+      throw new InvalidArgumentError('load cannot be combined with --target, --port, --open, --record, --record-path, or --record-cookie-values');
+    }
+
+    return {
+      mode: 'replay',
+      loadedSession: null,
+      openBrowser: false,
+      port: DEFAULT_PORT,
+      recording: {
+        cookieValuePolicy: 'masked',
+        mode: 'off',
+        path: null
+      },
+      recordCookieValues: false,
+      sessionPath,
+      showCookieValues,
+      targetUrl: null
+    };
+  }
 
   if (recordMode === 'off' && options.recordPath) {
     throw new InvalidArgumentError('record-path requires --record');
+  }
+
+  if (recordMode === 'off' && recordCookieValues) {
+    throw new InvalidArgumentError('record-cookie-values requires --record');
   }
 
   return {
@@ -102,11 +155,14 @@ export function parseCliOptions(argv = process.argv) {
     openBrowser: Boolean(options.open),
     port: options.port,
     recording: {
+      cookieValuePolicy: recordCookieValues ? 'raw' : 'masked',
       mode: recordMode,
       path: recordMode === 'off'
         ? null
         : (options.recordPath ?? createDefaultRecordingPath())
     },
+    recordCookieValues,
+    showCookieValues,
     targetUrl
   };
 }

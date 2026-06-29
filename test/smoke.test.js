@@ -186,6 +186,83 @@ test('startInspector passes partial recorder into App without full capture subsc
   await inspector.stop();
 });
 
+test('startInspector loads replay sessions without starting capture engines', async () => {
+  const { startInspector } = await import('../src/index.js');
+  const calls = [];
+  const entries = Array.from({ length: 105 }, (_, index) => ({
+    id: `entry-${index + 1}`,
+    path: `/entry-${index + 1}`
+  }));
+  const inspector = startInspector(
+    {
+      mode: 'replay',
+      loadedSession: null,
+      openBrowser: false,
+      port: 8080,
+      recording: {
+        mode: 'off',
+        path: null
+      },
+      sessionPath: './captures/session.ndjson',
+      targetUrl: null
+    },
+    {
+      loadRecordedSession: (sessionPath) => {
+        calls.push(['load', sessionPath]);
+
+        return {
+          endedAt: null,
+          entries,
+          metadata: {
+            sourceMode: 'live',
+            targetUrl: 'http://localhost:3000/'
+          },
+          skippedLines: 1,
+          totalEntries: entries.length
+        };
+      },
+      renderApp: (node) => {
+        calls.push([
+          'render',
+          node.props.context.mode,
+          node.props.context.loadedSession.totalEntries,
+          node.props.context.loadedSession.skippedLines
+        ]);
+
+        return {
+          unmount() {
+            calls.push(['unmount']);
+          }
+        };
+      },
+      startDemoFeed: () => {
+        throw new Error('demo feed should not start in replay mode');
+      },
+      startLiveProxy: () => {
+        throw new Error('live proxy should not start in replay mode');
+      },
+      exitProcess: (code) => {
+        calls.push(['exit', code]);
+      }
+    }
+  );
+
+  assert.equal(inspector.stateStore.getLogs().length, 105);
+  assert.deepEqual(calls, [
+    ['load', './captures/session.ndjson'],
+    ['render', 'replay', 105, 1]
+  ]);
+
+  await inspector.stop();
+
+  assert.deepEqual(calls, [
+    ['load', './captures/session.ndjson'],
+    ['render', 'replay', 105, 1],
+    ['unmount'],
+    ['exit', 0]
+  ]);
+});
+
 test('shouldOpenProxyUrl only enables public live targets with --open', async () => {
   const { shouldOpenProxyUrl } = await import('../src/index.js');
 

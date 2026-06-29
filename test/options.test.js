@@ -51,9 +51,12 @@ test('parseCliOptions defaults to demo mode without a target', () => {
     openBrowser: false,
     port: DEFAULT_PORT,
     recording: {
+      cookieValuePolicy: 'masked',
       mode: 'off',
       path: null
     },
+    recordCookieValues: false,
+    showCookieValues: false,
     targetUrl: null
   });
 });
@@ -71,9 +74,12 @@ test('parseCliOptions uses live mode when a target is provided', () => {
     openBrowser: false,
     port: 9090,
     recording: {
+      cookieValuePolicy: 'masked',
       mode: 'off',
       path: null
     },
+    recordCookieValues: false,
+    showCookieValues: false,
     targetUrl: 'http://localhost:5173/'
   });
 });
@@ -90,9 +96,12 @@ test('parseCliOptions enables browser open flag', () => {
     openBrowser: true,
     port: DEFAULT_PORT,
     recording: {
+      cookieValuePolicy: 'masked',
       mode: 'off',
       path: null
     },
+    recordCookieValues: false,
+    showCookieValues: false,
     targetUrl: 'https://example.com/'
   });
 });
@@ -101,6 +110,7 @@ test('parseCliOptions supports full and partial recording', () => {
   const fullOptions = parseCliOptions(['node', 'clinspect', '--record', 'full']);
 
   assert.equal(fullOptions.recording.mode, 'full');
+  assert.equal(fullOptions.recording.cookieValuePolicy, 'masked');
   assert.match(fullOptions.recording.path, /^\.\/\.clinspect\/recordings\/clinspect-\d{8}-\d{6}\.ndjson$/);
 
   assert.deepEqual(parseCliOptions([
@@ -111,6 +121,7 @@ test('parseCliOptions supports full and partial recording', () => {
     '--record-path',
     './captures/session.ndjson'
   ]).recording, {
+    cookieValuePolicy: 'masked',
     mode: 'partial',
     path: './captures/session.ndjson'
   });
@@ -118,6 +129,99 @@ test('parseCliOptions supports full and partial recording', () => {
   assert.throws(
     () => parseCliOptions(['node', 'clinspect', '--record-path', './captures/session.ndjson']),
     /record-path requires --record/
+  );
+});
+
+test('parseCliOptions supports cookie privacy flags', () => {
+  assert.deepEqual(parseCliOptions([
+    'node',
+    'clinspect',
+    '--show-cookie-values'
+  ]), {
+    mode: 'demo',
+    openBrowser: false,
+    port: DEFAULT_PORT,
+    recording: {
+      cookieValuePolicy: 'masked',
+      mode: 'off',
+      path: null
+    },
+    recordCookieValues: false,
+    showCookieValues: true,
+    targetUrl: null
+  });
+
+  const rawRecording = parseCliOptions([
+    'node',
+    'clinspect',
+    '--record',
+    'full',
+    '--record-cookie-values'
+  ]);
+
+  assert.equal(rawRecording.recording.mode, 'full');
+  assert.equal(rawRecording.recording.cookieValuePolicy, 'raw');
+  assert.equal(rawRecording.recordCookieValues, true);
+
+  assert.throws(
+    () => parseCliOptions(['node', 'clinspect', '--record-cookie-values']),
+    /record-cookie-values requires --record/
+  );
+});
+
+test('parseCliOptions supports replay mode and rejects live or recording flags', () => {
+  assert.deepEqual(parseCliOptions([
+    'node',
+    'clinspect',
+    '--load',
+    './captures/session.ndjson'
+  ]), {
+    mode: 'replay',
+    loadedSession: null,
+    openBrowser: false,
+    port: DEFAULT_PORT,
+    recording: {
+      cookieValuePolicy: 'masked',
+      mode: 'off',
+      path: null
+    },
+    recordCookieValues: false,
+    sessionPath: './captures/session.ndjson',
+    showCookieValues: false,
+    targetUrl: null
+  });
+
+  assert.equal(parseCliOptions([
+    'node',
+    'clinspect',
+    '--load',
+    './captures/session.ndjson',
+    '--show-cookie-values'
+  ]).showCookieValues, true);
+
+  assert.throws(
+    () => parseCliOptions(['node', 'clinspect', '--load', './capture.ndjson', '--target', 'http://localhost:3000']),
+    /load cannot be combined/
+  );
+  assert.throws(
+    () => parseCliOptions(['node', 'clinspect', '--load', './capture.ndjson', '--port', '9090']),
+    /load cannot be combined/
+  );
+  assert.throws(
+    () => parseCliOptions(['node', 'clinspect', '--load', './capture.ndjson', '--record', 'full']),
+    /load cannot be combined/
+  );
+  assert.throws(
+    () => parseCliOptions(['node', 'clinspect', '--load', './capture.ndjson', '--open']),
+    /load cannot be combined/
+  );
+  assert.throws(
+    () => parseCliOptions(['node', 'clinspect', '--load', './capture.ndjson', '--record-path', './out.ndjson']),
+    /load cannot be combined/
+  );
+  assert.throws(
+    () => parseCliOptions(['node', 'clinspect', '--load', './capture.ndjson', '--record-cookie-values']),
+    /load cannot be combined/
   );
 });
 
@@ -129,9 +233,12 @@ test('help helpers detect help requests and expose command help', () => {
   const helpText = getCliHelpText();
 
   assert.match(helpText, /Usage: clinspect/);
+  assert.match(helpText, /--load <path>/);
   assert.match(helpText, /--target <url>/);
   assert.match(helpText, /--port <number>/);
   assert.match(helpText, /--open/);
   assert.match(helpText, /--record <mode>/);
   assert.match(helpText, /--record-path <path>/);
+  assert.match(helpText, /--show-cookie-values/);
+  assert.match(helpText, /--record-cookie-values/);
 });

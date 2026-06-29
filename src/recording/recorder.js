@@ -1,7 +1,11 @@
 import { EventEmitter } from 'events';
+import { randomUUID } from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { maskLogEntryCookies } from '../cookies.js';
 import { cloneLogEntry } from '../store/state.js';
+
+export const RECORDING_SCHEMA_VERSION = 2;
 
 const OFF_STATUS = {
   mode: 'off',
@@ -18,13 +22,47 @@ function serializeError(error) {
   return error?.message ?? String(error);
 }
 
-function createRecord({ entry, interaction, mode, now }) {
+function createSessionRecord({ now, options, sessionId }) {
+  return {
+    type: 'session',
+    schemaVersion: RECORDING_SCHEMA_VERSION,
+    sessionId,
+    createdAt: now().toISOString(),
+    clinspectVersion: options.clinspectVersion ?? 'unknown',
+    sourceMode: options.sourceMode ?? 'unknown',
+    recordingMode: options.mode,
+    targetUrl: options.targetUrl ?? null,
+    targetKind: options.targetKind ?? 'unknown',
+    proxyOrigin: options.proxyOrigin ?? null,
+    port: options.port ?? null,
+    bodyLimit: options.bodyLimit ?? null,
+    cookieValuePolicy: options.cookieValuePolicy ?? 'masked'
+  };
+}
+
+function createSessionEndRecord({ now, sessionId }) {
+  return {
+    type: 'session-end',
+    schemaVersion: RECORDING_SCHEMA_VERSION,
+    sessionId,
+    endedAt: now().toISOString()
+  };
+}
+
+function createRecord({ cookieValuePolicy, entry, interaction, mode, now, sequence, sessionId }) {
+  const clonedEntry = cloneLogEntry(entry);
+
   return {
     type: 'traffic',
+    schemaVersion: RECORDING_SCHEMA_VERSION,
+    sessionId,
+    sequence,
     recordedAt: now().toISOString(),
     recordingMode: mode,
     interaction,
-    entry: cloneLogEntry(entry)
+    entry: cookieValuePolicy === 'raw'
+      ? clonedEntry
+      : maskLogEntryCookies(clonedEntry)
   };
 }
 
@@ -64,6 +102,10 @@ export function createTrafficRecorder(options = {}) {
   const mode = normalizeMode(options.mode);
   const filePath = options.path ?? null;
   const now = options.now ?? (() => new Date());
+  const sessionId = options.sessionId ?? randomUUID();
+  const cookieValuePolicy = options.cookieValuePolicy === 'raw' || options.recordCookieValues
+    ? 'raw'
+    : 'masked';
 
   if (mode === 'off') {
     return createNoopRecorder();
@@ -74,6 +116,8 @@ export function createTrafficRecorder(options = {}) {
   let stream = null;
   let paused = false;
   let error = null;
+  let sequence = 0;
+  let stopped = false;
 
   const getStatus = () => ({
     mode,
@@ -102,6 +146,15 @@ export function createTrafficRecorder(options = {}) {
     fs.mkdirSync(path.dirname(path.resolve(filePath)), { recursive: true });
     stream = fs.createWriteStream(path.resolve(filePath), { flags: 'a' });
     stream.on('error', setError);
+    stream.write(`${JSON.stringify(createSessionRecord({
+      now,
+      options: {
+        ...options,
+        cookieValuePolicy,
+        mode
+      },
+      sessionId
+    }))}\n`);
   } catch (nextError) {
     setError(nextError);
   }
@@ -112,11 +165,15 @@ export function createTrafficRecorder(options = {}) {
     }
 
     try {
+      sequence += 1;
       stream.write(`${JSON.stringify(createRecord({
+        cookieValuePolicy,
         entry,
         interaction,
         mode,
-        now
+        now,
+        sequence,
+        sessionId
       }))}\n`);
 
       return true;
@@ -160,12 +217,20 @@ export function createTrafficRecorder(options = {}) {
       return setPaused(!paused);
     },
     stop() {
-      if (!stream || stream.destroyed) {
+      if (!stream || stream.destroyed || stopped) {
         return Promise.resolve();
       }
 
+      stopped = true;
+
       return new Promise((resolve, reject) => {
         stream.once('error', reject);
+        if (!error) {
+          stream.write(`${JSON.stringify(createSessionEndRecord({
+            now,
+            sessionId
+          }))}\n`);
+        }
         stream.end(resolve);
       });
     },

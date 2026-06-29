@@ -34,7 +34,7 @@ test('StateStore emits immutable snapshots and normalizes bodies', () => {
       body: 'abcdef'
     },
     response: {
-      headers: { 'x-result': 'ok' },
+      headers: { 'set-cookie': ['sid=abc; Path=/', 'theme=dark; Path=/'], 'x-result': 'ok' },
       body: 'created'
     }
   });
@@ -44,11 +44,14 @@ test('StateStore emits immutable snapshots and normalizes bodies', () => {
   assert.equal(returned.request.truncated, true);
   assert.equal(returned.response.body, 'creat');
   assert.equal(returned.response.truncated, true);
+  assert.deepEqual(returned.response.headers['set-cookie'], ['sid=abc; Path=/', 'theme=dark; Path=/']);
 
   updates[0][0].path = '/mutated';
   added[0].path = '/mutated-add';
+  added[0].response.headers['set-cookie'].push('mutated=true');
   assert.equal(store.getLogs()[0].path, '/submit');
   assert.equal(added[0].request.body, 'abcde');
+  assert.deepEqual(store.getLogs()[0].response.headers['set-cookie'], ['sid=abc; Path=/', 'theme=dark; Path=/']);
 });
 
 test('StateStore enforces a ring-buffer limit', () => {

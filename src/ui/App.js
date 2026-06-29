@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Text, useInput, useStdin } from 'ink';
+import { isCookieHeaderName, maskCookieHeaderValue } from '../cookies.js';
 import { getProxyOrigin, isPublicTargetUrl } from '../target.js';
 
 const h = React.createElement;
@@ -121,14 +122,35 @@ export function formatRecordingLabel(recordingStatus = OFF_RECORDING_STATUS) {
   return 'rec off';
 }
 
-function formatHeaders(headers) {
+function basename(filePath = '') {
+  const parts = String(filePath).split(/[\\/]/);
+
+  return parts[parts.length - 1] || String(filePath);
+}
+
+function getDisplayHeaderValue(key, value, options = {}) {
+  if (!options.showCookieValues && isCookieHeaderName(key)) {
+    return maskCookieHeaderValue(key, value);
+  }
+
+  return value;
+}
+
+function headerValueLines(key, value, options = {}) {
+  const displayValue = getDisplayHeaderValue(key, value, options);
+  const values = Array.isArray(displayValue) ? displayValue : [displayValue];
+
+  return values.map((item) => `${key}: ${String(item)}`);
+}
+
+function formatHeaders(headers, options = {}) {
   const entries = Object.entries(headers ?? {});
 
   if (entries.length === 0) {
     return ['(none)'];
   }
 
-  return entries.map(([key, value]) => `${key}: ${value}`);
+  return entries.flatMap(([key, value]) => headerValueLines(key, value, options));
 }
 
 function formatPayloadBody(payload = {}) {
@@ -142,9 +164,9 @@ function formatPayloadBody(payload = {}) {
   return lines;
 }
 
-function headersToSearchText(headers = {}) {
+function headersToSearchText(headers = {}, options = {}) {
   return Object.entries(headers)
-    .map(([key, value]) => `${key}: ${value}`)
+    .flatMap(([key, value]) => headerValueLines(key, value, options))
     .join('\n');
 }
 
@@ -231,7 +253,7 @@ function matchesStatusFilters(log, statusFilters) {
   return statusFilters.some((statusFilter) => Math.floor(statusCode / 100) === Number(statusFilter[0]));
 }
 
-export function getSearchValues(log, searchField = 'all') {
+export function getSearchValues(log, searchField = 'all', options = {}) {
   const requestHeaders = log.request?.headers ?? {};
   const responseHeaders = log.response?.headers ?? {};
   const host = requestHeaders.host ?? '';
@@ -243,9 +265,9 @@ export function getSearchValues(log, searchField = 'all') {
       formatTime(log.timestamp),
       host,
       extractPortFromHost(host),
-      headersToSearchText(requestHeaders),
+      headersToSearchText(requestHeaders, options),
       log.request?.body,
-      headersToSearchText(responseHeaders),
+      headersToSearchText(responseHeaders, options),
       log.response?.body
     ],
     body: [
@@ -253,8 +275,8 @@ export function getSearchValues(log, searchField = 'all') {
       log.response?.body
     ],
     headers: [
-      headersToSearchText(requestHeaders),
-      headersToSearchText(responseHeaders)
+      headersToSearchText(requestHeaders, options),
+      headersToSearchText(responseHeaders, options)
     ],
     host: [host],
     method: [log.method],
@@ -267,14 +289,14 @@ export function getSearchValues(log, searchField = 'all') {
   return values[searchField] ?? values.all;
 }
 
-function matchesSearch(log, searchQuery, searchField = 'all') {
+function matchesSearch(log, searchQuery, searchField = 'all', options = {}) {
   const query = searchQuery.trim().toLowerCase();
 
   if (!query) {
     return true;
   }
 
-  return getSearchValues(log, searchField)
+  return getSearchValues(log, searchField, options)
     .some((value) => String(value ?? '').toLowerCase().includes(query));
 }
 
@@ -283,11 +305,12 @@ export function filterLogs(logs, options = {}) {
   const statusFilters = normalizeFilterValues(options.statusFilters ?? options.statusFilter, STATUS_OPTIONS);
   const searchQuery = options.searchQuery ?? '';
   const searchField = options.searchField ?? 'all';
+  const showCookieValues = Boolean(options.showCookieValues);
 
   return logs.filter((log) => {
     return matchesMethodFilters(log, methodFilters) &&
       matchesStatusFilters(log, statusFilters) &&
-      matchesSearch(log, searchQuery, searchField);
+      matchesSearch(log, searchQuery, searchField, { showCookieValues });
   });
 }
 
@@ -299,7 +322,7 @@ export function cycleValue(values, currentValue, direction = 1) {
   return values[nextIndex] ?? values[0];
 }
 
-export function getDetailLines(log, detailTab = 'request') {
+export function getDetailLines(log, detailTab = 'request', options = {}) {
   if (!log) {
     return [];
   }
@@ -309,7 +332,7 @@ export function getDetailLines(log, detailTab = 'request') {
 
   return [
     `${title} headers`,
-    ...formatHeaders(payload.headers),
+    ...formatHeaders(payload.headers, options),
     '',
     `${title} body`,
     ...formatPayloadBody(payload)
@@ -327,6 +350,32 @@ const Header = React.memo(function Header({
   visibleCount,
   isPaused
 }) {
+  if (context.mode === 'replay') {
+    const loadedSession = context.loadedSession ?? {};
+    const metadata = loadedSession.metadata ?? {};
+    const countText = visibleCount === logsCount
+      ? `${logsCount} entries`
+      : `${visibleCount}/${logsCount} entries`;
+    const sourceText = metadata.sourceMode
+      ? `source ${metadata.sourceMode}`
+      : 'source unknown';
+    const targetText = metadata.targetUrl
+      ? `target ${metadata.targetUrl}`
+      : 'target unknown';
+
+    return h(
+      Box,
+      { flexDirection: 'column', marginBottom: 1 },
+      h(Text, { color: 'cyan', bold: true }, 'clinspect'),
+      h(
+        Text,
+        { color: 'gray', wrap: 'truncate' },
+        `recorded session | ${basename(context.sessionPath)} | ${countText} | skipped ${loadedSession.skippedLines ?? 0}`
+      ),
+      h(Text, { color: 'gray', wrap: 'truncate' }, `${sourceText} | ${targetText}`)
+    );
+  }
+
   const mode = context.mode === 'live' ? 'live proxy' : 'demo mode';
   const target = context.targetUrl ?? 'mock traffic';
   const port = context.port ?? 8080;
@@ -428,7 +477,14 @@ const TrafficList = React.memo(function TrafficList({
   );
 });
 
-const DetailPane = React.memo(function DetailPane({ bottomOffset, log, isFocused, detailTab, scrollOffset }) {
+const DetailPane = React.memo(function DetailPane({
+  bottomOffset,
+  log,
+  isFocused,
+  detailTab,
+  scrollOffset,
+  showCookieValues = false
+}) {
   if (!log) {
     return h(
       Box,
@@ -445,7 +501,7 @@ const DetailPane = React.memo(function DetailPane({ bottomOffset, log, isFocused
 
   const rows = process.stdout.rows || 24;
   const visibleCount = Math.max(4, rows - bottomOffset);
-  const lines = getDetailLines(log, detailTab);
+  const lines = getDetailLines(log, detailTab, { showCookieValues });
   const maxScrollOffset = getMaxScrollOffset(lines, visibleCount);
   const safeScrollOffset = Math.min(scrollOffset, maxScrollOffset);
   const visibleLines = lines.slice(safeScrollOffset, safeScrollOffset + visibleCount);
@@ -564,6 +620,7 @@ const Footer = React.memo(function Footer({
   isRawModeSupported,
   isFollowingLatest,
   isPaused,
+  isReplayMode,
   methodFilters,
   recordingStatus = OFF_RECORDING_STATUS,
   searchField,
@@ -577,9 +634,10 @@ const Footer = React.memo(function Footer({
   const recordingHelp = recordingStatus.mode === 'full' || recordingStatus.mode === 'partial'
     ? ` | P ${recordingStatus.state === 'paused' ? 'rec resume' : 'rec pause'}`
     : '';
+  const captureHelp = isReplayMode ? '' : ` | p ${isPaused ? 'resume' : 'pause'}${recordingHelp}`;
   const navigationHelp = isListFocused ? 'up/down move | enter inspect' : 'up/down scroll';
   const text = isRawModeSupported
-    ? `${navigationHelp} | tab ${isListFocused ? 'details' : 'traffic'} | r req/res | p ${isPaused ? 'resume' : 'pause'}${recordingHelp} | m methods | s statuses | / filter | c clear logs | f latest | q quit${filterSummary}`
+    ? `${navigationHelp} | tab ${isListFocused ? 'details' : 'traffic'} | r req/res${captureHelp} | m methods | s statuses | / filter | c clear logs | f latest | q quit${filterSummary}`
     : 'keyboard input unavailable in this shell | Ctrl-C or SIGTERM quit';
 
   return h(
@@ -637,6 +695,7 @@ function KeyboardControls({
   filterFocus,
   isListFocused,
   isFilterOpen,
+  isReplayMode,
   onAppendSearch,
   onBackspaceSearch,
   onClearFilters,
@@ -748,11 +807,19 @@ function KeyboardControls({
     }
 
     if (input === 'p') {
+      if (isReplayMode) {
+        return;
+      }
+
       onTogglePause();
       return;
     }
 
     if (input === 'P') {
+      if (isReplayMode) {
+        return;
+      }
+
       onToggleRecordingPause();
       return;
     }
@@ -834,13 +901,16 @@ export function App({
   const [statusOptionIndex, setStatusOptionIndex] = useState(0);
   const [detailTab, setDetailTab] = useState('request');
   const [detailScrollOffset, setDetailScrollOffset] = useState(0);
+  const isReplayMode = context.mode === 'replay';
+  const showCookieValues = Boolean(context.showCookieValues);
 
   const filteredLogs = useMemo(() => filterLogs(logs, {
     methodFilters,
     searchField,
-    statusFilters,
-    searchQuery
-  }), [logs, methodFilters, searchField, statusFilters, searchQuery]);
+    searchQuery,
+    showCookieValues,
+    statusFilters
+  }), [logs, methodFilters, searchField, searchQuery, showCookieValues, statusFilters]);
 
   useEffect(() => {
     const handleUpdate = (updatedLogs) => setLogs(updatedLogs);
@@ -876,14 +946,17 @@ export function App({
   const inspectedLog = useMemo(() => {
     return filteredLogs.find((log) => log.id === inspectedLogId) ?? selectedLog;
   }, [filteredLogs, inspectedLogId, selectedLog]);
-  const detailLines = useMemo(() => getDetailLines(inspectedLog, detailTab), [inspectedLog, detailTab]);
+  const detailLines = useMemo(
+    () => getDetailLines(inspectedLog, detailTab, { showCookieValues }),
+    [detailTab, inspectedLog, showCookieValues]
+  );
   const bottomOffset = isFilterOpen ? 19 : 13;
   const detailVisibleCount = Math.max(4, (process.stdout.rows || 24) - bottomOffset);
   const maxDetailScrollOffset = getMaxScrollOffset(detailLines, detailVisibleCount);
   const proxyOrigin = getProxyOrigin(context.port ?? 8080);
   const emptyText = context.mode === 'live'
     ? `Waiting for traffic at ${proxyOrigin}`
-    : 'Waiting for traffic...';
+    : (isReplayMode ? 'No recorded traffic' : 'Waiting for traffic...');
 
   useEffect(() => {
     setDetailScrollOffset((current) => Math.min(current, maxDetailScrollOffset));
@@ -912,6 +985,7 @@ export function App({
         filterFocus,
         isListFocused,
         isFilterOpen,
+        isReplayMode,
         onAppendSearch: (value) => {
           setSearchQuery((current) => `${current}${value}`);
           setIsFollowingLatest(false);
@@ -1041,7 +1115,8 @@ export function App({
         log: inspectedLog,
         isFocused: !isListFocused,
         detailTab,
-        scrollOffset: detailScrollOffset
+        scrollOffset: detailScrollOffset,
+        showCookieValues
       })
     ),
     isFilterOpen
@@ -1061,6 +1136,7 @@ export function App({
         isRawModeSupported,
         isFollowingLatest,
         isPaused,
+        isReplayMode,
         methodFilters,
         recordingStatus,
         searchField,

@@ -170,6 +170,78 @@ test('search helpers expose scoped values', () => {
   assert.equal(getSearchValues(log, 'headers').some((value) => value.includes('x-result: empty')), true);
 });
 
+test('cookie headers are masked in details and search by default', () => {
+  const log = {
+    method: 'GET',
+    path: '/cookie',
+    statusCode: 200,
+    timestamp: 1700000000000,
+    request: {
+      headers: {
+        cookie: 'sid=secret; theme=dark',
+        host: 'localhost:8080'
+      },
+      body: ''
+    },
+    response: {
+      headers: {
+        'set-cookie': ['sid=secret; Path=/; HttpOnly', 'theme=dark; Path=/']
+      },
+      body: ''
+    }
+  };
+
+  assert.deepEqual(getDetailLines(log, 'request').slice(0, 3), [
+    'Request headers',
+    'cookie: sid=<redacted>; theme=<redacted>',
+    'host: localhost:8080'
+  ]);
+  assert.deepEqual(getDetailLines(log, 'response').slice(0, 3), [
+    'Response headers',
+    'set-cookie: sid=<redacted>; Path=/; HttpOnly',
+    'set-cookie: theme=<redacted>; Path=/'
+  ]);
+  assert.deepEqual(filterLogs([log], {
+    searchField: 'headers',
+    searchQuery: 'sid'
+  }), [log]);
+  assert.deepEqual(filterLogs([log], {
+    searchField: 'headers',
+    searchQuery: 'secret'
+  }), []);
+});
+
+test('cookie headers can be shown and searched raw when enabled', () => {
+  const log = {
+    method: 'GET',
+    path: '/cookie',
+    statusCode: 200,
+    timestamp: 1700000000000,
+    request: {
+      headers: {
+        cookie: 'sid=secret'
+      },
+      body: ''
+    },
+    response: {
+      headers: {
+        'set-cookie': ['sid=secret; Path=/']
+      },
+      body: ''
+    }
+  };
+
+  assert.equal(
+    getDetailLines(log, 'request', { showCookieValues: true })[1],
+    'cookie: sid=secret'
+  );
+  assert.deepEqual(filterLogs([log], {
+    searchField: 'headers',
+    searchQuery: 'secret',
+    showCookieValues: true
+  }), [log]);
+});
+
 test('detail helpers build scrollable request and response lines', () => {
   const log = {
     request: {

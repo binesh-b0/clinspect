@@ -31,6 +31,32 @@ function createLog(id, pathValue = `/${id}`) {
   });
 }
 
+function createCookieLog(id = 'cookie') {
+  const store = new StateStore({ bodyLimit: 100 });
+
+  return store.addLog({
+    id,
+    timestamp: 123,
+    method: 'get',
+    path: '/cookie',
+    statusCode: 200,
+    responseTimeMs: 10,
+    request: {
+      headers: {
+        authorization: 'Bearer raw',
+        cookie: 'sid=abc; theme=dark'
+      },
+      body: ''
+    },
+    response: {
+      headers: {
+        'set-cookie': ['sid=abc; Path=/; HttpOnly', 'theme=dark; Path=/']
+      },
+      body: ''
+    }
+  });
+}
+
 async function withTempDir(callback) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'clinspect-recorder-'));
 
@@ -51,15 +77,23 @@ test('createTrafficRecorder creates parent directories and writes valid NDJSON',
   await withTempDir(async (directory) => {
     const filePath = path.join(directory, 'nested', 'session.ndjson');
     const recorder = createTrafficRecorder({
+      bodyLimit: 100,
+      clinspectVersion: '1.2.3',
       mode: 'full',
       now: fixedNow,
-      path: filePath
+      path: filePath,
+      port: 8080,
+      proxyOrigin: 'http://localhost:8080',
+      sessionId: 'session-one',
+      sourceMode: 'live',
+      targetKind: 'local',
+      targetUrl: 'http://localhost:3000/'
     });
 
     assert.equal(recorder.recordCapture(createLog('one')), true);
     await recorder.stop();
 
-    const [record] = await readRecords(filePath);
+    const [session, record, sessionEnd] = await readRecords(filePath);
 
     assert.deepEqual(recorder.getStatus(), {
       mode: 'full',
@@ -67,12 +101,81 @@ test('createTrafficRecorder creates parent directories and writes valid NDJSON',
       state: 'recording',
       error: null
     });
+    assert.equal(session.type, 'session');
+    assert.equal(session.schemaVersion, 2);
+    assert.equal(session.sessionId, 'session-one');
+    assert.equal(session.createdAt, '2026-06-29T16:30:00.000Z');
+    assert.equal(session.clinspectVersion, '1.2.3');
+    assert.equal(session.sourceMode, 'live');
+    assert.equal(session.recordingMode, 'full');
+    assert.equal(session.targetUrl, 'http://localhost:3000/');
+    assert.equal(session.targetKind, 'local');
+    assert.equal(session.proxyOrigin, 'http://localhost:8080');
+    assert.equal(session.port, 8080);
+    assert.equal(session.bodyLimit, 100);
+    assert.equal(session.cookieValuePolicy, 'masked');
     assert.equal(record.type, 'traffic');
+    assert.equal(record.schemaVersion, 2);
+    assert.equal(record.sessionId, 'session-one');
+    assert.equal(record.sequence, 1);
     assert.equal(record.recordedAt, '2026-06-29T16:30:00.000Z');
     assert.equal(record.recordingMode, 'full');
     assert.equal(record.interaction, 'capture');
     assert.equal(record.entry.id, 'one');
     assert.equal(record.entry.request.body, 'request');
+    assert.equal(sessionEnd.type, 'session-end');
+    assert.equal(sessionEnd.sessionId, 'session-one');
+    assert.equal(sessionEnd.endedAt, '2026-06-29T16:30:00.000Z');
+  });
+});
+
+test('recording masks cookie values by default', async () => {
+  await withTempDir(async (directory) => {
+    const filePath = path.join(directory, 'masked-cookies.ndjson');
+    const recorder = createTrafficRecorder({
+      mode: 'full',
+      now: fixedNow,
+      path: filePath,
+      sessionId: 'masked-session'
+    });
+
+    assert.equal(recorder.recordCapture(createCookieLog()), true);
+    await recorder.stop();
+
+    const [session, record] = await readRecords(filePath);
+
+    assert.equal(session.cookieValuePolicy, 'masked');
+    assert.equal(record.entry.request.headers.cookie, 'sid=<redacted>; theme=<redacted>');
+    assert.equal(record.entry.request.headers.authorization, 'Bearer raw');
+    assert.deepEqual(record.entry.response.headers['set-cookie'], [
+      'sid=<redacted>; Path=/; HttpOnly',
+      'theme=<redacted>; Path=/'
+    ]);
+  });
+});
+
+test('recording can opt into raw cookie values', async () => {
+  await withTempDir(async (directory) => {
+    const filePath = path.join(directory, 'raw-cookies.ndjson');
+    const recorder = createTrafficRecorder({
+      cookieValuePolicy: 'raw',
+      mode: 'full',
+      now: fixedNow,
+      path: filePath,
+      sessionId: 'raw-session'
+    });
+
+    assert.equal(recorder.recordCapture(createCookieLog()), true);
+    await recorder.stop();
+
+    const [session, record] = await readRecords(filePath);
+
+    assert.equal(session.cookieValuePolicy, 'raw');
+    assert.equal(record.entry.request.headers.cookie, 'sid=abc; theme=dark');
+    assert.deepEqual(record.entry.response.headers['set-cookie'], [
+      'sid=abc; Path=/; HttpOnly',
+      'theme=dark; Path=/'
+    ]);
   });
 });
 
@@ -93,8 +196,11 @@ test('full recording writes every StateStore add event', async () => {
 
     const records = await readRecords(filePath);
 
-    assert.deepEqual(records.map((record) => record.interaction), ['capture', 'capture']);
-    assert.deepEqual(records.map((record) => record.entry.id), ['one', 'two']);
+    const trafficRecords = records.filter((record) => record.type === 'traffic');
+
+    assert.deepEqual(trafficRecords.map((record) => record.interaction), ['capture', 'capture']);
+    assert.deepEqual(trafficRecords.map((record) => record.sequence), [1, 2]);
+    assert.deepEqual(trafficRecords.map((record) => record.entry.id), ['one', 'two']);
   });
 });
 
@@ -118,7 +224,10 @@ test('full recording can pause disk writes without stopping capture state', asyn
 
     const records = await readRecords(filePath);
 
-    assert.deepEqual(records.map((record) => record.entry.id), ['one', 'three']);
+    assert.deepEqual(
+      records.filter((record) => record.type === 'traffic').map((record) => record.entry.id),
+      ['one', 'three']
+    );
   });
 });
 
@@ -145,8 +254,10 @@ test('partial recording writes inspected entries once', async () => {
 
     const records = await readRecords(filePath);
 
-    assert.deepEqual(records.map((record) => record.recordingMode), ['partial', 'partial']);
-    assert.deepEqual(records.map((record) => record.interaction), ['inspect', 'inspect']);
-    assert.deepEqual(records.map((record) => record.entry.id), ['one', 'two']);
+    const trafficRecords = records.filter((record) => record.type === 'traffic');
+
+    assert.deepEqual(trafficRecords.map((record) => record.recordingMode), ['partial', 'partial']);
+    assert.deepEqual(trafficRecords.map((record) => record.interaction), ['inspect', 'inspect']);
+    assert.deepEqual(trafficRecords.map((record) => record.entry.id), ['one', 'two']);
   });
 });

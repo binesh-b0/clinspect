@@ -84,6 +84,21 @@ By default recordings are written to `./.clinspect/recordings/clinspect-YYYYMMDD
 clinspect --target http://localhost:3000 --record full --record-path ./captures/session.ndjson
 ```
 
+Load a recorded session without starting live or demo traffic:
+
+```sh
+clinspect --load ./.clinspect/recordings/clinspect-YYYYMMDD-HHmmss.ndjson
+```
+
+Cookie values are masked by default in the UI, search, and NDJSON recordings:
+
+```sh
+clinspect --target http://localhost:3000 --show-cookie-values
+clinspect --target http://localhost:3000 --record full --record-cookie-values
+```
+
+Use `--record-cookie-values` only for trusted local captures. Raw cookie recordings may contain session secrets.
+
 Current MVP behavior:
 
 - starts an Ink terminal UI
@@ -94,11 +109,13 @@ Current MVP behavior:
 - forwards live HTTP requests to the upstream target
 - rewrites target redirects back to the local proxy origin where possible
 - captures request/response headers, status, timing, and capped text bodies
+- preserves multiple `Set-Cookie` headers and masks cookie values by default
 - shows a traffic list and selected payload details
 - supports up/down inspection, stable held selection, `f` follow-latest mode, tab focus toggle, detail scrolling, request/response tab switching, capture pause/resume with `p`, recording pause/resume with `P`, clear logs, `q` quit, and Ctrl-C cleanup
 - opens a bottom filter panel with `/`, supports multi-select method/status options, and searches all, path, status, method, time, host, port, headers, or body
 - supports quick filter controls: `m` opens method filters, `s` opens status filters, `space` toggles options, and `x` clears active filters
 - supports opt-in NDJSON disk recording for all captured traffic or only inspected entries
+- can load recorded NDJSON sessions for offline inspection with `--load`
 - caps stored text bodies and marks truncated payloads
 
 ## Project Layout
@@ -134,9 +151,12 @@ Included:
 - capped body storage
 - ring-buffer log state
 - opt-in NDJSON recording
+- recorded session replay
+- safe cookie inspection with opt-in raw display or recording
 - CLI option validation for `--target` and `--port`
 - Node built-in tests
 
 Deferred:
 
 - WebSocket and CONNECT tunneling
+- browser storage inspection for `localStorage`, `sessionStorage`, IndexedDB, and Cache Storage
