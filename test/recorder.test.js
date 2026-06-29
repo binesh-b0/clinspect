@@ -98,6 +98,30 @@ test('full recording writes every StateStore add event', async () => {
   });
 });
 
+test('full recording can pause disk writes without stopping capture state', async () => {
+  await withTempDir(async (directory) => {
+    const filePath = path.join(directory, 'paused-full.ndjson');
+    const recorder = createTrafficRecorder({
+      mode: 'full',
+      now: fixedNow,
+      path: filePath
+    });
+
+    assert.equal(recorder.recordCapture(createLog('one')), true);
+    assert.equal(recorder.setPaused(true), true);
+    assert.equal(recorder.getStatus().state, 'paused');
+    assert.equal(recorder.recordCapture(createLog('two')), false);
+    assert.equal(recorder.togglePaused(), false);
+    assert.equal(recorder.getStatus().state, 'recording');
+    assert.equal(recorder.recordCapture(createLog('three')), true);
+    await recorder.stop();
+
+    const records = await readRecords(filePath);
+
+    assert.deepEqual(records.map((record) => record.entry.id), ['one', 'three']);
+  });
+});
+
 test('partial recording writes inspected entries once', async () => {
   await withTempDir(async (directory) => {
     const filePath = path.join(directory, 'partial.ndjson');
@@ -111,6 +135,9 @@ test('partial recording writes inspected entries once', async () => {
 
     assert.equal(recorder.recordCapture(one), false);
     assert.equal(recorder.recordInteraction(one, 'hover'), false);
+    assert.equal(recorder.setPaused(true), true);
+    assert.equal(recorder.recordInteraction(one, 'inspect'), false);
+    assert.equal(recorder.setPaused(false), false);
     assert.equal(recorder.recordInteraction(one, 'inspect'), true);
     assert.equal(recorder.recordInteraction(one, 'inspect'), false);
     assert.equal(recorder.recordInteraction(two, 'inspect'), true);

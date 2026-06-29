@@ -6,6 +6,7 @@ import {
   extractPortFromHost,
   filterLogs,
   formatFilterLabel,
+  formatRecordingLabel,
   getDetailLines,
   getMaxScrollOffset,
   getRenderHeight,
@@ -120,6 +121,28 @@ test('filter value helpers support multi-select and clearing', () => {
   assert.equal(formatFilterLabel([], [], 'all', 'id'), 'search "id" in all fields');
   assert.equal(formatFilterLabel(['GET', 'POST'], ['2xx'], 'path', 'users'), 'method GET,POST | status 2xx | search "users" in path');
   assert.equal(formatFilterLabel([], [], 'all', ''), 'none');
+});
+
+test('formatRecordingLabel exposes recording and pause states', () => {
+  assert.equal(formatRecordingLabel(), 'rec off');
+  assert.equal(formatRecordingLabel({
+    mode: 'full',
+    path: './capture.ndjson',
+    state: 'recording',
+    error: null
+  }), 'rec full -> ./capture.ndjson');
+  assert.equal(formatRecordingLabel({
+    mode: 'partial',
+    path: './capture.ndjson',
+    state: 'paused',
+    error: null
+  }), 'rec paused partial -> ./capture.ndjson');
+  assert.equal(formatRecordingLabel({
+    mode: 'full',
+    path: './capture.ndjson',
+    state: 'error',
+    error: 'disk full'
+  }), 'rec error -> ./capture.ndjson');
 });
 
 test('search helpers expose scoped values', () => {

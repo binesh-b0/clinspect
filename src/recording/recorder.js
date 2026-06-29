@@ -39,6 +39,15 @@ export function createNoopRecorder() {
     recordInteraction() {
       return false;
     },
+    isPaused() {
+      return false;
+    },
+    setPaused() {
+      return false;
+    },
+    togglePaused() {
+      return false;
+    },
     stop() {
       return Promise.resolve();
     },
@@ -63,20 +72,30 @@ export function createTrafficRecorder(options = {}) {
   const emitter = new EventEmitter();
   const seenInteractionIds = new Set();
   let stream = null;
-  let state = 'recording';
+  let paused = false;
   let error = null;
 
   const getStatus = () => ({
     mode,
     path: filePath,
-    state,
+    state: error ? 'error' : (paused ? 'paused' : 'recording'),
     error: error ? serializeError(error) : null
   });
 
   const setError = (nextError) => {
     error = nextError;
-    state = 'error';
     emitter.emit('status', getStatus());
+  };
+
+  const setPaused = (value) => {
+    if (error) {
+      return false;
+    }
+
+    paused = Boolean(value);
+    emitter.emit('status', getStatus());
+
+    return paused;
   };
 
   try {
@@ -88,7 +107,7 @@ export function createTrafficRecorder(options = {}) {
   }
 
   const writeRecord = (entry, interaction) => {
-    if (!stream || state === 'error') {
+    if (!stream || error || paused) {
       return false;
     }
 
@@ -125,9 +144,20 @@ export function createTrafficRecorder(options = {}) {
         return false;
       }
 
-      seenInteractionIds.add(entry.id);
+      const recorded = writeRecord(entry, interaction);
 
-      return writeRecord(entry, interaction);
+      if (recorded) {
+        seenInteractionIds.add(entry.id);
+      }
+
+      return recorded;
+    },
+    isPaused() {
+      return paused;
+    },
+    setPaused,
+    togglePaused() {
+      return setPaused(!paused);
     },
     stop() {
       if (!stream || stream.destroyed) {

@@ -103,7 +103,7 @@ function getRecordingStatus(trafficRecorder) {
   return trafficRecorder?.getStatus?.() ?? OFF_RECORDING_STATUS;
 }
 
-function formatRecordingLabel(recordingStatus = OFF_RECORDING_STATUS) {
+export function formatRecordingLabel(recordingStatus = OFF_RECORDING_STATUS) {
   if (recordingStatus.state === 'error') {
     return recordingStatus.path
       ? `rec error -> ${recordingStatus.path}`
@@ -111,6 +111,10 @@ function formatRecordingLabel(recordingStatus = OFF_RECORDING_STATUS) {
   }
 
   if (recordingStatus.mode === 'full' || recordingStatus.mode === 'partial') {
+    if (recordingStatus.state === 'paused') {
+      return `rec paused ${recordingStatus.mode} -> ${recordingStatus.path}`;
+    }
+
     return `rec ${recordingStatus.mode} -> ${recordingStatus.path}`;
   }
 
@@ -561,6 +565,7 @@ const Footer = React.memo(function Footer({
   isFollowingLatest,
   isPaused,
   methodFilters,
+  recordingStatus = OFF_RECORDING_STATUS,
   searchField,
   searchQuery,
   statusFilters
@@ -569,9 +574,12 @@ const Footer = React.memo(function Footer({
   const filterSummary = activeFilters > 0
     ? ` | filters ${activeFilters} (${formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery)}) | x clear filters`
     : '';
+  const recordingHelp = recordingStatus.mode === 'full' || recordingStatus.mode === 'partial'
+    ? ` | P ${recordingStatus.state === 'paused' ? 'rec resume' : 'rec pause'}`
+    : '';
   const navigationHelp = isListFocused ? 'up/down move | enter inspect' : 'up/down scroll';
   const text = isRawModeSupported
-    ? `${navigationHelp} | tab ${isListFocused ? 'details' : 'traffic'} | r req/res | p ${isPaused ? 'resume' : 'pause'} | m methods | s statuses | / filter | c clear logs | f latest | q quit${filterSummary}`
+    ? `${navigationHelp} | tab ${isListFocused ? 'details' : 'traffic'} | r req/res | p ${isPaused ? 'resume' : 'pause'}${recordingHelp} | m methods | s statuses | / filter | c clear logs | f latest | q quit${filterSummary}`
     : 'keyboard input unavailable in this shell | Ctrl-C or SIGTERM quit';
 
   return h(
@@ -645,7 +653,8 @@ function KeyboardControls({
   onToggleFilterOption,
   onToggleDetailTab,
   onToggleFocus,
-  onTogglePause
+  onTogglePause,
+  onToggleRecordingPause
 }) {
   useInput((input, key) => {
     if (input === 'c' && key.ctrl) {
@@ -740,6 +749,11 @@ function KeyboardControls({
 
     if (input === 'p') {
       onTogglePause();
+      return;
+    }
+
+    if (input === 'P') {
+      onToggleRecordingPause();
       return;
     }
 
@@ -992,6 +1006,10 @@ export function App({
             captureController?.setPaused?.(next);
             return next;
           });
+        },
+        onToggleRecordingPause: () => {
+          trafficRecorder?.togglePaused?.();
+          setRecordingStatus(getRecordingStatus(trafficRecorder));
         }
       })
       : null,
@@ -1044,6 +1062,7 @@ export function App({
         isFollowingLatest,
         isPaused,
         methodFilters,
+        recordingStatus,
         searchField,
         searchQuery,
         statusFilters
