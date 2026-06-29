@@ -1,0 +1,32 @@
+{
+  "name": "clinspect",
+  "version": "1.0.0",
+  "description": "A high-performance local reverse proxy and visual traffic inspector for the terminal.",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "clinspect": "./bin/cli.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "echo \"Error: no test specified\" && exit 0"
+  },
+  "keywords": [
+    "cli",
+    "tui",
+    "reverse-proxy",
+    "ink",
+    "react",
+    "http-inspector"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "cli-highlight": "^2.1.11",
+    "commander": "^11.1.0",
+    "http-proxy": "^1.18.1",
+    "ink": "^4.4.1",
+    "react": "^18.2.0"
+  }
+}
