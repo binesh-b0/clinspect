@@ -113,7 +113,7 @@ test('createTrafficRecorder creates parent directories and writes valid NDJSON',
     assert.equal(session.proxyOrigin, 'http://localhost:8080');
     assert.equal(session.port, 8080);
     assert.equal(session.bodyLimit, 100);
-    assert.equal(session.cookieValuePolicy, 'masked');
+    assert.equal(session.cookieValuePolicy, 'raw');
     assert.equal(record.type, 'traffic');
     assert.equal(record.schemaVersion, 2);
     assert.equal(record.sessionId, 'session-one');
@@ -129,10 +129,36 @@ test('createTrafficRecorder creates parent directories and writes valid NDJSON',
   });
 });
 
-test('recording masks cookie values by default', async () => {
+test('recording writes raw cookie values by default', async () => {
+  await withTempDir(async (directory) => {
+    const filePath = path.join(directory, 'raw-default-cookies.ndjson');
+    const recorder = createTrafficRecorder({
+      mode: 'full',
+      now: fixedNow,
+      path: filePath,
+      sessionId: 'raw-default-session'
+    });
+
+    assert.equal(recorder.recordCapture(createCookieLog()), true);
+    await recorder.stop();
+
+    const [session, record] = await readRecords(filePath);
+
+    assert.equal(session.cookieValuePolicy, 'raw');
+    assert.equal(record.entry.request.headers.cookie, 'sid=abc; theme=dark');
+    assert.equal(record.entry.request.headers.authorization, 'Bearer raw');
+    assert.deepEqual(record.entry.response.headers['set-cookie'], [
+      'sid=abc; Path=/; HttpOnly',
+      'theme=dark; Path=/'
+    ]);
+  });
+});
+
+test('recording can explicitly mask cookie values', async () => {
   await withTempDir(async (directory) => {
     const filePath = path.join(directory, 'masked-cookies.ndjson');
     const recorder = createTrafficRecorder({
+      cookieValuePolicy: 'masked',
       mode: 'full',
       now: fixedNow,
       path: filePath,
@@ -146,35 +172,9 @@ test('recording masks cookie values by default', async () => {
 
     assert.equal(session.cookieValuePolicy, 'masked');
     assert.equal(record.entry.request.headers.cookie, 'sid=<redacted>; theme=<redacted>');
-    assert.equal(record.entry.request.headers.authorization, 'Bearer raw');
     assert.deepEqual(record.entry.response.headers['set-cookie'], [
       'sid=<redacted>; Path=/; HttpOnly',
       'theme=<redacted>; Path=/'
-    ]);
-  });
-});
-
-test('recording can opt into raw cookie values', async () => {
-  await withTempDir(async (directory) => {
-    const filePath = path.join(directory, 'raw-cookies.ndjson');
-    const recorder = createTrafficRecorder({
-      cookieValuePolicy: 'raw',
-      mode: 'full',
-      now: fixedNow,
-      path: filePath,
-      sessionId: 'raw-session'
-    });
-
-    assert.equal(recorder.recordCapture(createCookieLog()), true);
-    await recorder.stop();
-
-    const [session, record] = await readRecords(filePath);
-
-    assert.equal(session.cookieValuePolicy, 'raw');
-    assert.equal(record.entry.request.headers.cookie, 'sid=abc; theme=dark');
-    assert.deepEqual(record.entry.response.headers['set-cookie'], [
-      'sid=abc; Path=/; HttpOnly',
-      'theme=dark; Path=/'
     ]);
   });
 });

@@ -103,9 +103,11 @@ export function createTrafficRecorder(options = {}) {
   const filePath = options.path ?? null;
   const now = options.now ?? (() => new Date());
   const sessionId = options.sessionId ?? randomUUID();
-  const cookieValuePolicy = options.cookieValuePolicy === 'raw' || options.recordCookieValues
-    ? 'raw'
-    : 'masked';
+  // Recording is an explicit disk-writing action, so cookie values are retained unless
+  // an internal caller asks for masked cookie recording.
+  const recordingCookieValuePolicy = options.cookieValuePolicy === 'masked'
+    ? 'masked'
+    : 'raw';
 
   if (mode === 'off') {
     return createNoopRecorder();
@@ -150,7 +152,7 @@ export function createTrafficRecorder(options = {}) {
       now,
       options: {
         ...options,
-        cookieValuePolicy,
+        cookieValuePolicy: recordingCookieValuePolicy,
         mode
       },
       sessionId
@@ -167,7 +169,7 @@ export function createTrafficRecorder(options = {}) {
     try {
       sequence += 1;
       stream.write(`${JSON.stringify(createRecord({
-        cookieValuePolicy,
+        cookieValuePolicy: recordingCookieValuePolicy,
         entry,
         interaction,
         mode,

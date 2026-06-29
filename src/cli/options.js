@@ -68,7 +68,7 @@ export function createProgram() {
     .option('--record <mode>', 'record traffic to disk (full|partial)', parseRecordMode)
     .option('--record-path <path>', 'exact NDJSON file path for --record output')
     .option('--show-cookie-values', 'show raw Cookie and Set-Cookie values in the UI and search')
-    .option('--record-cookie-values', 'write raw Cookie and Set-Cookie values to recordings');
+    .option('--record-cookie-values', 'write raw Cookie and Set-Cookie values to recordings (default with --record)');
 }
 
 function hasExplicitOption(argv, optionNames) {
@@ -155,13 +155,13 @@ export function parseCliOptions(argv = process.argv) {
     openBrowser: Boolean(options.open),
     port: options.port,
     recording: {
-      cookieValuePolicy: recordCookieValues ? 'raw' : 'masked',
+      cookieValuePolicy: recordMode === 'off' ? 'masked' : 'raw',
       mode: recordMode,
       path: recordMode === 'off'
         ? null
         : (options.recordPath ?? createDefaultRecordingPath())
     },
-    recordCookieValues,
+    recordCookieValues: recordMode !== 'off',
     showCookieValues,
     targetUrl
   };

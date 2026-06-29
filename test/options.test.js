@@ -110,7 +110,8 @@ test('parseCliOptions supports full and partial recording', () => {
   const fullOptions = parseCliOptions(['node', 'clinspect', '--record', 'full']);
 
   assert.equal(fullOptions.recording.mode, 'full');
-  assert.equal(fullOptions.recording.cookieValuePolicy, 'masked');
+  assert.equal(fullOptions.recording.cookieValuePolicy, 'raw');
+  assert.equal(fullOptions.recordCookieValues, true);
   assert.match(fullOptions.recording.path, /^\.\/\.clinspect\/recordings\/clinspect-\d{8}-\d{6}\.ndjson$/);
 
   assert.deepEqual(parseCliOptions([
@@ -121,7 +122,7 @@ test('parseCliOptions supports full and partial recording', () => {
     '--record-path',
     './captures/session.ndjson'
   ]).recording, {
-    cookieValuePolicy: 'masked',
+    cookieValuePolicy: 'raw',
     mode: 'partial',
     path: './captures/session.ndjson'
   });
@@ -151,7 +152,7 @@ test('parseCliOptions supports cookie privacy flags', () => {
     targetUrl: null
   });
 
-  const rawRecording = parseCliOptions([
+  const explicitRawRecording = parseCliOptions([
     'node',
     'clinspect',
     '--record',
@@ -159,9 +160,9 @@ test('parseCliOptions supports cookie privacy flags', () => {
     '--record-cookie-values'
   ]);
 
-  assert.equal(rawRecording.recording.mode, 'full');
-  assert.equal(rawRecording.recording.cookieValuePolicy, 'raw');
-  assert.equal(rawRecording.recordCookieValues, true);
+  assert.equal(explicitRawRecording.recording.mode, 'full');
+  assert.equal(explicitRawRecording.recording.cookieValuePolicy, 'raw');
+  assert.equal(explicitRawRecording.recordCookieValues, true);
 
   assert.throws(
     () => parseCliOptions(['node', 'clinspect', '--record-cookie-values']),

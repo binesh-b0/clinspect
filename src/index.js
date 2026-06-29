@@ -102,7 +102,8 @@ export function startInspector(options, runtime = {}) {
       ...options.recording,
       bodyLimit: DEFAULT_BODY_LIMIT,
       clinspectVersion: CLINSPECT_VERSION,
-      cookieValuePolicy: options.recording?.cookieValuePolicy ?? 'masked',
+      cookieValuePolicy: options.recording?.cookieValuePolicy ??
+        (options.recording?.mode === 'off' ? 'masked' : 'raw'),
       recordCookieValues: options.recordCookieValues,
       port: options.port,
       proxyOrigin: getProxyOrigin(options.port ?? 8080),

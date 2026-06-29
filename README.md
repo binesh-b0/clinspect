@@ -90,14 +90,14 @@ Load a recorded session without starting live or demo traffic:
 clinspect --load ./.clinspect/recordings/clinspect-YYYYMMDD-HHmmss.ndjson
 ```
 
-Cookie values are masked by default in the UI, search, and NDJSON recordings:
+Cookie values are masked by default in the UI and search. When recording is enabled, cookie values are written to the NDJSON capture by default:
 
 ```sh
 clinspect --target http://localhost:3000 --show-cookie-values
-clinspect --target http://localhost:3000 --record full --record-cookie-values
+clinspect --target http://localhost:3000 --record full
 ```
 
-Use `--record-cookie-values` only for trusted local captures. Raw cookie recordings may contain session secrets.
+Use `--record` only for trusted local captures. Raw cookie recordings may contain session secrets.
 
 Current MVP behavior:
 
@@ -109,7 +109,7 @@ Current MVP behavior:
 - forwards live HTTP requests to the upstream target
 - rewrites target redirects back to the local proxy origin where possible
 - captures request/response headers, status, timing, and capped text bodies
-- preserves multiple `Set-Cookie` headers and masks cookie values by default
+- preserves multiple `Set-Cookie` headers, masks cookie values in the UI by default, and records cookie values when recording is enabled
 - shows a traffic list and selected payload details
 - supports up/down inspection, stable held selection, `f` follow-latest mode, tab focus toggle, detail scrolling, request/response tab switching, capture pause/resume with `p`, recording pause/resume with `P`, clear logs, `q` quit, and Ctrl-C cleanup
 - opens a bottom filter panel with `/`, supports multi-select method/status options, and searches all, path, status, method, time, host, port, headers, or body
@@ -152,7 +152,7 @@ Included:
 - ring-buffer log state
 - opt-in NDJSON recording
 - recorded session replay
-- safe cookie inspection with opt-in raw display or recording
+- safe cookie inspection with opt-in raw UI display and default cookie capture when recording is enabled
 - CLI option validation for `--target` and `--port`
 - Node built-in tests
 
