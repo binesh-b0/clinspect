@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Text, useInput, useStdin } from 'ink';
 import { isCookieHeaderName, maskCookieHeaderValue } from '../cookies.js';
 import { getProxyOrigin, isPublicTargetUrl } from '../target.js';
+import { isInkMouseInput, parseInkMouseInput } from './mouse.js';
 
 const h = React.createElement;
 
@@ -10,6 +11,8 @@ const STATUS_OPTIONS = ['2xx', '3xx', '4xx', '5xx'];
 const DETAIL_TABS = ['request', 'response'];
 const SEARCH_FIELDS = ['all', 'path', 'status', 'method', 'time', 'host', 'port', 'headers', 'body'];
 const FILTER_FOCUS_ORDER = ['query', 'field', 'method', 'status'];
+const ROOT_PADDING_X = 1;
+const TRAFFIC_LIST_WIDTH = 50;
 const OFF_RECORDING_STATUS = {
   mode: 'off',
   path: null,
@@ -445,7 +448,7 @@ const TrafficList = React.memo(function TrafficList({
     Box,
     {
       flexDirection: 'column',
-      width: 50,
+      width: TRAFFIC_LIST_WIDTH,
       flexShrink: 0,
       borderStyle: 'single',
       borderColor: isFocused ? 'cyan' : 'gray',
@@ -691,6 +694,17 @@ export function moveSelectedLogId(logs, selectedLogId, direction) {
   return logs[nextIndex].id;
 }
 
+export function getMouseWheelTarget(column) {
+  const value = Number(column);
+  const trafficEndColumn = ROOT_PADDING_X + TRAFFIC_LIST_WIDTH;
+
+  if (Number.isSafeInteger(value) && value > 0 && value <= trafficEndColumn) {
+    return 'traffic';
+  }
+
+  return 'details';
+}
+
 function KeyboardControls({
   filterFocus,
   isListFocused,
@@ -716,6 +730,22 @@ function KeyboardControls({
   onToggleRecordingPause
 }) {
   useInput((input, key) => {
+    const mouseEvent = parseInkMouseInput(input);
+
+    if (mouseEvent) {
+      if (getMouseWheelTarget(mouseEvent.x) === 'traffic') {
+        onMoveSelection(mouseEvent.direction);
+      } else {
+        onScrollDetails(mouseEvent.direction);
+      }
+
+      return;
+    }
+
+    if (isInkMouseInput(input)) {
+      return;
+    }
+
     if (input === 'c' && key.ctrl) {
       onQuit();
       return;
@@ -978,7 +1008,7 @@ export function App({
     {
       flexDirection: 'column',
       height: renderHeight,
-      paddingX: 1
+      paddingX: ROOT_PADDING_X
     },
     isRawModeSupported
       ? h(KeyboardControls, {

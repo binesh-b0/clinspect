@@ -9,6 +9,7 @@ import {
   formatRecordingLabel,
   getDetailLines,
   getMaxScrollOffset,
+  getMouseWheelTarget,
   getRenderHeight,
   getSelectedIndex,
   getSearchValues,
@@ -55,6 +56,13 @@ test('getSelectedIndex resolves missing selections to the first row', () => {
   assert.equal(getSelectedIndex(logs, 'two'), 1);
   assert.equal(getSelectedIndex(logs, 'missing'), 0);
   assert.equal(getSelectedIndex([], 'missing'), -1);
+});
+
+test('mouse wheel routing maps the fixed traffic pane by terminal column', () => {
+  assert.equal(getMouseWheelTarget(1), 'traffic');
+  assert.equal(getMouseWheelTarget(51), 'traffic');
+  assert.equal(getMouseWheelTarget(52), 'details');
+  assert.equal(getMouseWheelTarget(120), 'details');
 });
 
 test('getRenderHeight keeps one terminal row free for Ink updates', () => {

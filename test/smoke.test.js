@@ -56,6 +56,76 @@ test('startInspector selects the live proxy engine for live mode', async () => {
   ]);
 });
 
+test('startInspector contains interactive output in the alternate terminal screen', async () => {
+  const { startInspector } = await import('../src/index.js');
+  const {
+    DISABLE_MOUSE_REPORTING,
+    ENABLE_MOUSE_REPORTING,
+    ENTER_ALTERNATE_SCREEN,
+    EXIT_ALTERNATE_SCREEN
+  } = await import('../src/ui/terminal-screen.js');
+  const calls = [];
+  const stdout = {
+    isTTY: true,
+    write(value) {
+      calls.push(['write', String(value)]);
+      return true;
+    }
+  };
+  const inspector = startInspector(
+    {
+      mode: 'demo',
+      openBrowser: false,
+      port: 8080,
+      recording: {
+        mode: 'off',
+        path: null
+      },
+      targetUrl: null
+    },
+    {
+      stateStore: new StateStore(),
+      stdout,
+      renderApp: (node, options) => {
+        calls.push(['render', options.stdout === stdout, node.props.context.mode]);
+
+        return {
+          unmount() {
+            calls.push(['unmount']);
+          }
+        };
+      },
+      startDemoFeed: () => ({
+        stop() {
+          calls.push(['engine-stop']);
+        }
+      }),
+      exitProcess: (code) => {
+        calls.push(['exit', code]);
+      }
+    }
+  );
+
+  assert.deepEqual(calls, [
+    ['write', ENTER_ALTERNATE_SCREEN],
+    ['write', ENABLE_MOUSE_REPORTING],
+    ['render', true, 'demo']
+  ]);
+
+  await inspector.stop();
+
+  assert.deepEqual(calls, [
+    ['write', ENTER_ALTERNATE_SCREEN],
+    ['write', ENABLE_MOUSE_REPORTING],
+    ['render', true, 'demo'],
+    ['unmount'],
+    ['write', DISABLE_MOUSE_REPORTING],
+    ['write', EXIT_ALTERNATE_SCREEN],
+    ['engine-stop'],
+    ['exit', 0]
+  ]);
+});
+
 test('startInspector wires full recording to StateStore add events and shutdown', async () => {
   const { startInspector } = await import('../src/index.js');
   const calls = [];

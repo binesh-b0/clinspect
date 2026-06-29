@@ -15,6 +15,7 @@ import { DEFAULT_BODY_LIMIT, DEFAULT_MAX_ENTRIES, StateStore } from './store/sta
 import { getProxyOrigin, isPublicTargetUrl } from './target.js';
 import { App } from './ui/App.js';
 import { createStableStdout } from './ui/stable-output.js';
+import { createTerminalScreen } from './ui/terminal-screen.js';
 import { createNoopRecorder, createTrafficRecorder } from './recording/recorder.js';
 import { loadRecordedSession } from './recording/session-loader.js';
 
@@ -96,6 +97,7 @@ export function startInspector(options, runtime = {}) {
   const openBrowserUrl = runtime.openUrl ?? openUrl;
   const captureController = runtime.captureController ?? createCaptureController();
   const stdout = runtime.stdout ?? createStableStdout(process.stdout);
+  const terminalScreen = runtime.terminalScreen ?? createTerminalScreen(stdout);
   const trafficRecorder = options.mode === 'replay'
     ? (runtime.trafficRecorder ?? runtime.recorder ?? createNoopRecorder())
     : (runtime.trafficRecorder ?? runtime.recorder ?? createTrafficRecorder({
@@ -165,6 +167,7 @@ export function startInspector(options, runtime = {}) {
       inkInstance.unmount();
     }
 
+    terminalScreen.exit?.();
     process.stdout.write('\n');
 
     return Promise.resolve(engine.stop())
@@ -201,19 +204,25 @@ export function startInspector(options, runtime = {}) {
       });
   }
 
-  inkInstance = renderApp(
-    h(App, {
-      stateStore,
-      context: appContext,
-      captureController,
-      trafficRecorder,
-      onQuit: () => shutdown(0)
-    }),
-    {
-      exitOnCtrlC: false,
-      stdout
-    }
-  );
+  try {
+    terminalScreen.enter?.();
+    inkInstance = renderApp(
+      h(App, {
+        stateStore,
+        context: appContext,
+        captureController,
+        trafficRecorder,
+        onQuit: () => shutdown(0)
+      }),
+      {
+        exitOnCtrlC: false,
+        stdout
+      }
+    );
+  } catch (error) {
+    terminalScreen.exit?.();
+    throw error;
+  }
 
   return {
     captureController,
