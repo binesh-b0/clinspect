@@ -4,6 +4,7 @@ A local reverse proxy and terminal traffic inspector for development workflows.
 
 `clinspect` is intended to sit between a client and an upstream service, forward HTTP traffic, and display captured request and response details in an Ink-based terminal UI.
 
+The current MVP is UI-first: it launches a terminal inspector with mock traffic so the interaction model can be tested before live proxy capture is added.
 
 ## Requirements
 
@@ -22,29 +23,44 @@ npm install
 npm start
 ```
 
-Runs `node src/index.js`. At the moment this exits successfully without output because `src/index.js` is empty.
+Runs the mock terminal inspector.
 
 ```sh
 npm test
 ```
 
-Runs the placeholder test script. It currently prints `Error: no test specified` and exits successfully.
+Runs the Node.js built-in test suite.
 
-## Intended Usage
+## Usage
 
-Once implemented, the CLI is expected to accept a target URL and an optional local proxy port:
+Launch the mock inspector:
+
+```sh
+npm start
+```
+
+Or run the package binary directly:
+
+```sh
+node bin/cli.js
+```
+
+The CLI accepts optional future live-mode context and displays it in the mock UI:
 
 ```sh
 clinspect --target http://localhost:3000 --port 8080
 ```
 
-Expected behavior:
+Current MVP behavior:
 
-- start a local reverse proxy on the selected port
-- forward requests to the target URL
-- capture request and response metadata and bodies
-- render recent traffic in a terminal UI
-- shut down cleanly on interrupt signals
+- starts an Ink terminal UI
+- seeds realistic mock request/response entries
+- appends new mock traffic on an interval
+- shows a traffic list and selected payload details
+- supports up/down selection, tab focus toggle, `q` quit, and Ctrl-C cleanup
+- caps stored text bodies and marks truncated payloads
+
+Live HTTP proxying is planned after the mock UI is stable.
 
 ## Project Layout
 
@@ -56,20 +72,30 @@ src/store/state.js     In-memory traffic log store
 src/ui/App.js          Ink terminal UI
 ```
 
-## Initialization Verification
+## Verification
 
-Verified on this checkout:
+Run:
 
-- `package.json` is valid JSON and defines the `clinspect` package.
-- The package is configured as an ES module package with `"type": "module"`.
-- The `clinspect` binary is mapped to `./bin/cli.js`.
-- `package-lock.json` is present and consistent enough for `npm ci --dry-run` to complete.
-- `node_modules/` is present locally.
-- `npm start` exits successfully.
-- `npm test` exits successfully, but only runs the placeholder test command.
+```sh
+npm install
+npm test
+npm start
+```
 
-Open initialization items:
+## MVP Scope
 
-- `bin/cli.js` has no shebang and is not executable in the current checkout.
-- Application source files are empty placeholders.
-- There are no real tests yet.
+Included:
+
+- mock traffic generation
+- terminal two-pane navigation
+- capped body storage
+- ring-buffer log state
+- CLI option validation for future `--target` and `--port` use
+- Node built-in tests
+
+Deferred:
+
+- live reverse proxying
+- request/response capture from real upstreams
+- filtering and search
+- export/persistence
