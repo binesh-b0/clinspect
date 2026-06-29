@@ -250,6 +250,104 @@ test('cookie headers can be shown and searched raw when enabled', () => {
   }), [log]);
 });
 
+test('public target request details display target host and referer', () => {
+  const log = {
+    request: {
+      headers: {
+        host: 'localhost:8080',
+        referer: 'http://localhost:8080/some/path?x=1#section'
+      },
+      body: ''
+    },
+    response: {
+      headers: {},
+      body: ''
+    }
+  };
+
+  assert.deepEqual(getDetailLines(log, 'request', {
+    publicTargetUrl: 'https://example.com/',
+    proxyOrigin: 'http://localhost:8080'
+  }).slice(0, 3), [
+    'Request headers',
+    'host: example.com',
+    'referer: https://example.com/some/path?x=1#section'
+  ]);
+  assert.equal(log.request.headers.host, 'localhost:8080');
+  assert.equal(log.request.headers.referer, 'http://localhost:8080/some/path?x=1#section');
+});
+
+test('local target request details display original proxy headers', () => {
+  const log = {
+    request: {
+      headers: {
+        host: 'localhost:8080',
+        referer: 'http://localhost:8080/local'
+      },
+      body: ''
+    },
+    response: {
+      headers: {},
+      body: ''
+    }
+  };
+
+  assert.deepEqual(getDetailLines(log, 'request', {
+    publicTargetUrl: 'http://localhost:3000/',
+    proxyOrigin: 'http://localhost:8080'
+  }).slice(0, 3), [
+    'Request headers',
+    'host: localhost:8080',
+    'referer: http://localhost:8080/local'
+  ]);
+});
+
+test('public target request details preserve third-party and malformed referers', () => {
+  const thirdPartyLog = {
+    request: {
+      headers: {
+        host: 'localhost:8080',
+        referer: 'https://other.example/path'
+      },
+      body: ''
+    },
+    response: {
+      headers: {},
+      body: ''
+    }
+  };
+  const malformedLog = {
+    request: {
+      headers: {
+        host: 'localhost:8080',
+        referer: 'not a url'
+      },
+      body: ''
+    },
+    response: {
+      headers: {},
+      body: ''
+    }
+  };
+
+  assert.deepEqual(getDetailLines(thirdPartyLog, 'request', {
+    publicTargetUrl: 'https://example.com/',
+    proxyOrigin: 'http://localhost:8080'
+  }).slice(0, 3), [
+    'Request headers',
+    'host: example.com',
+    'referer: https://other.example/path'
+  ]);
+  assert.deepEqual(getDetailLines(malformedLog, 'request', {
+    publicTargetUrl: 'https://example.com/',
+    proxyOrigin: 'http://localhost:8080'
+  }).slice(0, 3), [
+    'Request headers',
+    'host: example.com',
+    'referer: not a url'
+  ]);
+});
+
 test('detail helpers build scrollable request and response lines', () => {
   const log = {
     request: {

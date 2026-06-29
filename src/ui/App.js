@@ -132,11 +132,94 @@ function basename(filePath = '') {
 }
 
 function getDisplayHeaderValue(key, value, options = {}) {
+  const publicTargetValue = getPublicTargetHeaderDisplayValue(key, value, options);
+
+  if (publicTargetValue !== null) {
+    return publicTargetValue;
+  }
+
   if (!options.showCookieValues && isCookieHeaderName(key)) {
     return maskCookieHeaderValue(key, value);
   }
 
   return value;
+}
+
+function getPublicTargetUrl(options = {}) {
+  if (!options.rewritePublicTargetRequestHeaders || !isPublicTargetUrl(options.publicTargetUrl)) {
+    return null;
+  }
+
+  try {
+    return new URL(options.publicTargetUrl);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeOrigin(value) {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
+function getProxyOrigins(options = {}) {
+  const origins = new Set();
+  const proxyOrigin = normalizeOrigin(options.proxyOrigin);
+
+  if (proxyOrigin) {
+    origins.add(proxyOrigin);
+  }
+
+  if (options.requestHost) {
+    const requestOrigin = normalizeOrigin(`http://${options.requestHost}`);
+
+    if (requestOrigin) {
+      origins.add(requestOrigin);
+    }
+  }
+
+  return origins;
+}
+
+function rewritePublicTargetReferer(value, targetUrl, options = {}) {
+  try {
+    const refererUrl = new URL(String(value));
+
+    if (!getProxyOrigins(options).has(refererUrl.origin)) {
+      return value;
+    }
+
+    return `${targetUrl.origin}${refererUrl.pathname}${refererUrl.search}${refererUrl.hash}`;
+  } catch {
+    return value;
+  }
+}
+
+function getPublicTargetHeaderDisplayValue(key, value, options = {}) {
+  const targetUrl = getPublicTargetUrl(options);
+
+  if (!targetUrl) {
+    return null;
+  }
+
+  const normalizedKey = String(key ?? '').toLowerCase();
+
+  if (normalizedKey === 'host') {
+    return targetUrl.host;
+  }
+
+  if (normalizedKey !== 'referer') {
+    return null;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => rewritePublicTargetReferer(item, targetUrl, options));
+  }
+
+  return rewritePublicTargetReferer(value, targetUrl, options);
 }
 
 function headerValueLines(key, value, options = {}) {
@@ -332,10 +415,17 @@ export function getDetailLines(log, detailTab = 'request', options = {}) {
 
   const payload = detailTab === 'response' ? log.response : log.request;
   const title = detailTab === 'response' ? 'Response' : 'Request';
+  const headerOptions = detailTab === 'request'
+    ? {
+      ...options,
+      requestHost: payload.headers?.host,
+      rewritePublicTargetRequestHeaders: true
+    }
+    : options;
 
   return [
     `${title} headers`,
-    ...formatHeaders(payload.headers, options),
+    ...formatHeaders(payload.headers, headerOptions),
     '',
     `${title} body`,
     ...formatPayloadBody(payload)
@@ -486,6 +576,8 @@ const DetailPane = React.memo(function DetailPane({
   isFocused,
   detailTab,
   scrollOffset,
+  publicTargetUrl = null,
+  proxyOrigin = null,
   showCookieValues = false
 }) {
   if (!log) {
@@ -504,7 +596,11 @@ const DetailPane = React.memo(function DetailPane({
 
   const rows = process.stdout.rows || 24;
   const visibleCount = Math.max(4, rows - bottomOffset);
-  const lines = getDetailLines(log, detailTab, { showCookieValues });
+  const lines = getDetailLines(log, detailTab, {
+    publicTargetUrl,
+    proxyOrigin,
+    showCookieValues
+  });
   const maxScrollOffset = getMaxScrollOffset(lines, visibleCount);
   const safeScrollOffset = Math.min(scrollOffset, maxScrollOffset);
   const visibleLines = lines.slice(safeScrollOffset, safeScrollOffset + visibleCount);
@@ -933,6 +1029,8 @@ export function App({
   const [detailScrollOffset, setDetailScrollOffset] = useState(0);
   const isReplayMode = context.mode === 'replay';
   const showCookieValues = Boolean(context.showCookieValues);
+  const proxyOrigin = getProxyOrigin(context.port ?? 8080);
+  const publicTargetUrl = context.mode === 'live' ? context.targetUrl : null;
 
   const filteredLogs = useMemo(() => filterLogs(logs, {
     methodFilters,
@@ -977,13 +1075,16 @@ export function App({
     return filteredLogs.find((log) => log.id === inspectedLogId) ?? selectedLog;
   }, [filteredLogs, inspectedLogId, selectedLog]);
   const detailLines = useMemo(
-    () => getDetailLines(inspectedLog, detailTab, { showCookieValues }),
-    [detailTab, inspectedLog, showCookieValues]
+    () => getDetailLines(inspectedLog, detailTab, {
+      publicTargetUrl,
+      proxyOrigin,
+      showCookieValues
+    }),
+    [detailTab, inspectedLog, publicTargetUrl, proxyOrigin, showCookieValues]
   );
   const bottomOffset = isFilterOpen ? 19 : 13;
   const detailVisibleCount = Math.max(4, (process.stdout.rows || 24) - bottomOffset);
   const maxDetailScrollOffset = getMaxScrollOffset(detailLines, detailVisibleCount);
-  const proxyOrigin = getProxyOrigin(context.port ?? 8080);
   const emptyText = context.mode === 'live'
     ? `Waiting for traffic at ${proxyOrigin}`
     : (isReplayMode ? 'No recorded traffic' : 'Waiting for traffic...');
@@ -1146,6 +1247,8 @@ export function App({
         isFocused: !isListFocused,
         detailTab,
         scrollOffset: detailScrollOffset,
+        publicTargetUrl,
+        proxyOrigin,
         showCookieValues
       })
     ),
