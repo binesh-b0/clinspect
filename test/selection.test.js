@@ -5,7 +5,10 @@ import {
   applyDetailMatches,
   clampDetailRowIndex,
   clampScrollOffset,
+  createBlankComposerState,
+  createComposerStateFromLog,
   cycleValue,
+  ensureComposerActiveTabRows,
   extractPortFromHost,
   findDetailMatches,
   filterLogs,
@@ -15,6 +18,8 @@ import {
   formatRecordingLabel,
   HELP_SECTIONS,
   getBoundaryLogId,
+  getComposerFieldDescriptors,
+  getComposerSectionRows,
   getDetailVisibleCount,
   getDetailLines,
   getDetailRows,
@@ -31,6 +36,7 @@ import {
   getTrafficVisibleCount,
   moveSelectedLogId,
   resolveSelectedLogId,
+  selectComposerTab,
   toggleFilterValue
 } from '../src/ui/App.js';
 
@@ -184,6 +190,157 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
     getKeyboardAction('N', {}, { isListFocused: false }),
     { type: 'moveDetailMatch', direction: -1 }
   );
+  assert.deepEqual(
+    getKeyboardAction('n', {}, { isLiveMode: true, isListFocused: true }),
+    { type: 'openComposer', mode: 'blank' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('n', {}, { isLiveMode: false, isListFocused: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('e', {}, { isLiveMode: true }),
+    { type: 'openComposer', mode: 'clone' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('e', {}, { isLiveMode: false }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('l', {}, { isLiveMode: true }),
+    { type: 'openComposerLibrary' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('l', {}, { isLiveMode: false }),
+    { type: 'none' }
+  );
+});
+
+test('keyboard action helper supports request composer input', () => {
+  assert.deepEqual(
+    getKeyboardAction('a', {}, { isComposerOpen: true, isComposerTextFocused: true }),
+    { type: 'insertComposerText', value: 'a' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('\u007F', {}, { isComposerOpen: true, isComposerTextFocused: true }),
+    { type: 'backspaceComposerText' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('\b', {}, { isComposerOpen: true, isComposerTextFocused: true }),
+    { type: 'backspaceComposerText' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { delete: true }, { isComposerOpen: true, isComposerTextFocused: true }),
+    { type: 'backspaceComposerText' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('\u001B[3~', {}, { isComposerOpen: true, isComposerTextFocused: true }),
+    { type: 'deleteComposerText' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('a', {}, { isComposerOpen: true, isComposerTextFocused: false }),
+    { type: 'addComposerRow' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('d', {}, { isComposerOpen: true, isComposerTextFocused: false }),
+    { type: 'deleteComposerRow' }
+  );
+  assert.deepEqual(
+    getKeyboardAction(' ', {}, { isComposerOpen: true, isComposerTextFocused: false }),
+    { type: 'toggleComposerField' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('s', {}, { isComposerOpen: true, isComposerTextFocused: false }),
+    { type: 'saveComposerRequest' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('l', {}, { isComposerOpen: true, isComposerTextFocused: false }),
+    { type: 'openComposerLibrary' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('R', {}, { isComposerOpen: true, isComposerTextFocused: false }),
+    { type: 'toggleComposerReveal' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('[', {}, { isComposerOpen: true }),
+    { type: 'cycleComposerTab', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction(']', {}, { isComposerOpen: true }),
+    { type: 'cycleComposerTab', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('4', {}, { isComposerOpen: true, isComposerTextFocused: false }),
+    { type: 'selectComposerTab', tab: 'auth' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('4', {}, { isComposerOpen: true, isComposerTextFocused: true }),
+    { type: 'insertComposerText', value: '4' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { tab: true, shift: true }, { isComposerOpen: true }),
+    { type: 'cycleComposerFocus', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { rightArrow: true }, { isComposerOpen: true }),
+    { type: 'moveComposerHorizontal', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { tab: true }, { isComposerOpen: true, composerFocus: 'method' }),
+    { type: 'cycleComposerFocus', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { return: true }, { isComposerOpen: true }),
+    { type: 'previewComposerSend' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { return: true }, { isComposerOpen: true, isComposerConfirmOpen: true }),
+    { type: 'sendComposer' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('y', {}, { isComposerOpen: true, isComposerConfirmOpen: true }),
+    { type: 'sendComposer' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { escape: true }, { isComposerOpen: true, isComposerConfirmOpen: true }),
+    { type: 'closeComposerPreview' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('n', {}, { isComposerOpen: true, isComposerConfirmOpen: true }),
+    { type: 'closeComposerPreview' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('a', {}, { isComposerOpen: true, isComposerConfirmOpen: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { escape: true }, { isComposerOpen: true }),
+    { type: 'closeComposer' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('\u001B[<65;20;5M', {}, { isComposerOpen: true, composerFocus: 'path' }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('a', {}, { isComposerOpen: true, isComposerSending: true, isComposerTextFocused: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('j', {}, { isComposerOpen: true, isComposerLibraryOpen: true }),
+    { type: 'moveComposerLibrary', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('1', {}, { isComposerOpen: true, isComposerLibraryOpen: true }),
+    { type: 'selectComposerTab', tab: 'params' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { return: true }, { isComposerOpen: true, isComposerLibraryOpen: true }),
+    { type: 'loadComposerLibraryRequest' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { return: true }, { isComposerOpen: true, isComposerBodyEditorOpen: true }),
+    { type: 'insertComposerText', value: '\n' }
+  );
 });
 
 test('keyboard action helper gates help modal and preserves filter query input', () => {
@@ -266,11 +423,23 @@ test('getRenderHeight keeps one terminal row free for Ink updates', () => {
 test('footer text shows mode-aware essential keymaps', () => {
   assert.equal(
     formatFooterText({ isListFocused: true }),
-    'j/k move  [/] page  enter inspect  tab details  P rec  S stop  h help  q quit'
+    'j/k move  [/] page  enter inspect  n new  e clone  l library  tab details  P/S rec  h help  q quit'
   );
   assert.equal(
     formatFooterText({ isListFocused: false }),
-    'j/k scroll  [/] page  g/G top/bottom  r req/res  / find  n/N match  o big  tab traffic  P rec  S stop  h help  q quit'
+    'j/k scroll  [/] page  r req/res  / find  n/N match  e clone  l library  tab traffic  P/S rec  h help'
+  );
+  assert.equal(
+    formatFooterText({ isComposerOpen: true }),
+    'composer  1-7 sections  tab fields  enter preview  a add  d delete  s save  l library  R reveal  esc close'
+  );
+  assert.equal(
+    formatFooterText({ isComposerOpen: true, isComposerTextFocused: true }),
+    'typing  backspace delete  tab next  enter preview  esc close  1-7 sections'
+  );
+  assert.equal(
+    formatFooterText({ isComposerOpen: true, isComposerConfirmOpen: true }),
+    'preview  enter/y send  esc/n edit'
   );
   assert.equal(
     formatFooterText({ isListFocused: false, isDetailSearchActive: true }),
@@ -294,6 +463,134 @@ test('help sections describe bracket page movement', () => {
   const navigationSection = HELP_SECTIONS.find((section) => section.title === 'Navigation');
 
   assert.deepEqual(navigationSection.rows.find(([keys]) => keys === '[ / ]'), ['[ / ]', 'move page']);
+});
+
+test('help sections describe request composer keys', () => {
+  const composeSection = HELP_SECTIONS.find((section) => section.title === 'Compose');
+
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'n'), ['n', 'new request']);
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'e'), ['e', 'clone request']);
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'l'), ['l', 'saved requests']);
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === '1 params'), ['1 params', 'open params']);
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === '3 body'), ['3 body', 'open body']);
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === '4 auth'), ['4 auth', 'open auth']);
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'a/d'), ['a/d', 'add / delete row']);
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'enter'), ['enter', 'preview request']);
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'enter/y'), ['enter/y', 'confirm send']);
+});
+
+test('composer helpers create blank and cloned request state', () => {
+  const blank = createBlankComposerState();
+
+  assert.equal(blank.activeTab, 'params');
+  assert.equal(blank.draft.method, 'GET');
+  assert.equal(blank.draft.url, '/');
+  assert.equal(blank.draft.params.length, 1);
+  assert.equal(blank.draft.collection, 'Default');
+  assert.equal(blank.isConfirmOpen, false);
+  assert.equal(blank.isOpen, true);
+  assert.equal(blank.source, 'new');
+
+  const cloned = createComposerStateFromLog({
+    method: 'POST',
+    path: '/api/sessions',
+    request: {
+      headers: {
+        accept: 'application/json',
+        'content-length': '25',
+        cookie: 'session=secret',
+        host: 'example.test',
+        'x-trace': 'abc'
+      },
+      body: 'email=demo@example.com'
+    }
+  });
+
+  assert.equal(cloned.draft.body.raw, 'email=demo@example.com');
+  assert.equal(cloned.draft.body.mode, 'raw');
+  assert.equal(cloned.draft.method, 'POST');
+  assert.equal(cloned.draft.url, '/api/sessions');
+  assert.deepEqual(cloned.draft.headers.map((row) => [row.key, row.value]), [
+    ['accept', 'application/json'],
+    ['x-trace', 'abc']
+  ]);
+  assert.equal(cloned.source, 'clone');
+
+  assert.equal(createComposerStateFromLog({
+    method: 'GET',
+    path: '/',
+    request: {
+      headers: {
+        cookie: 'session=secret'
+      }
+    }
+  }, { includeCookieHeaders: true }).draft.cookies[0].value, 'secret');
+});
+
+test('composer section helpers jump sections and seed editable rows', () => {
+  const blank = createBlankComposerState();
+  const auth = selectComposerTab(blank, '4');
+
+  assert.equal(auth.activeTab, 'auth');
+  assert.equal(auth.isConfirmOpen, false);
+  assert.equal(getComposerFieldDescriptors(auth)[auth.focusIndex].label, 'auth mode');
+
+  const params = selectComposerTab({
+    ...blank,
+    activeTab: 'headers',
+    draft: {
+      ...blank.draft,
+      params: []
+    }
+  }, '1');
+
+  assert.equal(params.activeTab, 'params');
+  assert.equal(params.draft.params.length, 1);
+  assert.equal(getComposerFieldDescriptors(params)[params.focusIndex].label, 'key');
+
+  const body = selectComposerTab({
+    ...blank,
+    draft: {
+      ...blank.draft,
+      body: {
+        ...blank.draft.body,
+        mode: 'multipart'
+      },
+      multipartFields: []
+    }
+  }, 'body');
+
+  assert.equal(body.activeTab, 'body');
+  assert.equal(body.draft.multipartFields.length, 1);
+  assert.equal(getComposerFieldDescriptors(body)[body.focusIndex].label, 'key');
+
+  const headers = ensureComposerActiveTabRows({
+    ...blank,
+    activeTab: 'headers',
+    draft: {
+      ...blank.draft,
+      headers: []
+    }
+  });
+
+  assert.equal(headers.draft.headers.length, 1);
+
+  const railRows = getComposerSectionRows(auth, {
+    requests: [
+      { id: 'one', collection: 'Default', name: 'GET /one', method: 'GET', url: '/one' },
+      { id: 'two', collection: 'Default', name: 'GET /two', method: 'GET', url: '/two' }
+    ]
+  });
+
+  assert.deepEqual(
+    railRows.filter((row) => row.key === '1' || row.key === '4' || row.key === 'l')
+      .map((row) => [row.key, row.label, row.summary, row.active]),
+    [
+      ['1', 'Params', '1', false],
+      ['4', 'Auth', 'none', true],
+      ['l', 'Library', '2', false]
+    ]
+  );
 });
 
 test('filterLogs narrows by method, status family, and search text', () => {

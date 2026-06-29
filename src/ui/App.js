@@ -1,6 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Text, useInput, useStdin } from 'ink';
 import { isCookieHeaderName, maskCookieHeaderValue } from '../cookies.js';
+import {
+  createManualRequestDraft,
+  MANUAL_REQUEST_AUTH_MODES,
+  MANUAL_REQUEST_BODY_MODES,
+  MANUAL_REQUEST_METHODS,
+  isManagedManualRequestHeader,
+  normalizeManualRequestDraft
+} from '../engine/manual-request.js';
 import { getProxyOrigin, isPublicTargetUrl } from '../target.js';
 import { isInkMouseInput, parseInkMouseInput } from './mouse.js';
 
@@ -11,6 +19,20 @@ const STATUS_OPTIONS = ['2xx', '3xx', '4xx', '5xx'];
 const DETAIL_TABS = ['request', 'response'];
 const SEARCH_FIELDS = ['all', 'path', 'status', 'method', 'time', 'host', 'port', 'headers', 'body'];
 const FILTER_FOCUS_ORDER = ['query', 'field', 'method', 'status'];
+const COMPOSER_TABS = ['params', 'headers', 'body', 'auth', 'cookies', 'env', 'save'];
+const COMPOSER_TAB_LABELS = {
+  auth: 'Auth',
+  body: 'Body',
+  cookies: 'Cookies',
+  env: 'Env',
+  headers: 'Headers',
+  params: 'Params',
+  save: 'Save'
+};
+const COMPOSER_TAB_SHORTCUTS = new Map(COMPOSER_TABS.map((tab, index) => [String(index + 1), tab]));
+const COMPOSER_RAIL_WIDTH = 22;
+const API_KEY_PLACEMENTS = ['header', 'query'];
+const MULTIPART_FIELD_TYPES = ['text', 'file'];
 const ROOT_PADDING_X = 1;
 const TRAFFIC_LIST_WIDTH = 50;
 const BODY_LINE_MAX_LENGTH = 120;
@@ -1289,6 +1311,479 @@ function formatFieldLine(searchField, isFocused) {
     .join(' ');
 }
 
+function createComposerTableRow(values = {}) {
+  return {
+    enabled: values.enabled !== false,
+    key: String(values.key ?? ''),
+    value: String(values.value ?? ''),
+    secret: Boolean(values.secret),
+    type: values.type === 'file' ? 'file' : 'text',
+    filePath: String(values.filePath ?? '')
+  };
+}
+
+function createComposerDraft(overrides = {}) {
+  return createManualRequestDraft({
+    collection: 'Default',
+    url: '/',
+    ...overrides
+  });
+}
+
+export function createBlankComposerState(options = {}) {
+  const draft = createComposerDraft({
+    environment: options.environment ?? []
+  });
+  const composer = {
+    activeTab: 'params',
+    cursor: draft.url.length,
+    draft,
+    error: '',
+    focusIndex: 1,
+    isBodyEditorOpen: false,
+    isConfirmOpen: false,
+    isLibraryOpen: false,
+    isOpen: true,
+    isSending: false,
+    libraryIndex: 0,
+    revealSecrets: false,
+    source: 'new'
+  };
+
+  return ensureComposerActiveTabRows(composer);
+}
+
+function parseCookieRows(cookieValue = '') {
+  return String(cookieValue)
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const separatorIndex = part.indexOf('=');
+
+      return createComposerTableRow({
+        key: separatorIndex === -1 ? part : part.slice(0, separatorIndex).trim(),
+        value: separatorIndex === -1 ? '' : part.slice(separatorIndex + 1).trim(),
+        secret: true
+      });
+    });
+}
+
+export function createComposerStateFromLog(log, options = {}) {
+  const includeCookieHeaders = Boolean(options.includeCookieHeaders);
+  const headers = [];
+  const cookies = [];
+  const url = String(log?.path || '/');
+
+  for (const [name, value] of Object.entries(log?.request?.headers ?? {})) {
+    if (isManagedManualRequestHeader(name)) {
+      continue;
+    }
+
+    if (isCookieHeaderName(name)) {
+      if (includeCookieHeaders) {
+        cookies.push(...parseCookieRows(value));
+      }
+
+      continue;
+    }
+
+    headers.push(createComposerTableRow({
+      key: name,
+      value
+    }));
+  }
+
+  return ensureComposerActiveTabRows({
+    ...createBlankComposerState({
+      environment: options.environment ?? []
+    }),
+    cursor: url.length,
+    draft: createComposerDraft({
+      body: {
+        mode: String(log?.request?.body ?? '').length > 0 ? 'raw' : 'none',
+        raw: String(log?.request?.body ?? ''),
+        json: String(log?.request?.body ?? '')
+      },
+      cookies,
+      environment: options.environment ?? [],
+      headers,
+      method: MANUAL_REQUEST_METHODS.includes(log?.method) ? log.method : 'GET',
+      name: `${log?.method ?? 'GET'} ${url}`,
+      url
+    }),
+    source: 'clone'
+  });
+}
+
+function flattenRequestLibrary(library = {}) {
+  return (library.requests ?? [])
+    .slice()
+    .sort((left, right) => {
+      const collectionCompare = String(left.collection ?? 'Default').localeCompare(String(right.collection ?? 'Default'));
+
+      if (collectionCompare !== 0) {
+        return collectionCompare;
+      }
+
+      return String(left.name || left.url).localeCompare(String(right.name || right.url));
+    });
+}
+
+function maskSecretValue(value, revealSecrets) {
+  const text = String(value ?? '');
+
+  if (revealSecrets || text.length === 0) {
+    return text;
+  }
+
+  return '<secret>';
+}
+
+function getPathValue(source, pathParts) {
+  return pathParts.reduce((value, key) => value?.[key], source);
+}
+
+function setPathValue(source, pathParts, value) {
+  const [key, ...rest] = pathParts;
+
+  if (key === undefined) {
+    return value;
+  }
+
+  if (Array.isArray(source)) {
+    return source.map((item, index) => (
+      index === Number(key) ? setPathValue(item, rest, value) : item
+    ));
+  }
+
+  return {
+    ...source,
+    [key]: setPathValue(source?.[key], rest, value)
+  };
+}
+
+function getComposerRowDescriptors(rows, table, revealSecrets, options = {}) {
+  return rows.flatMap((row, index) => {
+    const descriptors = [
+      {
+        kind: 'toggle',
+        label: 'on',
+        path: [table, index, 'enabled'],
+        rowIndex: index,
+        table
+      }
+    ];
+
+    if (options.includeType) {
+      descriptors.push({
+        kind: 'option',
+        label: 'type',
+        options: MULTIPART_FIELD_TYPES,
+        path: [table, index, 'type'],
+        rowIndex: index,
+        table
+      });
+    }
+
+    descriptors.push(
+      {
+        kind: 'text',
+        label: 'key',
+        path: [table, index, 'key'],
+        rowIndex: index,
+        table
+      },
+      {
+        kind: 'text',
+        label: row.type === 'file' ? 'file' : 'value',
+        path: [table, index, row.type === 'file' ? 'filePath' : 'value'],
+        rowIndex: index,
+        secret: options.secretValues || row.secret,
+        table
+      }
+    );
+
+    if (options.includeSecret) {
+      descriptors.push({
+        kind: 'toggle',
+        label: 'secret',
+        path: [table, index, 'secret'],
+        rowIndex: index,
+        table
+      });
+    }
+
+    return descriptors.map((descriptor) => ({
+      ...descriptor,
+      revealSecrets
+    }));
+  });
+}
+
+export function getComposerFieldDescriptors(composer) {
+  const draft = composer.draft;
+  const descriptors = [
+    {
+      kind: 'option',
+      label: 'method',
+      options: MANUAL_REQUEST_METHODS,
+      path: ['method']
+    },
+    {
+      kind: 'text',
+      label: 'url',
+      path: ['url']
+    }
+  ];
+
+  if (composer.activeTab === 'params') {
+    descriptors.push(...getComposerRowDescriptors(draft.params, 'params', composer.revealSecrets));
+  }
+
+  if (composer.activeTab === 'headers') {
+    descriptors.push(...getComposerRowDescriptors(draft.headers, 'headers', composer.revealSecrets));
+  }
+
+  if (composer.activeTab === 'cookies') {
+    descriptors.push(...getComposerRowDescriptors(draft.cookies, 'cookies', composer.revealSecrets, { secretValues: true }));
+  }
+
+  if (composer.activeTab === 'env') {
+    descriptors.push(...getComposerRowDescriptors(draft.environment, 'environment', composer.revealSecrets, { includeSecret: true }));
+  }
+
+  if (composer.activeTab === 'body') {
+    descriptors.push({
+      kind: 'option',
+      label: 'body mode',
+      options: MANUAL_REQUEST_BODY_MODES,
+      path: ['body', 'mode']
+    });
+
+    if (draft.body.mode === 'raw') {
+      descriptors.push({
+        kind: 'text',
+        label: 'raw body',
+        multiline: true,
+        path: ['body', 'raw']
+      });
+    }
+
+    if (draft.body.mode === 'json') {
+      descriptors.push({
+        kind: 'text',
+        label: 'json body',
+        multiline: true,
+        path: ['body', 'json']
+      });
+    }
+
+    if (draft.body.mode === 'form-urlencoded') {
+      descriptors.push(...getComposerRowDescriptors(draft.formFields, 'formFields', composer.revealSecrets));
+    }
+
+    if (draft.body.mode === 'multipart') {
+      descriptors.push(...getComposerRowDescriptors(draft.multipartFields, 'multipartFields', composer.revealSecrets, { includeType: true }));
+    }
+  }
+
+  if (composer.activeTab === 'auth') {
+    descriptors.push({
+      kind: 'option',
+      label: 'auth mode',
+      options: MANUAL_REQUEST_AUTH_MODES,
+      path: ['auth', 'mode']
+    });
+
+    if (draft.auth.mode === 'bearer') {
+      descriptors.push({
+        kind: 'text',
+        label: 'token',
+        path: ['auth', 'bearerToken'],
+        secret: true
+      });
+    }
+
+    if (draft.auth.mode === 'basic') {
+      descriptors.push(
+        {
+          kind: 'text',
+          label: 'username',
+          path: ['auth', 'username']
+        },
+        {
+          kind: 'text',
+          label: 'password',
+          path: ['auth', 'password'],
+          secret: true
+        }
+      );
+    }
+
+    if (draft.auth.mode === 'apiKey') {
+      descriptors.push(
+        {
+          kind: 'text',
+          label: 'key',
+          path: ['auth', 'apiKey', 'key']
+        },
+        {
+          kind: 'text',
+          label: 'value',
+          path: ['auth', 'apiKey', 'value'],
+          secret: true
+        },
+        {
+          kind: 'option',
+          label: 'add to',
+          options: API_KEY_PLACEMENTS,
+          path: ['auth', 'apiKey', 'placement']
+        }
+      );
+    }
+  }
+
+  if (composer.activeTab === 'save') {
+    descriptors.push(
+      {
+        kind: 'text',
+        label: 'name',
+        path: ['name']
+      },
+      {
+        kind: 'text',
+        label: 'collection',
+        path: ['collection']
+      }
+    );
+  }
+
+  return descriptors;
+}
+
+function getComposerTableForTab(composer, tab = composer.activeTab) {
+  if (tab === 'params') {
+    return 'params';
+  }
+
+  if (tab === 'headers') {
+    return 'headers';
+  }
+
+  if (tab === 'cookies') {
+    return 'cookies';
+  }
+
+  if (tab === 'env') {
+    return 'environment';
+  }
+
+  if (tab === 'body' && composer.draft.body.mode === 'form-urlencoded') {
+    return 'formFields';
+  }
+
+  if (tab === 'body' && composer.draft.body.mode === 'multipart') {
+    return 'multipartFields';
+  }
+
+  return null;
+}
+
+function createComposerRowForTable(table) {
+  return createComposerTableRow({
+    type: table === 'multipartFields' ? 'text' : undefined,
+    secret: table === 'cookies'
+  });
+}
+
+export function ensureComposerActiveTabRows(composer) {
+  const table = getComposerTableForTab(composer);
+
+  if (!table) {
+    return composer;
+  }
+
+  const rows = getPathValue(composer.draft, [table]) ?? [];
+
+  if (rows.length > 0) {
+    return composer;
+  }
+
+  return {
+    ...composer,
+    draft: setPathValue(composer.draft, [table], [createComposerRowForTable(table)])
+  };
+}
+
+function getDefaultComposerFocusIndex(composer) {
+  const descriptors = getComposerFieldDescriptors(composer);
+  const sectionDescriptors = descriptors
+    .map((descriptor, index) => ({ descriptor, index }))
+    .slice(2);
+  const preferred = sectionDescriptors.find(({ descriptor }) => descriptor.kind === 'text') ?? sectionDescriptors[0];
+
+  return preferred?.index ?? Math.min(1, Math.max(0, descriptors.length - 1));
+}
+
+function getComposerCursorForFocus(composer, focusIndex) {
+  const descriptor = getComposerFieldDescriptors(composer)[focusIndex];
+
+  if (descriptor?.kind !== 'text') {
+    return 0;
+  }
+
+  return String(getPathValue(composer.draft, descriptor.path) ?? '').length;
+}
+
+function getComposerTabFromShortcut(value) {
+  return COMPOSER_TAB_SHORTCUTS.get(String(value ?? '')) ?? null;
+}
+
+function resolveComposerTab(tabOrIndex) {
+  if (typeof tabOrIndex === 'number') {
+    return COMPOSER_TABS[tabOrIndex - 1] ?? null;
+  }
+
+  const shortcutTab = getComposerTabFromShortcut(tabOrIndex);
+
+  if (shortcutTab) {
+    return shortcutTab;
+  }
+
+  return COMPOSER_TABS.includes(tabOrIndex) ? tabOrIndex : null;
+}
+
+export function selectComposerTab(composer, tabOrIndex) {
+  const activeTab = resolveComposerTab(tabOrIndex);
+
+  if (!activeTab) {
+    return composer;
+  }
+
+  const withTab = ensureComposerActiveTabRows({
+    ...composer,
+    activeTab,
+    isBodyEditorOpen: false,
+    isConfirmOpen: false,
+    isLibraryOpen: false
+  });
+  const focusIndex = getDefaultComposerFocusIndex(withTab);
+
+  return {
+    ...withTab,
+    cursor: getComposerCursorForFocus(withTab, focusIndex),
+    focusIndex
+  };
+}
+
+function getFocusedComposerDescriptor(composer) {
+  const descriptors = getComposerFieldDescriptors(composer);
+  const index = Math.max(0, Math.min(descriptors.length - 1, composer.focusIndex));
+
+  return descriptors[index] ?? descriptors[0] ?? null;
+}
+
 function focusedMarker(row, filterFocus) {
   return row === filterFocus ? '>' : ' ';
 }
@@ -1370,6 +1865,344 @@ const DetailSearchBar = React.memo(function DetailSearchBar({
   );
 });
 
+function getComposerDisplayValue(value, descriptor, composer, isFocused) {
+  if (descriptor?.kind === 'toggle') {
+    return value ? 'on' : 'off';
+  }
+
+  if (descriptor?.kind === 'option') {
+    return descriptor.options
+      .map((option) => formatOptionToken(option, {
+        cursor: option === value,
+        selected: option === value
+      }))
+      .join(' ');
+  }
+
+  const text = descriptor?.secret
+    ? maskSecretValue(value, composer.revealSecrets)
+    : String(value ?? '');
+  const displayText = text.length > 0 ? text : '(empty)';
+
+  return `${truncate(displayText.replace(/\n/g, '\\n'), 90)}${isFocused ? '_' : ''}`;
+}
+
+function getEnabledComposerRows(rows = []) {
+  return rows.filter((row) => row.enabled !== false && String(row.key ?? '').trim());
+}
+
+function formatComposerPreviewRows(rows = [], options = {}) {
+  const enabledRows = getEnabledComposerRows(rows);
+  const emptyText = options.emptyText ?? '(none)';
+
+  if (enabledRows.length === 0) {
+    return [emptyText];
+  }
+
+  return enabledRows.slice(0, 6).map((row) => {
+    const value = row.type === 'file' ? row.filePath : row.value;
+    const displayValue = options.secretValues || row.secret
+      ? maskSecretValue(value, options.revealSecrets)
+      : value;
+
+    return `${row.key}: ${displayValue}`;
+  });
+}
+
+function getComposerPreviewBodySummary(draft) {
+  const mode = draft.body?.mode ?? 'none';
+
+  if (mode === 'none') {
+    return 'none';
+  }
+
+  if (mode === 'raw') {
+    return `raw ${draft.body.raw.length} chars`;
+  }
+
+  if (mode === 'json') {
+    return `json ${draft.body.json.length} chars`;
+  }
+
+  if (mode === 'form-urlencoded') {
+    return `form-urlencoded ${getEnabledComposerRows(draft.formFields).length} fields`;
+  }
+
+  if (mode === 'multipart') {
+    return `multipart ${getEnabledComposerRows(draft.multipartFields).length} fields`;
+  }
+
+  return mode;
+}
+
+function getComposerPreviewAuthSummary(auth = {}) {
+  if (auth.mode === 'apiKey') {
+    return `api key in ${auth.apiKey?.placement ?? 'header'}`;
+  }
+
+  return auth.mode ?? 'none';
+}
+
+function renderComposerPreview(composer) {
+  const draft = composer.draft;
+  const params = formatComposerPreviewRows(draft.params, { revealSecrets: composer.revealSecrets });
+  const headers = formatComposerPreviewRows(draft.headers, { revealSecrets: composer.revealSecrets });
+  const cookies = formatComposerPreviewRows(draft.cookies, {
+    revealSecrets: composer.revealSecrets,
+    secretValues: true
+  });
+
+  return [
+    h(Text, { key: 'preview-title', color: 'cyan', bold: true }, 'Preview request'),
+    h(Text, { key: 'preview-request', wrap: 'truncate' }, `${draft.method} ${draft.url || '/'}`),
+    h(Text, { key: 'preview-auth', wrap: 'truncate' }, `auth ${getComposerPreviewAuthSummary(draft.auth)} | body ${getComposerPreviewBodySummary(draft)}`),
+    h(Text, { key: 'preview-space-1' }, ''),
+    h(Text, { key: 'preview-params-title', color: 'gray' }, 'Params'),
+    ...params.map((row, index) => h(Text, { key: `preview-param-${index}`, wrap: 'truncate' }, `  ${row}`)),
+    h(Text, { key: 'preview-headers-title', color: 'gray' }, 'Headers'),
+    ...headers.map((row, index) => h(Text, { key: `preview-header-${index}`, wrap: 'truncate' }, `  ${row}`)),
+    h(Text, { key: 'preview-cookies-title', color: 'gray' }, 'Cookies'),
+    ...cookies.map((row, index) => h(Text, { key: `preview-cookie-${index}`, wrap: 'truncate' }, `  ${row}`)),
+    h(Text, { key: 'preview-space-2' }, ''),
+    h(Text, { key: 'preview-confirm', color: 'yellow', bold: true }, 'Send this request?'),
+    h(Text, { key: 'preview-help', color: 'gray' }, 'enter/y send | esc/n edit')
+  ];
+}
+
+function renderComposerDescriptor(composer, descriptor, index) {
+  const value = getPathValue(composer.draft, descriptor.path);
+  const isFocused = index === composer.focusIndex;
+
+  return h(
+    Box,
+    { key: `${descriptor.path.join('.')}-${index}` },
+    h(Text, { color: isFocused ? 'cyan' : 'gray' }, isFocused ? '>' : ' '),
+    h(Text, { color: isFocused ? 'cyan' : 'gray' }, ` ${pad(descriptor.label, 12)}`),
+    h(Text, { wrap: 'truncate' }, getComposerDisplayValue(value, descriptor, composer, isFocused))
+  );
+}
+
+function renderComposerTableEmpty(activeTab) {
+  return h(Text, { color: 'gray' }, `${COMPOSER_TAB_LABELS[activeTab]} has no rows.`);
+}
+
+function renderComposerTabBody(composer) {
+  if (composer.isBodyEditorOpen) {
+    const descriptor = getFocusedComposerDescriptor(composer);
+    const value = descriptor?.kind === 'text'
+      ? String(getPathValue(composer.draft, descriptor.path) ?? '')
+      : '';
+    const lines = value.length > 0 ? value.split('\n') : [''];
+
+    return [
+      h(Text, { key: 'editor-title', color: 'cyan', bold: true }, 'Body editor'),
+      ...lines.slice(0, 14).map((line, index) => h(
+        Text,
+        { key: `editor-${index}`, wrap: 'truncate' },
+        `${padLeft(index + 1, 3)} ${line}${index === lines.length - 1 ? '_' : ''}`
+      )),
+      h(Text, { key: 'editor-help', color: 'gray' }, 'enter newline | esc back to Body tab | Ctrl-C quit')
+    ];
+  }
+
+  const descriptors = getComposerFieldDescriptors(composer);
+  const tabDescriptors = descriptors.slice(2);
+
+  if (tabDescriptors.length === 0) {
+    return [renderComposerTableEmpty(composer.activeTab)];
+  }
+
+  return tabDescriptors.map((descriptor, index) => renderComposerDescriptor(composer, descriptor, index + 2));
+}
+
+function renderComposerLibrary(composer, library) {
+  const requests = flattenRequestLibrary(library);
+  const selectedIndex = Math.max(0, Math.min(requests.length - 1, composer.libraryIndex));
+
+  return [
+    h(Text, { key: 'library-title', color: 'cyan', bold: true }, 'Saved requests'),
+    library.warning ? h(Text, { key: 'library-warning', color: 'yellow', wrap: 'truncate' }, library.warning) : null,
+    requests.length === 0
+      ? h(Text, { key: 'library-empty', color: 'gray' }, 'No saved requests. Compose a request and press s to save it.')
+      : requests.slice(0, 18).map((request, index) => {
+        const selected = index === selectedIndex;
+
+        return h(
+          Text,
+          {
+            key: request.id,
+            backgroundColor: selected ? 'cyan' : undefined,
+            color: selected ? 'black' : undefined,
+            wrap: 'truncate'
+          },
+          `${selected ? '>' : ' '} ${pad(request.collection ?? 'Default', 14)} ${pad(request.method, 7)} ${request.name || request.url}`
+        );
+      }),
+    h(Text, { key: 'library-help', color: 'gray' }, 'j/k move | enter open | esc/l close')
+  ].filter(Boolean);
+}
+
+function getComposerTabShortcut(tab) {
+  const index = COMPOSER_TABS.indexOf(tab);
+
+  return index === -1 ? '' : String(index + 1);
+}
+
+function formatComposerAuthSummary(auth = {}) {
+  return auth.mode === 'apiKey' ? 'api key' : (auth.mode ?? 'none');
+}
+
+function getComposerTabSummary(composer, tab) {
+  const draft = composer.draft;
+
+  if (tab === 'params') {
+    return String(draft.params.length);
+  }
+
+  if (tab === 'headers') {
+    return String(draft.headers.length);
+  }
+
+  if (tab === 'body') {
+    return draft.body.mode;
+  }
+
+  if (tab === 'auth') {
+    return formatComposerAuthSummary(draft.auth);
+  }
+
+  if (tab === 'cookies') {
+    return String(draft.cookies.length);
+  }
+
+  if (tab === 'env') {
+    return String(draft.environment.length);
+  }
+
+  return draft.collection || 'Default';
+}
+
+export function getComposerSectionRows(composer, library = {}) {
+  return [
+    ...COMPOSER_TABS.map((tab) => ({
+      active: !composer.isLibraryOpen && tab === composer.activeTab,
+      key: getComposerTabShortcut(tab),
+      label: COMPOSER_TAB_LABELS[tab],
+      summary: getComposerTabSummary(composer, tab),
+      tab
+    })),
+    {
+      active: Boolean(composer.isLibraryOpen),
+      key: 'l',
+      label: 'Library',
+      summary: String(flattenRequestLibrary(library).length),
+      tab: 'library'
+    }
+  ];
+}
+
+function renderComposerSectionRail(composer, library) {
+  return h(
+    Box,
+    {
+      flexDirection: 'column',
+      flexShrink: 0,
+      marginRight: 2,
+      width: COMPOSER_RAIL_WIDTH
+    },
+    h(Text, { color: 'cyan', bold: true }, 'Sections'),
+    h(Text, { color: 'gray' }, '1-7 jump'),
+    h(Text, {}, ''),
+    ...getComposerSectionRows(composer, library).map((item) => {
+      const text = `${item.active ? '>' : ' '} ${pad(item.key, 2)} ${pad(item.label, 8)} ${truncate(item.summary, 8)}`;
+
+      return h(
+        Text,
+        {
+          key: item.tab,
+          backgroundColor: item.active ? 'cyan' : undefined,
+          color: item.active ? 'black' : (item.key === 'l' ? 'gray' : undefined),
+          wrap: 'truncate'
+        },
+        text
+      );
+    })
+  );
+}
+
+const RequestComposerPanel = React.memo(function RequestComposerPanel({
+  composer,
+  library,
+  targetUrl
+}) {
+  const columns = Number.isFinite(process.stdout.columns) && process.stdout.columns > 0
+    ? process.stdout.columns
+    : 80;
+  const width = Math.max(72, columns - 4);
+  const title = composer.source === 'clone' ? 'Clone request' : 'New request';
+  const statusText = composer.isSending
+    ? 'sending...'
+    : (composer.error || 'ready');
+  const statusColor = composer.error ? 'yellow' : (composer.isSending ? 'cyan' : 'gray');
+  const descriptors = getComposerFieldDescriptors(composer);
+  const sectionTitle = composer.isLibraryOpen
+    ? 'Library'
+    : `${getComposerTabShortcut(composer.activeTab)} ${COMPOSER_TAB_LABELS[composer.activeTab]}`;
+  const isTextFocused = getFocusedComposerDescriptor(composer)?.kind === 'text';
+  const helpText = composer.isConfirmOpen
+    ? 'preview | enter/y send | esc/n edit'
+    : (isTextFocused
+      ? 'typing | backspace delete | tab next | enter preview | esc close | 1-7 sections'
+      : '1-7 sections | [/] section | tab fields | enter preview | a add | d delete | s save | l library | R reveal | esc close');
+
+  return h(
+    Box,
+    {
+      flexDirection: 'column',
+      flexGrow: 1
+    },
+    h(
+      Box,
+      {
+        flexDirection: 'column',
+        flexGrow: 1,
+        borderStyle: 'single',
+        borderColor: composer.error ? 'yellow' : 'cyan',
+        paddingX: 2,
+        paddingY: 1,
+        width
+      },
+      h(Text, { color: composer.error ? 'yellow' : 'cyan', bold: true }, title),
+      h(Text, { color: 'gray', wrap: 'truncate' }, `target ${targetUrl ?? '(not configured)'}`),
+      h(Text, {}, ''),
+      h(
+        Box,
+        { flexDirection: 'row', flexGrow: 1 },
+        renderComposerSectionRail(composer, library),
+        h(
+          Box,
+          { flexDirection: 'column', flexGrow: 1 },
+          composer.isLibraryOpen
+            ? renderComposerLibrary(composer, library)
+            : (composer.isConfirmOpen
+              ? renderComposerPreview(composer)
+              : [
+              h(Text, { key: 'request-line', color: 'gray' }, 'Request'),
+              renderComposerDescriptor(composer, descriptors[0], 0),
+              renderComposerDescriptor(composer, descriptors[1], 1),
+              h(Text, { key: 'tabs-space' }, ''),
+              h(Text, { key: 'section-title', color: 'cyan', bold: true }, sectionTitle),
+              ...renderComposerTabBody(composer)
+            ])
+        )
+      ),
+      h(Text, {}, ''),
+      h(Text, { color: statusColor, wrap: 'truncate' }, statusText),
+      h(Text, { color: 'gray', wrap: 'truncate' }, helpText)
+    )
+  );
+});
+
 export const HELP_SECTIONS = [
   {
     title: 'Navigation',
@@ -1392,6 +2225,24 @@ export const HELP_SECTIONS = [
       ['/', 'find in details'],
       ['n / N', 'next / previous match'],
       ['wheel', 'scroll hovered pane']
+    ]
+  },
+  {
+    title: 'Compose',
+    rows: [
+      ['n', 'new request'],
+      ['e', 'clone request'],
+      ['l', 'saved requests'],
+      ['1 params', 'open params'],
+      ['3 body', 'open body'],
+      ['4 auth', 'open auth'],
+      ['[ / ]', 'previous / next section'],
+      ['a/d', 'add / delete row'],
+      ['space', 'enable / disable row'],
+      ['R', 'reveal / mask secrets'],
+      ['enter', 'preview request'],
+      ['enter/y', 'confirm send'],
+      ['esc', 'close composer']
     ]
   },
   {
@@ -1481,6 +2332,9 @@ const HelpModal = React.memo(function HelpModal() {
 });
 
 export function formatFooterText({
+  isComposerConfirmOpen = false,
+  isComposerOpen = false,
+  isComposerTextFocused = false,
   isDetailModalOpen = false,
   isDetailSearchActive = false,
   isHelpOpen = false,
@@ -1495,6 +2349,16 @@ export function formatFooterText({
     return 'help | esc/h/q close';
   }
 
+  if (isComposerOpen) {
+    if (isComposerConfirmOpen) {
+      return 'preview  enter/y send  esc/n edit';
+    }
+
+    return isComposerTextFocused
+      ? 'typing  backspace delete  tab next  enter preview  esc close  1-7 sections'
+      : 'composer  1-7 sections  tab fields  enter preview  a add  d delete  s save  l library  R reveal  esc close';
+  }
+
   if (isDetailSearchActive && !isListFocused) {
     return isDetailModalOpen
       ? 'detail search active  / edit  n/N match  j/k scroll  enter collapse  esc/q close'
@@ -1502,13 +2366,16 @@ export function formatFooterText({
   }
 
   if (isListFocused) {
-    return 'j/k move  [/] page  enter inspect  tab details  P rec  S stop  h help  q quit';
+    return 'j/k move  [/] page  enter inspect  n new  e clone  l library  tab details  P/S rec  h help  q quit';
   }
 
-  return 'j/k scroll  [/] page  g/G top/bottom  r req/res  / find  n/N match  o big  tab traffic  P rec  S stop  h help  q quit';
+  return 'j/k scroll  [/] page  r req/res  / find  n/N match  e clone  l library  tab traffic  P/S rec  h help';
 }
 
 const Footer = React.memo(function Footer({
+  isComposerConfirmOpen,
+  isComposerOpen,
+  isComposerTextFocused,
   isDetailModalOpen,
   isDetailSearchActive,
   isHelpOpen,
@@ -1522,6 +2389,9 @@ const Footer = React.memo(function Footer({
       Text,
       { color: 'gray', wrap: 'truncate' },
       formatFooterText({
+        isComposerConfirmOpen,
+        isComposerOpen,
+        isComposerTextFocused,
         isDetailModalOpen,
         isDetailSearchActive,
         isHelpOpen,
@@ -1583,6 +2453,14 @@ export function getMouseWheelTarget(column) {
   return 'details';
 }
 
+function isBackspaceInput(value, keyState = {}) {
+  return Boolean(keyState.backspace || keyState.delete || value === '\u007F' || value === '\b');
+}
+
+function isDeleteInput(value, _keyState = {}) {
+  return value === '\u001B[3~';
+}
+
 export function getKeyboardAction(input = '', key = {}, options = {}) {
   const {
     filterFocus = 'query',
@@ -1592,6 +2470,13 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     isDetailSearchOpen = false,
     isDetailModalOpen = false,
     isReplayMode = false,
+    isLiveMode = false,
+    isComposerOpen = false,
+    isComposerSending = false,
+    isComposerConfirmOpen = false,
+    isComposerBodyEditorOpen = false,
+    isComposerLibraryOpen = false,
+    isComposerTextFocused = false,
     detailPageSize = 1,
     trafficPageSize = 1
   } = options;
@@ -1610,12 +2495,166 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     return { type: 'none' };
   }
 
+  if (isComposerOpen) {
+    if (parseInkMouseInput(value) || isInkMouseInput(value)) {
+      return { type: 'none' };
+    }
+
+    if (isComposerSending) {
+      return { type: 'none' };
+    }
+
+    if (isComposerConfirmOpen) {
+      if (keyState.return || value === 'y' || value === 'Y') {
+        return { type: 'sendComposer' };
+      }
+
+      if (keyState.escape || value === 'n' || value === 'N') {
+        return { type: 'closeComposerPreview' };
+      }
+
+      return { type: 'none' };
+    }
+
+    if (isComposerLibraryOpen) {
+      const shortcutTab = getComposerTabFromShortcut(value);
+
+      if (shortcutTab) {
+        return { type: 'selectComposerTab', tab: shortcutTab };
+      }
+
+      if (keyState.escape || value === 'l') {
+        return { type: 'closeComposerLibrary' };
+      }
+
+      if (keyState.return) {
+        return { type: 'loadComposerLibraryRequest' };
+      }
+
+      if (keyState.upArrow || value === 'k') {
+        return { type: 'moveComposerLibrary', direction: -1 };
+      }
+
+      if (keyState.downArrow || value === 'j') {
+        return { type: 'moveComposerLibrary', direction: 1 };
+      }
+
+      return { type: 'none' };
+    }
+
+    if (isComposerBodyEditorOpen) {
+      if (keyState.escape) {
+        return { type: 'closeComposerBodyEditor' };
+      }
+
+      if (keyState.return) {
+        return { type: 'insertComposerText', value: '\n' };
+      }
+
+      if (isBackspaceInput(value, keyState) || isDeleteInput(value, keyState)) {
+        return { type: isDeleteInput(value, keyState) ? 'deleteComposerText' : 'backspaceComposerText' };
+      }
+
+      if (keyState.leftArrow || keyState.rightArrow) {
+        return { type: 'moveComposerCursor', direction: keyState.leftArrow ? -1 : 1 };
+      }
+
+      if (keyState.home || keyState.end) {
+        return { type: 'moveComposerCursorTo', boundary: keyState.home ? 'start' : 'end' };
+      }
+
+      if (value && !keyState.ctrl && !keyState.meta) {
+        return { type: 'insertComposerText', value };
+      }
+
+      return { type: 'none' };
+    }
+
+    if (keyState.escape) {
+      return { type: 'closeComposer' };
+    }
+
+    if (keyState.return) {
+      return { type: 'previewComposerSend' };
+    }
+
+    if (value === '[') {
+      return { type: 'cycleComposerTab', direction: -1 };
+    }
+
+    if (value === ']') {
+      return { type: 'cycleComposerTab', direction: 1 };
+    }
+
+    if (!isComposerTextFocused && getComposerTabFromShortcut(value)) {
+      return { type: 'selectComposerTab', tab: getComposerTabFromShortcut(value) };
+    }
+
+    if (keyState.shiftTab || (keyState.shift && keyState.tab)) {
+      return { type: 'cycleComposerFocus', direction: -1 };
+    }
+
+    if (keyState.tab || keyState.downArrow) {
+      return { type: 'cycleComposerFocus', direction: 1 };
+    }
+
+    if (keyState.upArrow) {
+      return { type: 'cycleComposerFocus', direction: -1 };
+    }
+
+    if (value === 'a' && !isComposerTextFocused) {
+      return { type: 'addComposerRow' };
+    }
+
+    if (value === 'd' && !isComposerTextFocused) {
+      return { type: 'deleteComposerRow' };
+    }
+
+    if (value === ' ' && !isComposerTextFocused) {
+      return { type: 'toggleComposerField' };
+    }
+
+    if (value === 's' && !isComposerTextFocused) {
+      return { type: 'saveComposerRequest' };
+    }
+
+    if (value === 'l' && !isComposerTextFocused) {
+      return { type: 'openComposerLibrary' };
+    }
+
+    if (value === 'R' && !isComposerTextFocused) {
+      return { type: 'toggleComposerReveal' };
+    }
+
+    if (value === 'o' && !isComposerTextFocused) {
+      return { type: 'openComposerBodyEditor' };
+    }
+
+    if (keyState.leftArrow || keyState.rightArrow) {
+      return { type: 'moveComposerHorizontal', direction: keyState.leftArrow ? -1 : 1 };
+    }
+
+    if (keyState.home || keyState.end) {
+      return { type: 'moveComposerCursorTo', boundary: keyState.home ? 'start' : 'end' };
+    }
+
+    if (isBackspaceInput(value, keyState) || isDeleteInput(value, keyState)) {
+      return { type: isDeleteInput(value, keyState) ? 'deleteComposerText' : 'backspaceComposerText' };
+    }
+
+    if (value && !keyState.ctrl && !keyState.meta) {
+      return { type: 'insertComposerText', value };
+    }
+
+    return { type: 'none' };
+  }
+
   if (isDetailSearchOpen) {
     if (keyState.escape || keyState.return) {
       return { type: 'finishDetailSearch' };
     }
 
-    if (keyState.backspace || keyState.delete) {
+    if (isBackspaceInput(value, keyState) || isDeleteInput(value, keyState)) {
       return { type: 'backspaceDetailSearch' };
     }
 
@@ -1729,7 +2768,7 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
       return { type: 'toggleFilterOption' };
     }
 
-    if (keyState.backspace || keyState.delete) {
+    if (isBackspaceInput(value, keyState) || isDeleteInput(value, keyState)) {
       return filterFocus === 'query'
         ? { type: 'backspaceSearch' }
         : { type: 'none' };
@@ -1744,6 +2783,18 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
 
   if (value === 'h') {
     return { type: 'openHelp' };
+  }
+
+  if (value === 'n' && isLiveMode && isListFocused) {
+    return { type: 'openComposer', mode: 'blank' };
+  }
+
+  if (value === 'e' && isLiveMode) {
+    return { type: 'openComposer', mode: 'clone' };
+  }
+
+  if (value === 'l' && isLiveMode) {
+    return { type: 'openComposerLibrary' };
   }
 
   if (value === 'q') {
@@ -1871,33 +2922,65 @@ function KeyboardControls({
   isDetailSearchOpen,
   isDetailModalOpen,
   isReplayMode,
+  isLiveMode,
+  isComposerOpen,
+  isComposerSending,
+  isComposerConfirmOpen,
+  isComposerBodyEditorOpen,
+  isComposerLibraryOpen,
+  isComposerTextFocused,
   detailPageSize,
   trafficPageSize,
+  onAddComposerRow,
   onAppendSearch,
   onAppendDetailSearch,
+  onBackspaceComposerText,
   onBackspaceSearch,
   onBackspaceDetailSearch,
+  onCloseComposerBodyEditor,
+  onCloseComposerLibrary,
+  onCloseComposerPreview,
   onClearFilters,
   onClearLogs,
   onCloseDetailModal,
+  onCloseComposer,
   onCloseHelp,
+  onCycleComposerFocus,
+  onCycleComposerTab,
+  onDeleteComposerRow,
+  onDeleteComposerText,
   onCycleFilterFocus,
   onFinishDetailSearch,
   onFinishSearch,
   onFollowLatest,
+  onInsertComposerText,
   onInspectSelected,
+  onLoadComposerLibraryRequest,
   onMoveDetailMatch,
   onMoveSelectionTo,
   onMoveFilterOption,
   onMoveSelection,
+  onMoveComposerCursor,
+  onMoveComposerCursorTo,
+  onMoveComposerHorizontal,
+  onMoveComposerLibrary,
   onOpenDetailModal,
   onOpenDetailSearch,
+  onOpenComposer,
+  onOpenComposerBodyEditor,
+  onOpenComposerLibrary,
   onOpenFilter,
   onOpenHelp,
+  onPreviewComposerSend,
   onQuit,
+  onSaveComposerRequest,
   onScrollDetails,
   onScrollDetailsTo,
+  onSendComposer,
+  onSelectComposerTab,
   onStopRecording,
+  onToggleComposerField,
+  onToggleComposerReveal,
   onToggleDetailNode,
   onToggleFilterOption,
   onToggleDetailTab,
@@ -1914,11 +2997,24 @@ function KeyboardControls({
       isDetailSearchOpen,
       isDetailModalOpen,
       isReplayMode,
+      isLiveMode,
+      isComposerOpen,
+      isComposerSending,
+      isComposerConfirmOpen,
+      isComposerBodyEditorOpen,
+      isComposerLibraryOpen,
+      isComposerTextFocused,
       detailPageSize,
       trafficPageSize
     });
 
     switch (action.type) {
+      case 'addComposerRow':
+        onAddComposerRow();
+        break;
+      case 'backspaceComposerText':
+        onBackspaceComposerText();
+        break;
       case 'appendSearch':
         onAppendSearch(action.value);
         break;
@@ -1931,6 +3027,15 @@ function KeyboardControls({
       case 'backspaceDetailSearch':
         onBackspaceDetailSearch();
         break;
+      case 'closeComposerBodyEditor':
+        onCloseComposerBodyEditor();
+        break;
+      case 'closeComposerLibrary':
+        onCloseComposerLibrary();
+        break;
+      case 'closeComposerPreview':
+        onCloseComposerPreview();
+        break;
       case 'clearFilters':
         onClearFilters();
         break;
@@ -1940,8 +3045,23 @@ function KeyboardControls({
       case 'closeDetailModal':
         onCloseDetailModal();
         break;
+      case 'closeComposer':
+        onCloseComposer();
+        break;
       case 'closeHelp':
         onCloseHelp();
+        break;
+      case 'cycleComposerFocus':
+        onCycleComposerFocus(action.direction);
+        break;
+      case 'cycleComposerTab':
+        onCycleComposerTab(action.direction);
+        break;
+      case 'deleteComposerRow':
+        onDeleteComposerRow();
+        break;
+      case 'deleteComposerText':
+        onDeleteComposerText();
         break;
       case 'cycleFilterFocus':
         onCycleFilterFocus(action.direction);
@@ -1955,8 +3075,14 @@ function KeyboardControls({
       case 'followLatest':
         onFollowLatest();
         break;
+      case 'insertComposerText':
+        onInsertComposerText(action.value);
+        break;
       case 'inspectSelected':
         onInspectSelected();
+        break;
+      case 'loadComposerLibraryRequest':
+        onLoadComposerLibraryRequest();
         break;
       case 'moveFilterOption':
         onMoveFilterOption(action.direction);
@@ -1966,6 +3092,18 @@ function KeyboardControls({
         break;
       case 'moveSelection':
         onMoveSelection(action.direction);
+        break;
+      case 'moveComposerCursor':
+        onMoveComposerCursor(action.direction);
+        break;
+      case 'moveComposerCursorTo':
+        onMoveComposerCursorTo(action.boundary);
+        break;
+      case 'moveComposerHorizontal':
+        onMoveComposerHorizontal(action.direction);
+        break;
+      case 'moveComposerLibrary':
+        onMoveComposerLibrary(action.direction);
         break;
       case 'moveSelectionTo':
         onMoveSelectionTo(action.boundary);
@@ -1979,11 +3117,26 @@ function KeyboardControls({
       case 'openDetailSearch':
         onOpenDetailSearch();
         break;
+      case 'openComposer':
+        onOpenComposer(action.mode);
+        break;
+      case 'openComposerBodyEditor':
+        onOpenComposerBodyEditor();
+        break;
+      case 'openComposerLibrary':
+        onOpenComposerLibrary();
+        break;
       case 'openHelp':
         onOpenHelp();
         break;
+      case 'previewComposerSend':
+        onPreviewComposerSend();
+        break;
       case 'quit':
         onQuit();
+        break;
+      case 'saveComposerRequest':
+        onSaveComposerRequest();
         break;
       case 'scrollDetails':
         onScrollDetails(action.direction);
@@ -1991,11 +3144,23 @@ function KeyboardControls({
       case 'scrollDetailsTo':
         onScrollDetailsTo(action.boundary);
         break;
+      case 'sendComposer':
+        onSendComposer();
+        break;
+      case 'selectComposerTab':
+        onSelectComposerTab(action.tab);
+        break;
       case 'stopRecording':
         onStopRecording();
         break;
       case 'toggleDetailTab':
         onToggleDetailTab();
+        break;
+      case 'toggleComposerField':
+        onToggleComposerField();
+        break;
+      case 'toggleComposerReveal':
+        onToggleComposerReveal();
         break;
       case 'toggleDetailNode':
         onToggleDetailNode();
@@ -2020,10 +3185,213 @@ function KeyboardControls({
   return null;
 }
 
+function clampComposerFocus(composer) {
+  const descriptors = getComposerFieldDescriptors(composer);
+
+  return {
+    ...composer,
+    focusIndex: Math.max(0, Math.min(descriptors.length - 1, composer.focusIndex))
+  };
+}
+
+function updateComposerDraftPath(composer, pathParts, updater) {
+  const currentValue = getPathValue(composer.draft, pathParts);
+  const nextValue = typeof updater === 'function' ? updater(currentValue) : updater;
+
+  return clampComposerFocus({
+    ...composer,
+    draft: setPathValue(composer.draft, pathParts, nextValue),
+    error: ''
+  });
+}
+
+function getFocusedTextDescriptor(composer) {
+  const descriptor = getFocusedComposerDescriptor(composer);
+
+  return descriptor?.kind === 'text' ? descriptor : null;
+}
+
+function insertComposerText(composer, value) {
+  const descriptor = getFocusedTextDescriptor(composer);
+
+  if (!descriptor) {
+    return composer;
+  }
+
+  const text = String(getPathValue(composer.draft, descriptor.path) ?? '');
+  const cursor = Math.max(0, Math.min(text.length, composer.cursor));
+  const nextText = `${text.slice(0, cursor)}${value}${text.slice(cursor)}`;
+
+  return {
+    ...updateComposerDraftPath(composer, descriptor.path, nextText),
+    cursor: cursor + value.length
+  };
+}
+
+function backspaceComposerText(composer) {
+  const descriptor = getFocusedTextDescriptor(composer);
+
+  if (!descriptor) {
+    return composer;
+  }
+
+  const text = String(getPathValue(composer.draft, descriptor.path) ?? '');
+  const cursor = Math.max(0, Math.min(text.length, composer.cursor));
+
+  if (cursor === 0) {
+    return composer;
+  }
+
+  return {
+    ...updateComposerDraftPath(composer, descriptor.path, `${text.slice(0, cursor - 1)}${text.slice(cursor)}`),
+    cursor: cursor - 1
+  };
+}
+
+function deleteComposerText(composer) {
+  const descriptor = getFocusedTextDescriptor(composer);
+
+  if (!descriptor) {
+    return composer;
+  }
+
+  const text = String(getPathValue(composer.draft, descriptor.path) ?? '');
+  const cursor = Math.max(0, Math.min(text.length, composer.cursor));
+
+  if (cursor >= text.length) {
+    return composer;
+  }
+
+  return updateComposerDraftPath(composer, descriptor.path, `${text.slice(0, cursor)}${text.slice(cursor + 1)}`);
+}
+
+function moveComposerCursor(composer, direction) {
+  const descriptor = getFocusedTextDescriptor(composer);
+
+  if (!descriptor) {
+    return composer;
+  }
+
+  const text = String(getPathValue(composer.draft, descriptor.path) ?? '');
+
+  return {
+    ...composer,
+    cursor: Math.max(0, Math.min(text.length, composer.cursor + direction))
+  };
+}
+
+function moveComposerCursorTo(composer, boundary) {
+  const descriptor = getFocusedTextDescriptor(composer);
+
+  if (!descriptor) {
+    return composer;
+  }
+
+  const text = String(getPathValue(composer.draft, descriptor.path) ?? '');
+
+  return {
+    ...composer,
+    cursor: boundary === 'end' ? text.length : 0
+  };
+}
+
+function cycleFocusedComposerOption(composer, direction) {
+  const descriptor = getFocusedComposerDescriptor(composer);
+
+  if (descriptor?.kind !== 'option') {
+    return moveComposerCursor(composer, direction);
+  }
+
+  return ensureComposerActiveTabRows(updateComposerDraftPath(composer, descriptor.path, (currentValue) => (
+    cycleValue(descriptor.options, currentValue, direction)
+  )));
+}
+
+function toggleFocusedComposerField(composer) {
+  const descriptor = getFocusedComposerDescriptor(composer);
+
+  if (descriptor?.kind !== 'toggle') {
+    return composer;
+  }
+
+  return updateComposerDraftPath(composer, descriptor.path, (currentValue) => !currentValue);
+}
+
+function getComposerTableForActiveTab(composer) {
+  return getComposerTableForTab(composer);
+}
+
+function addComposerRow(composer) {
+  const table = getComposerTableForActiveTab(composer);
+
+  if (!table) {
+    return composer;
+  }
+
+  const row = createComposerTableRow({
+    type: table === 'multipartFields' ? 'text' : undefined,
+    secret: table === 'cookies'
+  });
+  const rows = getPathValue(composer.draft, [table]) ?? [];
+  const nextComposer = {
+    ...composer,
+    draft: setPathValue(composer.draft, [table], [...rows, row]),
+    error: ''
+  };
+  const descriptors = getComposerFieldDescriptors(nextComposer);
+  const focusIndex = descriptors.findIndex((descriptor) => (
+    descriptor.table === table &&
+      descriptor.rowIndex === rows.length &&
+      descriptor.kind === 'text' &&
+      descriptor.label === 'key'
+  ));
+
+  return clampComposerFocus({
+    ...nextComposer,
+    cursor: 0,
+    focusIndex: focusIndex === -1 ? getComposerFieldDescriptors(composer).length : focusIndex
+  });
+}
+
+function deleteComposerRow(composer) {
+  const descriptor = getFocusedComposerDescriptor(composer);
+
+  if (!descriptor?.table || descriptor.rowIndex === undefined) {
+    return composer;
+  }
+
+  const rows = getPathValue(composer.draft, [descriptor.table]) ?? [];
+
+  return clampComposerFocus({
+    ...composer,
+    draft: setPathValue(composer.draft, [descriptor.table], rows.filter((_, index) => index !== descriptor.rowIndex)),
+    error: ''
+  });
+}
+
+function cycleComposerTab(composer, direction) {
+  return selectComposerTab(composer, cycleValue(COMPOSER_TABS, composer.activeTab, direction));
+}
+
+function moveComposerFocus(composer, direction) {
+  const descriptors = getComposerFieldDescriptors(composer);
+  const nextIndex = (composer.focusIndex + direction + descriptors.length) % descriptors.length;
+  const descriptor = descriptors[nextIndex];
+  const value = descriptor?.kind === 'text' ? String(getPathValue(composer.draft, descriptor.path) ?? '') : '';
+
+  return {
+    ...composer,
+    cursor: value.length,
+    focusIndex: nextIndex
+  };
+}
+
 export function App({
   stateStore,
   context = {},
   captureController = null,
+  manualRequestStore = null,
+  manualRequestSender = null,
   trafficRecorder = null,
   onQuit = () => {}
 }) {
@@ -2061,7 +3429,20 @@ export function App({
   const [detailMatchIndex, setDetailMatchIndex] = useState(0);
   const [collapsedDetailPaths, setCollapsedDetailPaths] = useState([]);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [manualLibrary, setManualLibrary] = useState(() => manualRequestStore?.getLibrary?.() ?? {
+    schemaVersion: 1,
+    requests: [],
+    environment: [],
+    warning: null
+  });
+  const [composer, setComposer] = useState(() => ({
+    ...createBlankComposerState({
+      environment: manualRequestStore?.getLibrary?.().environment ?? []
+    }),
+    isOpen: false
+  }));
   const isReplayMode = context.mode === 'replay';
+  const isLiveMode = context.mode === 'live';
   const showCookieValues = Boolean(context.showCookieValues);
   const proxyOrigin = getProxyOrigin(context.port ?? 8080);
   const publicTargetUrl = context.mode === 'live' ? context.targetUrl : null;
@@ -2219,6 +3600,151 @@ export function App({
     });
   };
 
+  const openComposer = (mode) => {
+    if (!isLiveMode) {
+      return;
+    }
+
+    setComposer(mode === 'clone' && selectedLog
+      ? createComposerStateFromLog(selectedLog, {
+        environment: manualLibrary.environment,
+        includeCookieHeaders: showCookieValues
+      })
+      : createBlankComposerState({ environment: manualLibrary.environment }));
+    setIsFilterOpen(false);
+    setIsDetailSearchOpen(false);
+    setIsDetailModalOpen(false);
+    setIsHelpOpen(false);
+  };
+
+  const openComposerLibrary = () => {
+    if (!isLiveMode) {
+      return;
+    }
+
+    setManualLibrary(manualRequestStore?.getLibrary?.() ?? manualLibrary);
+    setComposer((current) => ({
+      ...(current.isOpen ? current : createBlankComposerState({ environment: manualLibrary.environment })),
+      isConfirmOpen: false,
+      isLibraryOpen: true,
+      isOpen: true,
+      isSending: false,
+      libraryIndex: 0
+    }));
+    setIsFilterOpen(false);
+    setIsDetailSearchOpen(false);
+    setIsDetailModalOpen(false);
+    setIsHelpOpen(false);
+  };
+
+  const saveComposerRequest = () => {
+    if (!composer.isOpen) {
+      return;
+    }
+
+    const draft = normalizeManualRequestDraft({
+      ...composer.draft,
+      collection: composer.draft.collection || 'Default',
+      name: composer.draft.name || `${composer.draft.method} ${composer.draft.url}`
+    });
+
+    try {
+      const nextLibrary = manualRequestStore?.saveDraft?.(draft, {
+        environment: composer.draft.environment
+      }) ?? {
+        ...manualLibrary,
+        environment: composer.draft.environment,
+        requests: [
+          ...manualLibrary.requests.filter((request) => request.id !== draft.id),
+          {
+            ...draft,
+            updatedAt: new Date().toISOString()
+          }
+        ],
+        warning: null
+      };
+
+      setManualLibrary(nextLibrary);
+      setComposer((current) => ({
+        ...current,
+        draft,
+        error: '',
+        status: `saved ${draft.name || draft.url}`
+      }));
+    } catch (error) {
+      setComposer((current) => ({
+        ...current,
+        error: error?.message ?? String(error)
+      }));
+    }
+  };
+
+  const loadComposerLibraryRequest = () => {
+    const requests = flattenRequestLibrary(manualLibrary);
+    const selectedRequest = requests[Math.max(0, Math.min(requests.length - 1, composer.libraryIndex))];
+
+    if (!selectedRequest) {
+      return;
+    }
+
+    setComposer(() => {
+      const draft = normalizeManualRequestDraft({
+        ...selectedRequest,
+        environment: manualLibrary.environment
+      });
+
+      return ensureComposerActiveTabRows({
+        ...createBlankComposerState({ environment: manualLibrary.environment }),
+        cursor: draft.url.length,
+        draft,
+        isLibraryOpen: false,
+        source: 'library'
+      });
+    });
+  };
+
+  const sendComposer = () => {
+    if (!composer.isOpen || composer.isSending || !isLiveMode || typeof manualRequestSender !== 'function') {
+      return;
+    }
+
+    setComposer((current) => ({
+      ...current,
+      error: '',
+      isConfirmOpen: false,
+      isSending: true
+    }));
+
+    Promise.resolve()
+      .then(() => manualRequestSender(composer.draft))
+      .then((logEntry) => {
+        const addedLog = stateStore.addLog(logEntry);
+
+        clearFilters();
+        setSelectedLogId(addedLog.id);
+        setInspectedLogId(addedLog.id);
+        setIsFollowingLatest(false);
+        setIsListFocused(false);
+        setDetailTab('response');
+        setDetailScrollOffset(0);
+        setFocusedDetailRow(0);
+        setComposer((current) => ({
+          ...current,
+          isConfirmOpen: false,
+          isOpen: false,
+          isSending: false
+        }));
+      })
+      .catch((error) => {
+        setComposer((current) => ({
+          ...current,
+          error: error?.message ?? String(error),
+          isConfirmOpen: false,
+          isSending: false
+        }));
+      });
+  };
+
   return h(
     Box,
     {
@@ -2235,8 +3761,16 @@ export function App({
         isDetailSearchOpen,
         isDetailModalOpen,
         isReplayMode,
+        isLiveMode,
+        isComposerOpen: composer.isOpen,
+        isComposerSending: composer.isSending,
+        isComposerConfirmOpen: composer.isConfirmOpen,
+        isComposerBodyEditorOpen: composer.isBodyEditorOpen,
+        isComposerLibraryOpen: composer.isLibraryOpen,
+        isComposerTextFocused: getFocusedComposerDescriptor(composer)?.kind === 'text',
         detailPageSize: activeDetailVisibleCount,
         trafficPageSize: trafficVisibleCount,
+        onAddComposerRow: () => setComposer(addComposerRow),
         onAppendDetailSearch: (value) => {
           setDetailSearchQuery((current) => `${current}${value}`);
           setDetailMatchIndex(0);
@@ -2249,6 +3783,7 @@ export function App({
           setDetailSearchQuery((current) => current.slice(0, -1));
           setDetailMatchIndex(0);
         },
+        onBackspaceComposerText: () => setComposer(backspaceComposerText),
         onBackspaceSearch: () => {
           setSearchQuery((current) => current.slice(0, -1));
           setIsFollowingLatest(false);
@@ -2263,7 +3798,39 @@ export function App({
           setFocusedDetailRow(0);
         },
         onCloseDetailModal: () => setIsDetailModalOpen(false),
+        onCloseComposer: () => {
+          setComposer((current) => ({
+            ...current,
+            isBodyEditorOpen: false,
+            isConfirmOpen: false,
+            isLibraryOpen: false,
+            isOpen: false,
+            isSending: false
+          }));
+        },
+        onCloseComposerBodyEditor: () => {
+          setComposer((current) => ({
+            ...current,
+            isBodyEditorOpen: false
+          }));
+        },
+        onCloseComposerLibrary: () => {
+          setComposer((current) => ({
+            ...current,
+            isLibraryOpen: false
+          }));
+        },
+        onCloseComposerPreview: () => {
+          setComposer((current) => ({
+            ...current,
+            isConfirmOpen: false
+          }));
+        },
         onCloseHelp: () => setIsHelpOpen(false),
+        onCycleComposerFocus: (direction) => setComposer((current) => moveComposerFocus(current, direction)),
+        onCycleComposerTab: (direction) => setComposer((current) => cycleComposerTab(current, direction)),
+        onDeleteComposerRow: () => setComposer(deleteComposerRow),
+        onDeleteComposerText: () => setComposer(deleteComposerText),
         onCycleFilterFocus: (direction) => {
           setFilterFocus((current) => cycleValue(FILTER_FOCUS_ORDER, current, direction));
           setIsFollowingLatest(false);
@@ -2271,6 +3838,8 @@ export function App({
         onFinishDetailSearch: () => setIsDetailSearchOpen(false),
         onFinishSearch: () => setIsFilterOpen(false),
         onQuit,
+        onInsertComposerText: (value) => setComposer((current) => insertComposerText(current, value)),
+        onLoadComposerLibraryRequest: loadComposerLibraryRequest,
         onToggleFocus: () => setIsListFocused((current) => !current),
         onMoveFilterOption: (direction) => {
           if (filterFocus === 'field') {
@@ -2286,6 +3855,20 @@ export function App({
           }
 
           setIsFollowingLatest(false);
+        },
+        onMoveComposerCursor: (direction) => setComposer((current) => moveComposerCursor(current, direction)),
+        onMoveComposerCursorTo: (boundary) => setComposer((current) => moveComposerCursorTo(current, boundary)),
+        onMoveComposerHorizontal: (direction) => setComposer((current) => cycleFocusedComposerOption(current, direction)),
+        onMoveComposerLibrary: (direction) => {
+          setComposer((current) => {
+            const requests = flattenRequestLibrary(manualLibrary);
+            const maxIndex = Math.max(0, requests.length - 1);
+
+            return {
+              ...current,
+              libraryIndex: Math.max(0, Math.min(maxIndex, current.libraryIndex + direction))
+            };
+          });
         },
         onMoveDetailMatch: moveDetailMatch,
         onMoveSelection: (direction) => {
@@ -2314,7 +3897,35 @@ export function App({
           setIsFilterOpen(false);
           setIsListFocused(false);
         },
+        onOpenComposer: openComposer,
+        onOpenComposerBodyEditor: () => {
+          setComposer((current) => {
+            const descriptor = getFocusedComposerDescriptor(current);
+
+            if (current.activeTab !== 'body' || descriptor?.kind !== 'text') {
+              return current;
+            }
+
+            return {
+              ...current,
+              cursor: String(getPathValue(current.draft, descriptor.path) ?? '').length,
+              isBodyEditorOpen: true
+            };
+          });
+        },
+        onOpenComposerLibrary: openComposerLibrary,
         onOpenHelp: () => setIsHelpOpen(true),
+        onPreviewComposerSend: () => {
+          setComposer((current) => ({
+            ...current,
+            error: '',
+            isBodyEditorOpen: false,
+            isConfirmOpen: true,
+            isLibraryOpen: false
+          }));
+        },
+        onSaveComposerRequest: saveComposerRequest,
+        onSelectComposerTab: (tab) => setComposer((current) => selectComposerTab(current, tab)),
         onScrollDetails: (direction) => {
           moveDetailFocus(direction);
         },
@@ -2322,6 +3933,7 @@ export function App({
           const rowIndex = boundary === 'bottom' ? Math.max(0, detailRows.length - 1) : 0;
           focusDetailRowAt(rowIndex);
         },
+        onSendComposer: sendComposer,
         onStopRecording: () => {
           const result = trafficRecorder?.stopRecording?.();
 
@@ -2365,6 +3977,13 @@ export function App({
         onToggleDetailTab: () => {
           setDetailTab((current) => cycleValue(DETAIL_TABS, current));
         },
+        onToggleComposerField: () => setComposer(toggleFocusedComposerField),
+        onToggleComposerReveal: () => {
+          setComposer((current) => ({
+            ...current,
+            revealSecrets: !current.revealSecrets
+          }));
+        },
         onToggleDetailNode: toggleFocusedDetailNode,
         onTogglePause: () => {
           setIsPaused((current) => {
@@ -2391,7 +4010,13 @@ export function App({
       { flexDirection: 'row', flexGrow: 1 },
       isHelpOpen
         ? h(HelpModal)
-        : (isDetailModalOpen
+        : (composer.isOpen
+          ? h(RequestComposerPanel, {
+            composer,
+            library: manualLibrary,
+            targetUrl: context.targetUrl
+          })
+          : (isDetailModalOpen
           ? h(DetailModal, {
             activeMatchIndex: detailMatchIndex,
             detailTab,
@@ -2429,10 +4054,10 @@ export function App({
             matchCount: detailMatches.length,
             activeMatchIndex: detailMatchIndex
           })
-        ])
+        ]))
     ),
     isFilterOpen
-      ? h(FilterBar, {
+        ? h(FilterBar, {
         filterFocus,
         logsCount: logs.length,
         methodFilters,
@@ -2443,13 +4068,16 @@ export function App({
         statusOptionIndex,
         visibleCount: filteredLogs.length
       })
-      : (isDetailSearchOpen
-        ? h(DetailSearchBar, {
+        : (isDetailSearchOpen
+          ? h(DetailSearchBar, {
           activeMatchIndex: detailMatchIndex,
           matchCount: detailMatches.length,
           query: detailSearchQuery
         })
-        : h(Footer, {
+          : h(Footer, {
+          isComposerConfirmOpen: composer.isConfirmOpen,
+          isComposerOpen: composer.isOpen,
+          isComposerTextFocused: getFocusedComposerDescriptor(composer)?.kind === 'text',
           isDetailModalOpen,
           isDetailSearchActive: detailSearchQuery.trim().length > 0,
           isHelpOpen,

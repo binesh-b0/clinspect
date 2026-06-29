@@ -250,6 +250,127 @@ test('startInspector wires full recording to StateStore add events and shutdown'
   ]);
 });
 
+test('startInspector passes a manual request sender whose logs can be recorded', async () => {
+  const { startInspector } = await import('../src/index.js');
+  const calls = [];
+  const stateStore = new StateStore();
+  const manualLog = {
+    id: 'manual-one',
+    method: 'POST',
+    path: '/manual',
+    statusCode: 202,
+    responseTimeMs: 12,
+    request: {
+      headers: { accept: '*/*' },
+      body: 'payload'
+    },
+    response: {
+      headers: { 'content-type': 'text/plain' },
+      body: 'accepted'
+    }
+  };
+  const manualRequestSender = async (request) => {
+    calls.push(['manual', request.method, request.path, request.body]);
+
+    return manualLog;
+  };
+  const recorder = {
+    getStatus() {
+      return {
+        mode: 'full',
+        path: './capture.ndjson',
+        state: 'recording',
+        error: null
+      };
+    },
+    recordCapture(log) {
+      calls.push(['record', log.id]);
+    },
+    recordInteraction() {},
+    stop() {
+      calls.push(['recorder-stop']);
+    }
+  };
+  let appManualRequestSender = null;
+  let appManualRequestStore = null;
+  const manualRequestStore = {
+    getLibrary() {
+      return {
+        schemaVersion: 1,
+        requests: [],
+        environment: [],
+        warning: null
+      };
+    }
+  };
+  const inspector = startInspector(
+    {
+      mode: 'live',
+      bodyLimit: 123,
+      openBrowser: false,
+      port: 8080,
+      recording: {
+        mode: 'full',
+        path: './capture.ndjson'
+      },
+      targetUrl: 'http://localhost:3000/'
+    },
+    {
+      stateStore,
+      stdout: createSilentStdout(),
+      manualRequestSender,
+      manualRequestStore,
+      recorder,
+      renderApp: (node) => {
+        appManualRequestSender = node.props.manualRequestSender;
+        appManualRequestStore = node.props.manualRequestStore;
+        calls.push(['render', node.props.context.mode, typeof node.props.manualRequestSender, typeof node.props.manualRequestStore]);
+
+        return {
+          unmount() {
+            calls.push(['unmount']);
+          }
+        };
+      },
+      startLiveProxy: () => ({
+        stop() {
+          calls.push(['engine-stop']);
+        }
+      }),
+      exitProcess: (code) => {
+        calls.push(['exit', code]);
+      }
+    }
+  );
+
+  const sentLog = await appManualRequestSender({
+    body: 'payload',
+    method: 'POST',
+    path: '/manual'
+  });
+
+  stateStore.addLog(sentLog);
+
+  assert.equal(appManualRequestStore, manualRequestStore);
+  assert.deepEqual(calls, [
+    ['render', 'live', 'function', 'object'],
+    ['manual', 'POST', '/manual', 'payload'],
+    ['record', 'manual-one']
+  ]);
+
+  await inspector.stop();
+
+  assert.deepEqual(calls, [
+    ['render', 'live', 'function', 'object'],
+    ['manual', 'POST', '/manual', 'payload'],
+    ['record', 'manual-one'],
+    ['unmount'],
+    ['engine-stop'],
+    ['recorder-stop'],
+    ['exit', 0]
+  ]);
+});
+
 test('startInspector passes partial recorder into App without full capture subscription', async () => {
   const { startInspector } = await import('../src/index.js');
   const calls = [];

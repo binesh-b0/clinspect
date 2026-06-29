@@ -52,6 +52,8 @@ clinspect --target http://localhost:3000 --port 8080
 
 Then send traffic to `http://localhost:8080`; requests are forwarded to the target and captured in the terminal UI.
 
+In live mode, press `n` in the traffic pane to compose a new request, `e` to clone the selected request, or `l` to open saved requests. Inside the composer, use `1`-`7` to jump between Params, Headers, Body, Auth, Cookies, Env, and Save; `enter` previews the request, then `enter` or `y` confirms the send. The composer supports target-relative paths, absolute `http(s)` URLs, params, headers, auth, cookies, environment variables like `{{token}}`, raw/JSON/form/multipart bodies, and local file-path uploads. Saved requests and environment rows are stored in `./.clinspect/requests.json`.
+
 Inspect a public website the same way:
 
 ```sh
@@ -119,6 +121,7 @@ Current MVP behavior:
 - labels non-loopback live targets as public targets
 - can open the local proxy URL automatically for public targets with `--open`
 - forwards live HTTP requests to the upstream target
+- can create and send live requests from the TUI with `n`, clone selected requests with `e`, and reopen saved requests with `l`
 - requests uncompressed upstream responses by default, with `--preserve-encoding` for exact `Accept-Encoding` forwarding
 - rewrites target redirects back to the local proxy origin where possible
 - captures request/response headers, status, timing, and capped text bodies with a configurable `--body-limit`
@@ -126,7 +129,7 @@ Current MVP behavior:
 - shows a traffic list and selected payload details with structured, color-coded JSON response trees
 - opens a full-screen detail inspector with `o`, closes it with `esc` or `q`, and supports request/response tab switching with `r`
 - supports detail search with `/` when details are focused, including plain text, `/regex/`, JSON path/value matches, and `n`/`N` match navigation
-- supports up/down inspection, stable held selection, `f` follow-latest mode, tab focus toggle, detail scrolling, tree expand/collapse with `enter`, capture pause/resume with `p`, recording start/pause/resume with `P`, recording stop with `S`, clear logs, `q` quit, and Ctrl-C cleanup
+- supports up/down inspection, stable held selection, `f` follow-latest mode, tab focus toggle, detail scrolling, tree expand/collapse with `enter`, request composition with `n`/`e`/`l`, capture pause/resume with `p`, recording start/pause/resume with `P`, recording stop with `S`, clear logs, `q` quit, and Ctrl-C cleanup
 - opens a bottom traffic filter panel with `/` when the traffic list is focused, supports multi-select method/status options, and searches all, path, status, method, time, host, port, headers, or body
 - supports quick filter controls: `m` opens method filters, `s` opens status filters, `space` toggles options, and `x` clears active filters
 - supports opt-in NDJSON disk recording for all captured traffic or only inspected entries

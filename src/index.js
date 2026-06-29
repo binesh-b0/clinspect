@@ -11,6 +11,8 @@ import {
   isHelpRequested
 } from './cli/options.js';
 import { openUrl } from './browser.js';
+import { sendManualRequest } from './engine/manual-request.js';
+import { createManualRequestStore } from './engine/manual-request-store.js';
 import { startLiveProxy, startMockTrafficFeed } from './engine/proxy.js';
 import { createSessionStats, formatExitSummary } from './exit-summary.js';
 import { DEFAULT_BODY_LIMIT, DEFAULT_MAX_ENTRIES, StateStore } from './store/state.js';
@@ -98,6 +100,16 @@ export function startInspector(options, runtime = {}) {
   const renderApp = runtime.renderApp ?? render;
   const startDemoFeed = runtime.startDemoFeed ?? runtime.startFeed ?? startMockTrafficFeed;
   const startProxy = runtime.startLiveProxy ?? startLiveProxy;
+  const manualRequestStore = runtime.manualRequestStore ?? createManualRequestStore({
+    path: runtime.manualRequestStorePath
+  });
+  const manualRequestSender = runtime.manualRequestSender ?? ((request) => sendManualRequest(request, {
+    bodyLimit,
+    fetchImpl: runtime.fetchImpl,
+    fileReader: runtime.fileReader,
+    now,
+    targetUrl: options.targetUrl
+  }));
   const exitProcess = runtime.exitProcess ?? process.exit;
   const openBrowserUrl = runtime.openUrl ?? openUrl;
   const captureController = runtime.captureController ?? createCaptureController();
@@ -235,6 +247,8 @@ export function startInspector(options, runtime = {}) {
         stateStore,
         context: appContext,
         captureController,
+        manualRequestStore,
+        manualRequestSender,
         trafficRecorder,
         onQuit: () => shutdown(0)
       }),
