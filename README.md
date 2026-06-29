@@ -60,12 +60,19 @@ clinspect --target https://www.example.com --port 8080
 
 Open `http://localhost:8080`, not the public URL directly. Non-loopback targets are labeled as public in the header, and upstream redirects from that target are rewritten back to the local proxy origin where possible.
 
+To open the local proxy URL automatically for a public target:
+
+```sh
+clinspect --target https://www.example.com --port 8080 --open
+```
+
 Current MVP behavior:
 
 - starts an Ink terminal UI
 - defaults to mock/demo traffic when `--target` is omitted
 - starts live reverse proxy mode when `--target` is provided
 - labels non-loopback live targets as public targets
+- can open the local proxy URL automatically for public targets with `--open`
 - forwards live HTTP requests to the upstream target
 - rewrites target redirects back to the local proxy origin where possible
 - captures request/response headers, status, timing, and capped text bodies

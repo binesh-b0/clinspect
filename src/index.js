@@ -9,8 +9,10 @@ import {
   getCliHelpText,
   isHelpRequested
 } from './cli/options.js';
+import { openUrl } from './browser.js';
 import { startLiveProxy, startMockTrafficFeed } from './engine/proxy.js';
 import { DEFAULT_BODY_LIMIT, StateStore } from './store/state.js';
+import { getProxyOrigin, isPublicTargetUrl } from './target.js';
 import { App } from './ui/App.js';
 
 const h = React.createElement;
@@ -43,12 +45,21 @@ function isDirectExecution() {
   return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 }
 
+export function shouldOpenProxyUrl(options = {}) {
+  return Boolean(
+    options.openBrowser &&
+    options.mode === 'live' &&
+    isPublicTargetUrl(options.targetUrl)
+  );
+}
+
 export function startInspector(options, runtime = {}) {
   const stateStore = runtime.stateStore ?? new StateStore({ bodyLimit: DEFAULT_BODY_LIMIT });
   const renderApp = runtime.renderApp ?? render;
   const startDemoFeed = runtime.startDemoFeed ?? runtime.startFeed ?? startMockTrafficFeed;
   const startProxy = runtime.startLiveProxy ?? startLiveProxy;
   const exitProcess = runtime.exitProcess ?? process.exit;
+  const openBrowserUrl = runtime.openUrl ?? openUrl;
   const captureController = runtime.captureController ?? createCaptureController();
   const engine = options.mode === 'live'
     ? startProxy(stateStore, {
@@ -92,6 +103,18 @@ export function startInspector(options, runtime = {}) {
 
   process.once('SIGINT', handleSignal);
   process.once('SIGTERM', handleSignal);
+
+  if (shouldOpenProxyUrl(options)) {
+    Promise.resolve(engine.ready)
+      .then(() => {
+        if (!stopped) {
+          openBrowserUrl(getProxyOrigin(options.port));
+        }
+      })
+      .catch((error) => {
+        process.stderr.write(`${chalk.yellow(`Warning: could not open browser: ${formatCliError(error)}`)}\n`);
+      });
+  }
 
   inkInstance = renderApp(
     h(App, {

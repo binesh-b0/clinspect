@@ -31,7 +31,8 @@ export function createProgram() {
     .name('clinspect')
     .description('Terminal HTTP traffic inspector')
     .option('-p, --port <number>', 'local proxy port for live mode', parsePort, DEFAULT_PORT)
-    .option('-t, --target <url>', 'upstream target URL for live proxy mode', parseTargetUrl);
+    .option('-t, --target <url>', 'upstream target URL for live proxy mode', parseTargetUrl)
+    .option('--open', 'open the local proxy URL in a browser for public live targets');
 }
 
 export function isHelpRequested(argv = process.argv) {
@@ -60,6 +61,7 @@ export function parseCliOptions(argv = process.argv) {
 
   return {
     mode: targetUrl ? 'live' : 'demo',
+    openBrowser: Boolean(options.open),
     port: options.port,
     targetUrl
   };

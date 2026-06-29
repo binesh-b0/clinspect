@@ -34,6 +34,7 @@ test('parseTargetUrl rejects missing or unsupported URLs', () => {
 test('parseCliOptions defaults to demo mode without a target', () => {
   assert.deepEqual(parseCliOptions(['node', 'clinspect']), {
     mode: 'demo',
+    openBrowser: false,
     port: DEFAULT_PORT,
     targetUrl: null
   });
@@ -49,8 +50,24 @@ test('parseCliOptions uses live mode when a target is provided', () => {
     '9090'
   ]), {
     mode: 'live',
+    openBrowser: false,
     port: 9090,
     targetUrl: 'http://localhost:5173/'
+  });
+});
+
+test('parseCliOptions enables browser open flag', () => {
+  assert.deepEqual(parseCliOptions([
+    'node',
+    'clinspect',
+    '--target',
+    'https://example.com',
+    '--open'
+  ]), {
+    mode: 'live',
+    openBrowser: true,
+    port: DEFAULT_PORT,
+    targetUrl: 'https://example.com/'
   });
 });
 
@@ -64,4 +81,5 @@ test('help helpers detect help requests and expose command help', () => {
   assert.match(helpText, /Usage: clinspect/);
   assert.match(helpText, /--target <url>/);
   assert.match(helpText, /--port <number>/);
+  assert.match(helpText, /--open/);
 });
