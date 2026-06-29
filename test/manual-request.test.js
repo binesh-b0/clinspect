@@ -5,6 +5,8 @@ import test from 'node:test';
 import {
   buildManualFetchRequest,
   createManualRequestDraft,
+  createManualRequestDraftFromLog,
+  normalizeManualResendMetadata,
   normalizeManualRequestPath,
   parseManualRequestHeaders,
   resolveManualRequestUrl,
@@ -63,6 +65,169 @@ test('manual request helpers normalize paths and reject unsupported inputs', () 
   );
   assert.throws(() => parseManualRequestHeaders('not a header'), /invalid header/);
   assert.throws(() => parseManualRequestHeaders('Host: example.test'), /managed by the client/);
+  assert.throws(() => parseManualRequestHeaders('Accept-Encoding: gzip'), /managed by the client/);
+});
+
+test('captured request to draft preserves resend-safe request fields', () => {
+  const plan = createManualRequestDraftFromLog({
+    id: 'source-1',
+    method: 'POST',
+    path: '/api/sessions?existing=1',
+    request: {
+      headers: {
+        accept: 'application/json',
+        'accept-encoding': 'gzip, br',
+        authorization: 'Bearer token',
+        'content-length': '15',
+        'content-type': 'application/json',
+        cookie: 'session=secret; theme=dark',
+        host: 'example.test',
+        'x-trace': 'abc'
+      },
+      body: '{"email":"demo"}'
+    }
+  }, {
+    action: 'resend',
+    environment: [{ key: 'baseUrl', value: 'http://example.test' }]
+  });
+
+  assert.equal(plan.draft.method, 'POST');
+  assert.equal(plan.draft.url, '/api/sessions?existing=1');
+  assert.equal(plan.draft.body.mode, 'json');
+  assert.equal(plan.draft.body.json, '{"email":"demo"}');
+  assert.deepEqual(plan.draft.headers.map((row) => [row.key, row.value, row.secret]), [
+    ['accept', 'application/json', false],
+    ['authorization', 'Bearer token', true],
+    ['content-type', 'application/json', false],
+    ['x-trace', 'abc', false]
+  ]);
+  assert.deepEqual(plan.draft.cookies.map((row) => [row.enabled, row.key, row.value, row.secret]), [
+    [true, 'session', 'secret', true],
+    [true, 'theme', 'dark', true]
+  ]);
+  assert.deepEqual(plan.draft.environment.map((row) => [row.key, row.value]), [
+    ['baseUrl', 'http://example.test']
+  ]);
+  assert.equal(plan.resend.action, 'resend');
+  assert.equal(plan.resend.sourceLogId, 'source-1');
+  assert.equal(plan.resend.sourceMethod, 'POST');
+  assert.equal(plan.resend.sourcePath, '/api/sessions?existing=1');
+  assert.equal(plan.requiresConfirmation, true);
+  assert.deepEqual(plan.blockers, []);
+  assert.ok(plan.warnings.some((warning) => warning.includes('cookies included')));
+  assert.ok(plan.warnings.some((warning) => warning.includes('auth-like header')));
+});
+
+test('captured request to draft infers form and sniffed JSON bodies', () => {
+  const formPlan = createManualRequestDraftFromLog({
+    method: 'POST',
+    path: '/login',
+    request: {
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded'
+      },
+      body: 'email=demo%40example.com&remember=true'
+    }
+  });
+
+  assert.equal(formPlan.draft.body.mode, 'form-urlencoded');
+  assert.deepEqual(formPlan.draft.formFields.map((row) => [row.key, row.value]), [
+    ['email', 'demo@example.com'],
+    ['remember', 'true']
+  ]);
+
+  const sniffedJsonPlan = createManualRequestDraftFromLog({
+    method: 'PATCH',
+    path: '/profile',
+    request: {
+      headers: {
+        'content-type': 'text/plain'
+      },
+      body: '{"name":"Ada"}'
+    }
+  });
+
+  assert.equal(sniffedJsonPlan.draft.body.mode, 'json');
+  assert.equal(sniffedJsonPlan.draft.body.json, '{"name":"Ada"}');
+});
+
+test('captured safe GET resend does not require confirmation', () => {
+  const plan = createManualRequestDraftFromLog({
+    id: 'source-get',
+    method: 'GET',
+    path: '/food',
+    request: {
+      headers: {
+        'accept-encoding': 'gzip, br',
+        host: 'example.test'
+      },
+      body: ''
+    }
+  }, { action: 'resend' });
+
+  assert.equal(plan.draft.method, 'GET');
+  assert.equal(plan.draft.headers.length, 0);
+  assert.equal(plan.requiresConfirmation, false);
+  assert.deepEqual(plan.blockers, []);
+  assert.deepEqual(plan.warnings, []);
+});
+
+test('captured request to draft blocks unsafe exact resend cases', () => {
+  const redacted = createManualRequestDraftFromLog({
+    id: 'source-2',
+    method: 'GET',
+    path: '/account',
+    request: {
+      headers: {
+        cookie: 'session=<redacted>'
+      },
+      body: ''
+    }
+  }, { action: 'resend' });
+
+  assert.equal(redacted.draft.cookies[0].enabled, false);
+  assert.ok(redacted.blockers.some((warning) => warning.includes('redacted')));
+  assert.equal(redacted.requiresConfirmation, true);
+
+  const truncated = createManualRequestDraftFromLog({
+    id: 'source-3',
+    method: 'POST',
+    path: '/upload',
+    request: {
+      headers: {},
+      body: 'partial',
+      truncated: true
+    }
+  }, { action: 'resend' });
+
+  assert.ok(truncated.blockers.some((warning) => warning.includes('truncated')));
+
+  const getWithBody = createManualRequestDraftFromLog({
+    id: 'source-4',
+    method: 'GET',
+    path: '/search',
+    request: {
+      headers: {},
+      body: 'q=demo'
+    }
+  }, { action: 'resend' });
+
+  assert.ok(getWithBody.blockers.some((warning) => warning.includes('GET request has a captured body')));
+});
+
+test('manual resend metadata is sanitized', () => {
+  assert.deepEqual(normalizeManualResendMetadata({
+    action: 'edit-resend',
+    sourceLogId: 123,
+    sourceMethod: 'post',
+    sourcePath: '/api'
+  }), {
+    action: 'edit-resend',
+    sourceLogId: '123',
+    sourceMethod: 'POST',
+    sourcePath: '/api'
+  });
+  assert.equal(normalizeManualResendMetadata({ action: 'clone' }), null);
 });
 
 test('buildManualFetchRequest supports absolute URLs, params, cookies, auth, and variables', async () => {
@@ -197,6 +362,12 @@ test('sendManualRequest sends a request and returns a traffic log entry', async 
       method: 'POST',
       now,
       path: 'api/send?x=1',
+      resend: {
+        action: 'edit-resend',
+        sourceLogId: 'source-1',
+        sourceMethod: 'post',
+        sourcePath: '/api/original'
+      },
       targetUrl: upstream.url
     });
 
@@ -210,6 +381,12 @@ test('sendManualRequest sends a request and returns a traffic log entry', async 
     assert.equal(log.request.headers['Content-Type'], 'application/json');
     assert.equal(log.request.headers['X-Manual-Request'], 'yes');
     assert.equal(log.request.body, 'hello');
+    assert.deepEqual(log.resend, {
+      action: 'edit-resend',
+      sourceLogId: 'source-1',
+      sourceMethod: 'POST',
+      sourcePath: '/api/original'
+    });
     assert.equal(log.response.headers['x-manual'], 'yes');
     assert.match(log.response.body, /"contentType":"application\/json"/);
     assert.match(log.response.body, /"header":"yes"/);

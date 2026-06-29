@@ -7,6 +7,8 @@ const BAD_GATEWAY_PREFIX = 'Bad Gateway: manual request failed.';
 const HEADER_SEPARATOR = ' | ';
 const VARIABLE_PATTERN = /\{\{\s*([A-Za-z_][A-Za-z0-9_.-]*)\s*\}\}/g;
 const HEADER_TOKEN_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const REDACTED_VALUE_PATTERN = /(?:<redacted>|\[redacted\]|\*\*\*|•••)/i;
+const AUTH_LIKE_HEADER_PATTERN = /^(?:authorization|proxy-authorization|x-api-key|api-key|x-auth-token)$/i;
 
 export const MANUAL_REQUEST_SCHEMA_VERSION = 1;
 export const MANUAL_REQUEST_BODY_MODES = ['none', 'raw', 'json', 'form-urlencoded', 'multipart'];
@@ -14,6 +16,7 @@ export const MANUAL_REQUEST_AUTH_MODES = ['none', 'bearer', 'basic', 'apiKey'];
 export const MANUAL_REQUEST_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
 const MANAGED_REQUEST_HEADERS = new Set([
+  'accept-encoding',
   'connection',
   'content-length',
   'host',
@@ -44,6 +47,31 @@ function normalizeMethod(method) {
 
 function asHeaderValue(value) {
   return Array.isArray(value) ? value.map((item) => String(item)).join(', ') : String(value ?? '');
+}
+
+function headerEntries(headers = {}) {
+  if (!headers || typeof headers !== 'object') {
+    return [];
+  }
+
+  return Object.entries(headers)
+    .filter(([, value]) => value !== undefined && value !== null)
+    .map(([name, value]) => [String(name), asHeaderValue(value)]);
+}
+
+function getHeaderValue(headers = {}, name) {
+  const normalizedName = String(name ?? '').toLowerCase();
+  const entry = headerEntries(headers).find(([headerName]) => headerName.toLowerCase() === normalizedName);
+
+  return entry?.[1] ?? '';
+}
+
+function isRequestCookieHeaderName(name) {
+  return String(name ?? '').trim().toLowerCase() === 'cookie';
+}
+
+function isRedactedValue(value) {
+  return REDACTED_VALUE_PATTERN.test(String(value ?? ''));
 }
 
 function assertManualHeaderName(name) {
@@ -203,6 +231,249 @@ export function normalizeManualRequestDraft(input = {}) {
 
 export function cloneManualRequestDraft(draft) {
   return normalizeManualRequestDraft(cloneDraft(draft));
+}
+
+function parseCapturedCookieRows(cookieValue = '', blockers) {
+  const rows = String(cookieValue ?? '')
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const separatorIndex = part.indexOf('=');
+      const value = separatorIndex === -1 ? '' : part.slice(separatorIndex + 1).trim();
+      const redacted = isRedactedValue(value);
+
+      if (redacted) {
+        blockers.add('cookie values are redacted; exact resend requires edit');
+      }
+
+      return createRow({
+        enabled: !redacted,
+        key: separatorIndex === -1 ? part : part.slice(0, separatorIndex).trim(),
+        value,
+        secret: true
+      });
+    });
+
+  return rows;
+}
+
+function isJsonContentType(contentType) {
+  const type = String(contentType ?? '').split(';', 1)[0].trim().toLowerCase();
+
+  return type === 'application/json' || type.endsWith('+json');
+}
+
+function isFormUrlEncodedContentType(contentType) {
+  return String(contentType ?? '').split(';', 1)[0].trim().toLowerCase() === 'application/x-www-form-urlencoded';
+}
+
+function isMultipartContentType(contentType) {
+  return String(contentType ?? '').split(';', 1)[0].trim().toLowerCase() === 'multipart/form-data';
+}
+
+function hasCapturedBody(log) {
+  return String(log?.request?.body ?? '').length > 0;
+}
+
+function inferCapturedBody(log, contentType, warnings) {
+  const body = String(log?.request?.body ?? '');
+
+  if (body.length === 0) {
+    return {
+      body: {
+        mode: 'none',
+        raw: '',
+        json: ''
+      },
+      formFields: [],
+      multipartFields: []
+    };
+  }
+
+  if (isJsonContentType(contentType)) {
+    try {
+      JSON.parse(body);
+
+      return {
+        body: {
+          mode: 'json',
+          raw: body,
+          json: body
+        },
+        formFields: [],
+        multipartFields: []
+      };
+    } catch (error) {
+      warnings.add(`captured JSON body is invalid; using raw body: ${error?.message ?? String(error)}`);
+    }
+  }
+
+  if (!isFormUrlEncodedContentType(contentType) && !isMultipartContentType(contentType)) {
+    const trimmedBody = body.trim();
+
+    if (trimmedBody.startsWith('{') || trimmedBody.startsWith('[')) {
+      try {
+        JSON.parse(body);
+
+        return {
+          body: {
+            mode: 'json',
+            raw: body,
+            json: body
+          },
+          formFields: [],
+          multipartFields: []
+        };
+      } catch {
+        // Keep raw mode when JSON sniffing fails.
+      }
+    }
+  }
+
+  if (isFormUrlEncodedContentType(contentType)) {
+    const searchParams = new URLSearchParams(body);
+    const formFields = Array.from(searchParams.entries()).map(([key, value]) => createRow({ key, value }));
+
+    if (formFields.length > 0) {
+      return {
+        body: {
+          mode: 'form-urlencoded',
+          raw: body,
+          json: body
+        },
+        formFields,
+        multipartFields: []
+      };
+    }
+
+    warnings.add('captured form body could not be parsed; using raw body');
+  }
+
+  if (isMultipartContentType(contentType)) {
+    warnings.add('multipart body is captured as raw text and may not replay byte-perfectly');
+  }
+
+  return {
+    body: {
+      mode: 'raw',
+      raw: body,
+      json: body
+    },
+    formFields: [],
+    multipartFields: []
+  };
+}
+
+function normalizeCapturedMethod(method) {
+  const normalized = normalizeMethod(method);
+
+  return MANUAL_REQUEST_METHODS.includes(normalized) ? normalized : 'GET';
+}
+
+export function normalizeManualResendMetadata(metadata = {}) {
+  const action = metadata?.action === 'edit-resend' ? 'edit-resend' : (metadata?.action === 'resend' ? 'resend' : null);
+
+  if (!action) {
+    return null;
+  }
+
+  return {
+    action,
+    sourceLogId: String(metadata.sourceLogId ?? ''),
+    sourceMethod: String(metadata.sourceMethod ?? '').toUpperCase(),
+    sourcePath: String(metadata.sourcePath ?? '')
+  };
+}
+
+export function createManualRequestDraftFromLog(log, options = {}) {
+  const warnings = new Set();
+  const blockers = new Set();
+  const requestHeaders = log?.request?.headers ?? {};
+  const headerRows = [];
+  const cookieRows = [];
+  const method = normalizeCapturedMethod(log?.method);
+  const url = String(log?.path || '/');
+
+  for (const [name, value] of headerEntries(requestHeaders)) {
+    if (isManagedManualRequestHeader(name)) {
+      continue;
+    }
+
+    if (isRequestCookieHeaderName(name)) {
+      const parsedCookies = parseCapturedCookieRows(value, blockers);
+
+      if (parsedCookies.length > 0) {
+        warnings.add('cookies included; review before resend');
+      }
+
+      cookieRows.push(...parsedCookies);
+      continue;
+    }
+
+    if (AUTH_LIKE_HEADER_PATTERN.test(name)) {
+      warnings.add(`auth-like header included: ${name}`);
+    }
+
+    headerRows.push(createRow({
+      key: name,
+      value,
+      secret: AUTH_LIKE_HEADER_PATTERN.test(name)
+    }));
+  }
+
+  const inferredBody = inferCapturedBody(log, getHeaderValue(requestHeaders, 'content-type'), warnings);
+
+  if (log?.request?.truncated) {
+    blockers.add('request body is truncated; exact resend requires edit');
+  }
+
+  if (['GET', 'HEAD'].includes(method) && hasCapturedBody(log)) {
+    blockers.add(`${method} request has a captured body; edit before sending`);
+  }
+
+  const draft = createManualRequestDraft({
+    body: inferredBody.body,
+    cookies: cookieRows,
+    environment: options.environment ?? [],
+    formFields: inferredBody.formFields,
+    headers: headerRows,
+    method,
+    multipartFields: inferredBody.multipartFields,
+    name: `${method} ${url}`,
+    url
+  });
+  const hasBody = hasCapturedBody(log);
+  const action = options.action === 'resend' ? 'resend' : 'edit-resend';
+  const metadata = normalizeManualResendMetadata({
+    action,
+    sourceLogId: log?.id,
+    sourceMethod: method,
+    sourcePath: url
+  });
+  const warningList = [...warnings];
+  const blockerList = [...blockers];
+  const requiresConfirmation = blockerList.length > 0 ||
+    hasBody ||
+    !['GET', 'HEAD'].includes(method) ||
+    cookieRows.length > 0 ||
+    headerRows.some((row) => AUTH_LIKE_HEADER_PATTERN.test(row.key)) ||
+    warningList.length > 0;
+
+  return {
+    blockers: blockerList,
+    draft,
+    requiresConfirmation,
+    resend: metadata,
+    summary: {
+      body: hasBody ? `${draft.body.mode} body (${String(log?.request?.body ?? '').length} chars)` : 'no body',
+      cookies: cookieRows.length,
+      headers: headerRows.length,
+      method,
+      path: url
+    },
+    warnings: warningList
+  };
 }
 
 export function parseManualRequestHeaders(headersValue = '') {
@@ -636,6 +907,7 @@ export async function sendManualRequest(input = {}, context = {}) {
   const fetchImpl = context.fetchImpl ?? input.fetchImpl ?? globalThis.fetch;
   const now = context.now ?? input.now ?? Date.now;
   const targetUrl = context.targetUrl ?? input.targetUrl;
+  const resend = normalizeManualResendMetadata(context.resend ?? input.resend);
   const startedAt = Number(now());
   const fetchRequest = await buildManualFetchRequest(input, {
     ...context,
@@ -658,6 +930,7 @@ export async function sendManualRequest(input = {}, context = {}) {
       path: fetchRequest.logPath,
       statusCode: response.status,
       responseTimeMs: Math.max(0, Number(now()) - startedAt),
+      ...(resend ? { resend } : {}),
       request: {
         headers: fetchRequest.logHeaders,
         body: requestBody.body,
@@ -681,6 +954,7 @@ export async function sendManualRequest(input = {}, context = {}) {
       path: fetchRequest.logPath,
       statusCode: 502,
       responseTimeMs: Math.max(0, Number(now()) - startedAt),
+      ...(resend ? { resend } : {}),
       request: {
         headers: fetchRequest.logHeaders,
         body: requestBody.body,

@@ -220,10 +220,22 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
   );
   assert.deepEqual(
     getKeyboardAction('e', {}, { isLiveMode: true }),
-    { type: 'openComposer', mode: 'clone' }
+    { type: 'openComposer', mode: 'edit-resend' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('E', {}, { isLiveMode: true }),
+    { type: 'openComposer', mode: 'edit-resend' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('R', {}, { isLiveMode: true }),
+    { type: 'startResend', mode: 'exact' }
   );
   assert.deepEqual(
     getKeyboardAction('e', {}, { isLiveMode: false }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('R', {}, { isLiveMode: false }),
     { type: 'none' }
   );
   assert.deepEqual(
@@ -363,6 +375,37 @@ test('keyboard action helper supports request composer input', () => {
   );
 });
 
+test('keyboard action helper supports resend confirmation input', () => {
+  assert.deepEqual(
+    getKeyboardAction('', { return: true }, { isResendConfirmOpen: true }),
+    { type: 'sendResend' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('y', {}, { isResendConfirmOpen: true }),
+    { type: 'sendResend' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('E', {}, { isResendConfirmOpen: true }),
+    { type: 'editPendingResend' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('e', {}, { isResendConfirmOpen: true }),
+    { type: 'editPendingResend' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { escape: true }, { isResendConfirmOpen: true }),
+    { type: 'cancelResend' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('n', {}, { isResendConfirmOpen: true }),
+    { type: 'cancelResend' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('y', {}, { isResendConfirmOpen: true, isResending: true }),
+    { type: 'none' }
+  );
+});
+
 test('keyboard action helper gates help modal and preserves filter query input', () => {
   assert.deepEqual(getKeyboardAction('h'), { type: 'openHelp' });
   assert.deepEqual(getKeyboardAction('?'), { type: 'none' });
@@ -422,6 +465,14 @@ test('keyboard action helper supports detail modal and detail search input', () 
     { type: 'scrollDetails', direction: 1 }
   );
   assert.deepEqual(
+    getKeyboardAction('R', {}, { isDetailModalOpen: true, isLiveMode: true }),
+    { type: 'startResend', mode: 'exact' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('E', {}, { isDetailModalOpen: true, isLiveMode: true }),
+    { type: 'openComposer', mode: 'edit-resend' }
+  );
+  assert.deepEqual(
     getKeyboardAction('a', {}, { isDetailSearchOpen: true }),
     { type: 'appendDetailSearch', value: 'a' }
   );
@@ -451,11 +502,11 @@ test('getRenderHeight keeps one terminal row free for Ink updates', () => {
 test('footer text shows mode-aware essential keymaps', () => {
   assert.equal(
     formatFooterText({ isListFocused: true }),
-    'j/k move  [/] page  enter inspect  y copy  D download  n new  tab details  P/S rec  h help  q quit'
+    'j/k move  [/] page  enter inspect  y copy  D download  n new  R resend  E edit  tab details  P/S rec  h help  q quit'
   );
   assert.equal(
     formatFooterText({ isListFocused: false }),
-    'j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  tab traffic  P/S rec  h help'
+    'j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  R resend  E edit  tab traffic  P/S rec  h help'
   );
   assert.equal(
     formatFooterText({ isComposerOpen: true }),
@@ -471,11 +522,11 @@ test('footer text shows mode-aware essential keymaps', () => {
   );
   assert.equal(
     formatFooterText({ isListFocused: false, isDetailSearchActive: true }),
-    'detail search active  / edit  n/N match  j/k scroll  enter collapse  o big  tab traffic  q quit'
+    'detail search active  / edit  n/N match  R resend  E edit  j/k scroll  enter collapse  o big  tab traffic  q quit'
   );
   assert.equal(
     formatFooterText({ isListFocused: false, isDetailSearchActive: true, isDetailModalOpen: true }),
-    'detail search active  / edit  n/N match  j/k scroll  enter collapse  esc/q close'
+    'detail search active  / edit  n/N match  R resend  E edit  j/k scroll  enter collapse  esc/q close'
   );
   assert.equal(
     formatFooterText({ isExportPromptOpen: true }),
@@ -483,7 +534,11 @@ test('footer text shows mode-aware essential keymaps', () => {
   );
   assert.equal(
     formatFooterText({ exportStatus: 'copied response body', isListFocused: false }),
-    'j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  tab traffic  P/S rec  h help | copied response body'
+    'j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  R resend  E edit  tab traffic  P/S rec  h help | copied response body'
+  );
+  assert.equal(
+    formatFooterText({ isListFocused: true, resendStatus: 'resent GET /food' }),
+    'j/k move  [/] page  enter inspect  y copy  D download  n new  R resend  E edit  tab details  P/S rec  h help  q quit | resent GET /food'
   );
   assert.equal(formatFooterText({ isHelpOpen: true }), 'help | esc/h/q close');
 });
@@ -513,7 +568,9 @@ test('help sections describe request composer keys', () => {
   const composeSection = HELP_SECTIONS.find((section) => section.title === 'Compose');
 
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'n'), ['n', 'new request']);
-  assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'e'), ['e', 'clone request']);
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'R'), ['R', 'exact resend']);
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'E'), ['E', 'edit and resend']);
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'e'), ['e', 'edit selected request']);
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'l'), ['l', 'saved requests']);
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === '1 params'), ['1 params', 'open params']);
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === '3 body'), ['3 body', 'open body']);
@@ -558,7 +615,11 @@ test('composer helpers create blank and cloned request state', () => {
     ['accept', 'application/json'],
     ['x-trace', 'abc']
   ]);
-  assert.equal(cloned.source, 'clone');
+  assert.deepEqual(cloned.draft.cookies.map((row) => [row.key, row.value, row.secret]), [
+    ['session', 'secret', true]
+  ]);
+  assert.equal(cloned.source, 'edit-resend');
+  assert.equal(cloned.resend.action, 'edit-resend');
 
   assert.equal(createComposerStateFromLog({
     method: 'GET',

@@ -58,8 +58,26 @@ function normalizePayload(payload = {}, bodyLimit = DEFAULT_BODY_LIMIT) {
   };
 }
 
+function normalizeResendMetadata(metadata = {}) {
+  const action = metadata?.action === 'resend' || metadata?.action === 'edit-resend'
+    ? metadata.action
+    : null;
+
+  if (!action) {
+    return null;
+  }
+
+  return {
+    action,
+    sourceLogId: String(metadata.sourceLogId ?? ''),
+    sourceMethod: String(metadata.sourceMethod ?? '').toUpperCase(),
+    sourcePath: String(metadata.sourcePath ?? '')
+  };
+}
+
 export function normalizeLogEntry(entry, options = {}) {
   const bodyLimit = options.bodyLimit ?? DEFAULT_BODY_LIMIT;
+  const resend = normalizeResendMetadata(entry.resend);
 
   return {
     id: String(entry.id),
@@ -68,6 +86,7 @@ export function normalizeLogEntry(entry, options = {}) {
     path: String(entry.path ?? '/'),
     statusCode: entry.statusCode ?? null,
     responseTimeMs: Number(entry.responseTimeMs ?? 0),
+    ...(resend ? { resend } : {}),
     request: normalizePayload(entry.request, bodyLimit),
     response: normalizePayload(entry.response, bodyLimit)
   };
@@ -76,6 +95,7 @@ export function normalizeLogEntry(entry, options = {}) {
 export function cloneLogEntry(entry) {
   return {
     ...entry,
+    ...(entry.resend ? { resend: { ...entry.resend } } : {}),
     request: {
       ...entry.request,
       headers: cloneHeaders(entry.request.headers)

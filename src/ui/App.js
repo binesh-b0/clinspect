@@ -5,10 +5,11 @@ import { Box, Text, useInput, useStdin } from 'ink';
 import { isCookieHeaderName, maskCookieHeaderValue } from '../cookies.js';
 import {
   createManualRequestDraft,
+  createManualRequestDraftFromLog,
   MANUAL_REQUEST_AUTH_MODES,
   MANUAL_REQUEST_BODY_MODES,
   MANUAL_REQUEST_METHODS,
-  isManagedManualRequestHeader,
+  normalizeManualResendMetadata,
   normalizeManualRequestDraft
 } from '../engine/manual-request.js';
 import {
@@ -45,6 +46,7 @@ const ROOT_PADDING_X = 1;
 const TRAFFIC_LIST_WIDTH = 50;
 const BODY_LINE_MAX_LENGTH = 120;
 const DETAIL_SEARCH_BAR_HEIGHT = 5;
+const RESEND_CONFIRM_BAR_HEIGHT = 6;
 const TEXTUAL_CONTENT_TYPE_PATTERNS = [
   /^text\//,
   /(?:^|[+/.-])json$/,
@@ -1848,72 +1850,32 @@ export function createBlankComposerState(options = {}) {
     isSending: false,
     libraryIndex: 0,
     revealSecrets: false,
-    source: 'new'
+    resend: null,
+    source: 'new',
+    status: '',
+    warnings: []
   };
 
   return ensureComposerActiveTabRows(composer);
 }
 
-function parseCookieRows(cookieValue = '') {
-  return String(cookieValue)
-    .split(';')
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((part) => {
-      const separatorIndex = part.indexOf('=');
-
-      return createComposerTableRow({
-        key: separatorIndex === -1 ? part : part.slice(0, separatorIndex).trim(),
-        value: separatorIndex === -1 ? '' : part.slice(separatorIndex + 1).trim(),
-        secret: true
-      });
-    });
-}
-
 export function createComposerStateFromLog(log, options = {}) {
-  const includeCookieHeaders = Boolean(options.includeCookieHeaders);
-  const headers = [];
-  const cookies = [];
-  const url = String(log?.path || '/');
-
-  for (const [name, value] of Object.entries(log?.request?.headers ?? {})) {
-    if (isManagedManualRequestHeader(name)) {
-      continue;
-    }
-
-    if (isCookieHeaderName(name)) {
-      if (includeCookieHeaders) {
-        cookies.push(...parseCookieRows(value));
-      }
-
-      continue;
-    }
-
-    headers.push(createComposerTableRow({
-      key: name,
-      value
-    }));
-  }
+  const plan = createManualRequestDraftFromLog(log, {
+    action: 'edit-resend',
+    environment: options.environment ?? []
+  });
 
   return ensureComposerActiveTabRows({
     ...createBlankComposerState({
       environment: options.environment ?? []
     }),
-    cursor: url.length,
-    draft: createComposerDraft({
-      body: {
-        mode: String(log?.request?.body ?? '').length > 0 ? 'raw' : 'none',
-        raw: String(log?.request?.body ?? ''),
-        json: String(log?.request?.body ?? '')
-      },
-      cookies,
-      environment: options.environment ?? [],
-      headers,
-      method: MANUAL_REQUEST_METHODS.includes(log?.method) ? log.method : 'GET',
-      name: `${log?.method ?? 'GET'} ${url}`,
-      url
-    }),
-    source: 'clone'
+    cursor: plan.draft.url.length,
+    draft: plan.draft,
+    error: plan.blockers[0] ?? '',
+    resend: plan.resend,
+    source: 'edit-resend',
+    status: plan.warnings[0] ?? '',
+    warnings: [...plan.blockers, ...plan.warnings]
   });
 }
 
@@ -2457,6 +2419,11 @@ function renderComposerPreview(composer) {
     h(Text, { key: 'preview-title', color: 'cyan', bold: true }, 'Preview request'),
     h(Text, { key: 'preview-request', wrap: 'truncate' }, `${draft.method} ${draft.url || '/'}`),
     h(Text, { key: 'preview-auth', wrap: 'truncate' }, `auth ${getComposerPreviewAuthSummary(draft.auth)} | body ${getComposerPreviewBodySummary(draft)}`),
+    ...(composer.warnings ?? []).slice(0, 3).map((warning, index) => h(
+      Text,
+      { key: `preview-warning-${index}`, color: 'yellow', wrap: 'truncate' },
+      `warning ${warning}`
+    )),
     h(Text, { key: 'preview-space-1' }, ''),
     h(Text, { key: 'preview-params-title', color: 'gray' }, 'Params'),
     ...params.map((row, index) => h(Text, { key: `preview-param-${index}`, wrap: 'truncate' }, `  ${row}`)),
@@ -2640,10 +2607,12 @@ const RequestComposerPanel = React.memo(function RequestComposerPanel({
     ? process.stdout.columns
     : 80;
   const width = Math.max(72, columns - 4);
-  const title = composer.source === 'clone' ? 'Clone request' : 'New request';
+  const title = composer.source === 'edit-resend'
+    ? 'Edit and resend'
+    : (composer.source === 'library' ? 'Saved request' : 'New request');
   const statusText = composer.isSending
     ? 'sending...'
-    : (composer.error || 'ready');
+    : (composer.error || composer.status || composer.warnings?.[0] || 'ready');
   const statusColor = composer.error ? 'yellow' : (composer.isSending ? 'cyan' : 'gray');
   const descriptors = getComposerFieldDescriptors(composer);
   const sectionTitle = composer.isLibraryOpen
@@ -2732,7 +2701,9 @@ export const HELP_SECTIONS = [
     title: 'Compose',
     rows: [
       ['n', 'new request'],
-      ['e', 'clone request'],
+      ['R', 'exact resend'],
+      ['E', 'edit and resend'],
+      ['e', 'edit selected request'],
       ['l', 'saved requests'],
       ['1 params', 'open params'],
       ['3 body', 'open body'],
@@ -2740,7 +2711,7 @@ export const HELP_SECTIONS = [
       ['[ / ]', 'previous / next section'],
       ['a/d', 'add / delete row'],
       ['space', 'enable / disable row'],
-      ['R', 'reveal / mask secrets'],
+      ['R in editor', 'reveal / mask secrets'],
       ['enter', 'preview request'],
       ['enter/y', 'confirm send'],
       ['esc', 'close composer']
@@ -2842,6 +2813,7 @@ const HelpModal = React.memo(function HelpModal() {
 
 export function formatFooterText({
   exportStatus = '',
+  resendStatus = '',
   isComposerConfirmOpen = false,
   isComposerOpen = false,
   isComposerTextFocused = false,
@@ -2852,8 +2824,11 @@ export function formatFooterText({
   isListFocused = true,
   isRawModeSupported = true
 } = {}) {
-  const withExportStatus = (value) => {
-    const status = String(exportStatus ?? '').trim();
+  const withStatus = (value) => {
+    const status = [exportStatus, resendStatus]
+      .map((item) => String(item ?? '').trim())
+      .filter(Boolean)
+      .join(' | ');
 
     return status ? `${value} | ${status}` : value;
   };
@@ -2882,19 +2857,20 @@ export function formatFooterText({
 
   if (isDetailSearchActive && !isListFocused) {
     return isDetailModalOpen
-      ? withExportStatus('detail search active  / edit  n/N match  j/k scroll  enter collapse  esc/q close')
-      : withExportStatus('detail search active  / edit  n/N match  j/k scroll  enter collapse  o big  tab traffic  q quit');
+      ? withStatus('detail search active  / edit  n/N match  R resend  E edit  j/k scroll  enter collapse  esc/q close')
+      : withStatus('detail search active  / edit  n/N match  R resend  E edit  j/k scroll  enter collapse  o big  tab traffic  q quit');
   }
 
   if (isListFocused) {
-    return withExportStatus('j/k move  [/] page  enter inspect  y copy  D download  n new  tab details  P/S rec  h help  q quit');
+    return withStatus('j/k move  [/] page  enter inspect  y copy  D download  n new  R resend  E edit  tab details  P/S rec  h help  q quit');
   }
 
-  return withExportStatus('j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  tab traffic  P/S rec  h help');
+  return withStatus('j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  R resend  E edit  tab traffic  P/S rec  h help');
 }
 
 const Footer = React.memo(function Footer({
   exportStatus,
+  resendStatus,
   isComposerConfirmOpen,
   isComposerOpen,
   isComposerTextFocused,
@@ -2913,6 +2889,7 @@ const Footer = React.memo(function Footer({
       { color: 'gray', wrap: 'truncate' },
       formatFooterText({
         exportStatus,
+        resendStatus,
         isComposerConfirmOpen,
         isComposerOpen,
         isComposerTextFocused,
@@ -2924,6 +2901,47 @@ const Footer = React.memo(function Footer({
         isRawModeSupported
       })
     )
+  );
+});
+
+const ResendConfirmBar = React.memo(function ResendConfirmBar({
+  pendingResend,
+  isResending
+}) {
+  const blockers = pendingResend?.blockers ?? [];
+  const warnings = pendingResend?.warnings ?? [];
+  const summary = pendingResend?.summary ?? {};
+  const canExactResend = blockers.length === 0;
+  const title = canExactResend
+    ? 'Confirm normalized resend'
+    : 'Edit required before resend';
+  const help = canExactResend
+    ? 'enter/y send | E edit | esc/n cancel'
+    : 'E edit | esc/n cancel';
+  const signals = [
+    `${summary.headers ?? 0} headers`,
+    `${summary.cookies ?? 0} cookies`,
+    summary.body ?? 'no body',
+    'normalized, not byte-perfect'
+  ].join(' | ');
+
+  return h(
+    Box,
+    {
+      borderStyle: 'single',
+      borderColor: canExactResend ? 'yellow' : 'red',
+      flexDirection: 'column',
+      marginTop: 1,
+      paddingX: 2,
+      paddingY: 0
+    },
+    h(Text, { color: canExactResend ? 'yellow' : 'red', bold: true }, title),
+    h(Text, { wrap: 'truncate' }, `${summary.method ?? 'GET'} ${summary.path ?? '/'}`),
+    h(Text, { color: 'gray', wrap: 'truncate' }, signals),
+    blockers[0]
+      ? h(Text, { color: 'red', wrap: 'truncate' }, `blocker ${blockers[0]}`)
+      : h(Text, { color: warnings[0] ? 'yellow' : 'gray', wrap: 'truncate' }, warnings[0] ? `warning ${warnings[0]}` : 'safe request resend will use the manual sender'),
+    h(Text, { color: 'gray', wrap: 'truncate' }, isResending ? 'sending...' : help)
   );
 });
 
@@ -2995,6 +3013,8 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     isDetailSearchOpen = false,
     isDetailModalOpen = false,
     isExportPromptOpen = false,
+    isResendConfirmOpen = false,
+    isResending = false,
     isReplayMode = false,
     isLiveMode = false,
     isComposerOpen = false,
@@ -3032,6 +3052,26 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   if (isHelpOpen) {
     if (keyState.escape || value === 'h' || value === 'q') {
       return { type: 'closeHelp' };
+    }
+
+    return { type: 'none' };
+  }
+
+  if (isResendConfirmOpen) {
+    if (isResending) {
+      return { type: 'none' };
+    }
+
+    if (keyState.return || value === 'y' || value === 'Y') {
+      return { type: 'sendResend' };
+    }
+
+    if (value === 'E' || value === 'e') {
+      return { type: 'editPendingResend' };
+    }
+
+    if (keyState.escape || value === 'n' || value === 'N') {
+      return { type: 'cancelResend' };
     }
 
     return { type: 'none' };
@@ -3238,6 +3278,14 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
       return { type: 'openDetailSearch' };
     }
 
+    if (value === 'R' && isLiveMode) {
+      return { type: 'startResend', mode: 'exact' };
+    }
+
+    if ((value === 'E' || value === 'e') && isLiveMode) {
+      return { type: 'openComposer', mode: 'edit-resend' };
+    }
+
     if (value === 'n') {
       return { type: 'moveDetailMatch', direction: 1 };
     }
@@ -3347,8 +3395,12 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     return { type: 'openComposer', mode: 'blank' };
   }
 
-  if (value === 'e' && isLiveMode) {
-    return { type: 'openComposer', mode: 'clone' };
+  if (value === 'R' && isLiveMode) {
+    return { type: 'startResend', mode: 'exact' };
+  }
+
+  if ((value === 'E' || value === 'e') && isLiveMode) {
+    return { type: 'openComposer', mode: 'edit-resend' };
   }
 
   if (value === 'l' && isLiveMode) {
@@ -3480,6 +3532,8 @@ function KeyboardControls({
   isDetailSearchOpen,
   isDetailModalOpen,
   isExportPromptOpen,
+  isResendConfirmOpen,
+  isResending,
   isReplayMode,
   isLiveMode,
   isComposerOpen,
@@ -3497,6 +3551,7 @@ function KeyboardControls({
   onBackspaceSearch,
   onBackspaceDetailSearch,
   onCancelExport,
+  onCancelResend,
   onCloseComposerBodyEditor,
   onCloseComposerLibrary,
   onCloseComposerPreview,
@@ -3515,6 +3570,7 @@ function KeyboardControls({
   onFinishSearch,
   onFollowLatest,
   onInsertComposerText,
+  onEditPendingResend,
   onInspectSelected,
   onLoadComposerLibraryRequest,
   onMoveDetailMatch,
@@ -3538,8 +3594,10 @@ function KeyboardControls({
   onScrollDetails,
   onScrollDetailsTo,
   onSendComposer,
+  onSendResend,
   onSelectComposerTab,
   onStartExport,
+  onStartResend,
   onStopRecording,
   onToggleComposerField,
   onToggleComposerReveal,
@@ -3559,6 +3617,8 @@ function KeyboardControls({
       isDetailSearchOpen,
       isDetailModalOpen,
       isExportPromptOpen,
+      isResendConfirmOpen,
+      isResending,
       isReplayMode,
       isLiveMode,
       isComposerOpen,
@@ -3592,6 +3652,9 @@ function KeyboardControls({
         break;
       case 'cancelExport':
         onCancelExport();
+        break;
+      case 'cancelResend':
+        onCancelResend();
         break;
       case 'closeComposerBodyEditor':
         onCloseComposerBodyEditor();
@@ -3646,6 +3709,9 @@ function KeyboardControls({
         break;
       case 'insertComposerText':
         onInsertComposerText(action.value);
+        break;
+      case 'editPendingResend':
+        onEditPendingResend();
         break;
       case 'inspectSelected':
         onInspectSelected();
@@ -3716,11 +3782,17 @@ function KeyboardControls({
       case 'sendComposer':
         onSendComposer();
         break;
+      case 'sendResend':
+        onSendResend();
+        break;
       case 'selectComposerTab':
         onSelectComposerTab(action.tab);
         break;
       case 'startExport':
         onStartExport(action.action);
+        break;
+      case 'startResend':
+        onStartResend(action.mode);
         break;
       case 'stopRecording':
         onStopRecording();
@@ -4003,6 +4075,9 @@ export function App({
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const [pendingExport, setPendingExport] = useState(null);
   const [exportStatus, setExportStatus] = useState('');
+  const [pendingResend, setPendingResend] = useState(null);
+  const [resendStatus, setResendStatus] = useState('');
+  const [isResending, setIsResending] = useState(false);
   const [manualLibrary, setManualLibrary] = useState(() => manualRequestStore?.getLibrary?.() ?? {
     schemaVersion: 1,
     requests: [],
@@ -4082,7 +4157,11 @@ export function App({
     () => applyDetailMatches(rawDetailRows, detailMatches, detailMatchIndex),
     [detailMatchIndex, detailMatches, rawDetailRows]
   );
-  const bottomOffset = isFilterOpen ? 19 : (isDetailSearchOpen ? 13 + DETAIL_SEARCH_BAR_HEIGHT : 13);
+  const bottomOffset = isFilterOpen
+    ? 19
+    : (pendingResend
+      ? 13 + RESEND_CONFIRM_BAR_HEIGHT
+      : (isDetailSearchOpen ? 13 + DETAIL_SEARCH_BAR_HEIGHT : 13));
   const trafficVisibleCount = getTrafficVisibleCount(bottomOffset);
   const detailVisibleCount = getDetailVisibleCount(bottomOffset);
   const detailModalVisibleCount = getDetailModalVisibleCount(isDetailSearchOpen ? 11 + DETAIL_SEARCH_BAR_HEIGHT : 11);
@@ -4178,6 +4257,32 @@ export function App({
     return isListFocused && !isDetailModalOpen ? selectedLog : inspectedLog;
   };
 
+  const getManualActionLog = () => {
+    return isListFocused && !isDetailModalOpen ? selectedLog : inspectedLog;
+  };
+
+  const attachResendMetadata = (logEntry, metadata) => {
+    const resend = normalizeManualResendMetadata(metadata);
+
+    return resend ? { ...logEntry, resend } : logEntry;
+  };
+
+  const commitManualLog = (logEntry, metadata) => {
+    const addedLog = stateStore.addLog(attachResendMetadata(logEntry, metadata));
+
+    clearFilters();
+    setSelectedLogId(addedLog.id);
+    setInspectedLogId(addedLog.id);
+    setIsFollowingLatest(false);
+    setIsListFocused(false);
+    setDetailTab('response');
+    setDetailScrollOffset(0);
+    setFocusedDetailRow(0);
+    setDetailMatchIndex(0);
+
+    return addedLog;
+  };
+
   const startTrafficExport = (action) => {
     const exportLog = getExportLog();
     const exportIsListFocused = isListFocused && !isDetailModalOpen;
@@ -4252,15 +4357,35 @@ export function App({
 
   const openComposer = (mode) => {
     if (!isLiveMode) {
+      setResendStatus('resend unavailable in replay mode');
       return;
     }
 
-    setComposer(mode === 'clone' && selectedLog
-      ? createComposerStateFromLog(selectedLog, {
+    const isEditResend = mode === 'edit-resend' || mode === 'clone';
+
+    if (isEditResend && typeof manualRequestSender !== 'function') {
+      setResendStatus('manual sender unavailable');
+      return;
+    }
+
+    if (isEditResend) {
+      const sourceLog = getManualActionLog();
+
+      if (!sourceLog) {
+        setResendStatus('no request selected');
+        return;
+      }
+
+      setComposer(createComposerStateFromLog(sourceLog, {
         environment: manualLibrary.environment,
         includeCookieHeaders: showCookieValues
-      })
-      : createBlankComposerState({ environment: manualLibrary.environment }));
+      }));
+    } else {
+      setComposer(createBlankComposerState({ environment: manualLibrary.environment }));
+    }
+
+    setPendingResend(null);
+    setResendStatus('');
     setIsFilterOpen(false);
     setIsDetailSearchOpen(false);
     setIsDetailModalOpen(false);
@@ -4285,6 +4410,121 @@ export function App({
     setIsDetailSearchOpen(false);
     setIsDetailModalOpen(false);
     setIsHelpOpen(false);
+  };
+
+  const sendResendPlan = (plan) => {
+    if (!plan || isResending || composer.isSending) {
+      return;
+    }
+
+    if (!isLiveMode) {
+      setResendStatus('resend unavailable in replay mode');
+      return;
+    }
+
+    if (typeof manualRequestSender !== 'function') {
+      setResendStatus('manual sender unavailable');
+      return;
+    }
+
+    if ((plan.blockers ?? []).length > 0) {
+      setResendStatus(`edit required: ${plan.blockers[0]}`);
+      return;
+    }
+
+    setIsResending(true);
+    setResendStatus(`resending ${plan.summary?.method ?? plan.draft.method} ${plan.summary?.path ?? plan.draft.url}`);
+
+    Promise.resolve()
+      .then(() => manualRequestSender({
+        ...plan.draft,
+        resend: plan.resend
+      }))
+      .then((logEntry) => {
+        commitManualLog(logEntry, plan.resend);
+        setPendingResend(null);
+        setResendStatus(`resent ${plan.summary?.method ?? plan.draft.method} ${plan.summary?.path ?? plan.draft.url}`);
+      })
+      .catch((error) => {
+        setResendStatus(`resend failed: ${error?.message ?? String(error)}`);
+      })
+      .finally(() => {
+        setIsResending(false);
+      });
+  };
+
+  const startResend = () => {
+    if (!isLiveMode) {
+      setResendStatus('resend unavailable in replay mode');
+      return;
+    }
+
+    if (composer.isSending || isResending) {
+      return;
+    }
+
+    if (typeof manualRequestSender !== 'function') {
+      setResendStatus('manual sender unavailable');
+      return;
+    }
+
+    const sourceLog = getManualActionLog();
+
+    if (!sourceLog) {
+      setResendStatus('no request selected');
+      return;
+    }
+
+    const plan = createManualRequestDraftFromLog(sourceLog, {
+      action: 'resend',
+      environment: manualLibrary.environment
+    });
+
+    if ((plan.blockers ?? []).length > 0 || plan.requiresConfirmation) {
+      setPendingResend(plan);
+      setResendStatus((plan.blockers ?? []).length > 0 ? 'edit required before resend' : 'confirm resend');
+      setIsFilterOpen(false);
+      setIsDetailSearchOpen(false);
+      setIsHelpOpen(false);
+      return;
+    }
+
+    setPendingResend(null);
+    setIsFilterOpen(false);
+    setIsDetailSearchOpen(false);
+    setIsHelpOpen(false);
+    sendResendPlan(plan);
+  };
+
+  const editPendingResend = () => {
+    if (!pendingResend) {
+      return;
+    }
+
+    setComposer(ensureComposerActiveTabRows({
+      ...createBlankComposerState({ environment: manualLibrary.environment }),
+      cursor: pendingResend.draft.url.length,
+      draft: pendingResend.draft,
+      error: pendingResend.blockers?.[0] ?? '',
+      resend: normalizeManualResendMetadata({
+        ...pendingResend.resend,
+        action: 'edit-resend'
+      }),
+      source: 'edit-resend',
+      status: pendingResend.warnings?.[0] ?? '',
+      warnings: [...(pendingResend.blockers ?? []), ...(pendingResend.warnings ?? [])]
+    }));
+    setPendingResend(null);
+    setResendStatus('');
+    setIsFilterOpen(false);
+    setIsDetailSearchOpen(false);
+    setIsDetailModalOpen(false);
+    setIsHelpOpen(false);
+  };
+
+  const cancelResend = () => {
+    setPendingResend(null);
+    setResendStatus('resend cancelled');
   };
 
   const saveComposerRequest = () => {
@@ -4354,9 +4594,16 @@ export function App({
   };
 
   const sendComposer = () => {
-    if (!composer.isOpen || composer.isSending || !isLiveMode || typeof manualRequestSender !== 'function') {
+    if (!composer.isOpen || composer.isSending || isResending || !isLiveMode || typeof manualRequestSender !== 'function') {
       return;
     }
+
+    const resend = composer.resend
+      ? normalizeManualResendMetadata({
+        ...composer.resend,
+        action: 'edit-resend'
+      })
+      : null;
 
     setComposer((current) => ({
       ...current,
@@ -4366,18 +4613,12 @@ export function App({
     }));
 
     Promise.resolve()
-      .then(() => manualRequestSender(composer.draft))
+      .then(() => manualRequestSender(resend ? {
+        ...composer.draft,
+        resend
+      } : composer.draft))
       .then((logEntry) => {
-        const addedLog = stateStore.addLog(logEntry);
-
-        clearFilters();
-        setSelectedLogId(addedLog.id);
-        setInspectedLogId(addedLog.id);
-        setIsFollowingLatest(false);
-        setIsListFocused(false);
-        setDetailTab('response');
-        setDetailScrollOffset(0);
-        setFocusedDetailRow(0);
+        commitManualLog(logEntry, resend);
         setComposer((current) => ({
           ...current,
           isConfirmOpen: false,
@@ -4411,6 +4652,8 @@ export function App({
         isDetailSearchOpen,
         isDetailModalOpen,
         isExportPromptOpen: Boolean(pendingExport),
+        isResendConfirmOpen: Boolean(pendingResend),
+        isResending,
         isReplayMode,
         isLiveMode,
         isComposerOpen: composer.isOpen,
@@ -4440,6 +4683,7 @@ export function App({
           setIsFollowingLatest(false);
         },
         onCancelExport: cancelTrafficExport,
+        onCancelResend: cancelResend,
         onClearFilters: clearFilters,
         onClearLogs: () => {
           stateStore.clear();
@@ -4491,6 +4735,7 @@ export function App({
         onFinishDetailSearch: () => setIsDetailSearchOpen(false),
         onFinishSearch: () => setIsFilterOpen(false),
         onQuit,
+        onEditPendingResend: editPendingResend,
         onInsertComposerText: (value) => setComposer((current) => insertComposerText(current, value)),
         onLoadComposerLibraryRequest: loadComposerLibraryRequest,
         onToggleFocus: () => setIsListFocused((current) => !current),
@@ -4580,6 +4825,7 @@ export function App({
         onSaveComposerRequest: saveComposerRequest,
         onSelectComposerTab: (tab) => setComposer((current) => selectComposerTab(current, tab)),
         onStartExport: startTrafficExport,
+        onStartResend: startResend,
         onScrollDetails: (direction) => {
           moveDetailFocus(direction);
         },
@@ -4588,6 +4834,7 @@ export function App({
           focusDetailRowAt(rowIndex);
         },
         onSendComposer: sendComposer,
+        onSendResend: () => sendResendPlan(pendingResend),
         onStopRecording: () => {
           const result = trafficRecorder?.stopRecording?.();
 
@@ -4722,7 +4969,12 @@ export function App({
         statusOptionIndex,
         visibleCount: filteredLogs.length
       })
-        : (isDetailSearchOpen
+        : (pendingResend
+          ? h(ResendConfirmBar, {
+          isResending,
+          pendingResend
+        })
+          : (isDetailSearchOpen
           ? h(DetailSearchBar, {
           activeMatchIndex: detailMatchIndex,
           matchCount: detailMatches.length,
@@ -4730,6 +4982,7 @@ export function App({
         })
           : h(Footer, {
           exportStatus,
+          resendStatus,
           isComposerConfirmOpen: composer.isConfirmOpen,
           isComposerOpen: composer.isOpen,
           isComposerTextFocused: getFocusedComposerDescriptor(composer)?.kind === 'text',
@@ -4739,6 +4992,6 @@ export function App({
           isHelpOpen,
           isListFocused: isDetailModalOpen ? false : isListFocused,
           isRawModeSupported
-        }))
+        })))
   );
 }
