@@ -13,6 +13,17 @@ const SEARCH_FIELDS = ['all', 'path', 'status', 'method', 'time', 'host', 'port'
 const FILTER_FOCUS_ORDER = ['query', 'field', 'method', 'status'];
 const ROOT_PADDING_X = 1;
 const TRAFFIC_LIST_WIDTH = 50;
+const BODY_LINE_MAX_LENGTH = 120;
+const DETAIL_SEARCH_BAR_HEIGHT = 5;
+const TEXTUAL_CONTENT_TYPE_PATTERNS = [
+  /^text\//,
+  /(?:^|[+/.-])json$/,
+  /(?:^|[+/.-])xml$/,
+  /(?:^|[+/.-])javascript$/,
+  /(?:^|[+/.-])typescript$/,
+  /(?:^|[+/.-])x-www-form-urlencoded$/,
+  /(?:^|[+/.-])graphql$/
+];
 const OFF_RECORDING_STATUS = {
   mode: 'off',
   path: null,
@@ -149,6 +160,52 @@ function getDisplayHeaderValue(key, value, options = {}) {
   return value;
 }
 
+function getHeaderValue(headers = {}, key) {
+  const normalizedKey = String(key ?? '').toLowerCase();
+  const entry = Object.entries(headers ?? {})
+    .find(([headerKey]) => String(headerKey).toLowerCase() === normalizedKey);
+
+  if (!entry) {
+    return '';
+  }
+
+  const value = entry[1];
+
+  return Array.isArray(value) ? value.join(', ') : String(value);
+}
+
+function getHeaderTokens(headers, key) {
+  return getHeaderValue(headers, key)
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function getContentType(headers = {}) {
+  return getHeaderValue(headers, 'content-type')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+}
+
+function hasEncodedBody(headers = {}) {
+  const encodings = getHeaderTokens(headers, 'content-encoding');
+
+  return encodings.some((encoding) => encoding !== 'identity');
+}
+
+function isTextualContentType(contentType) {
+  if (!contentType) {
+    return true;
+  }
+
+  return TEXTUAL_CONTENT_TYPE_PATTERNS.some((pattern) => pattern.test(contentType));
+}
+
+function isJsonContentType(contentType) {
+  return /(?:^|[+/.-])json$/.test(contentType);
+}
+
 function getPublicTargetUrl(options = {}) {
   if (!options.rewritePublicTargetRequestHeaders || !isPublicTargetUrl(options.publicTargetUrl)) {
     return null;
@@ -243,15 +300,319 @@ function formatHeaders(headers, options = {}) {
   return entries.flatMap(([key, value]) => headerValueLines(key, value, options));
 }
 
-function formatPayloadBody(payload = {}) {
-  const body = String(payload.body || '');
-  const lines = body.length > 0 ? body.split('\n') : ['(empty)'];
+function formatHeaderDetailRows(headers, options = {}, idPrefix = 'headers') {
+  const entries = Object.entries(headers ?? {});
 
-  if (payload.truncated) {
-    lines.push('[body truncated]');
+  if (entries.length === 0) {
+    return [createDetailRow({
+      id: `${idPrefix}-empty`,
+      text: '(none)',
+      type: 'header'
+    })];
   }
 
-  return lines;
+  return entries.flatMap(([key, value], entryIndex) => {
+    const displayValue = getDisplayHeaderValue(key, value, options);
+    const values = Array.isArray(displayValue) ? displayValue : [displayValue];
+
+    return values.flatMap((item, valueIndex) => {
+      const prefix = `${key}: `;
+      const safeValue = sanitizeTerminalText(item);
+      const path = `headers.${key}`;
+      const chunkLength = Math.max(20, BODY_LINE_MAX_LENGTH - prefix.length);
+      const chunks = splitLongBodyLine(safeValue, chunkLength);
+
+      return chunks.map((chunk, chunkIndex) => {
+        const isContinuation = chunkIndex > 0;
+        const continuationPrefix = ' '.repeat(prefix.length);
+        const text = isContinuation ? `${continuationPrefix}${chunk}` : `${prefix}${chunk}`;
+
+        return createDetailRow({
+          id: `${idPrefix}-header-${entryIndex}-${valueIndex}-${chunkIndex}`,
+          path,
+          searchText: [text, path].join(' '),
+          segments: isContinuation
+            ? [
+              { text: continuationPrefix, color: 'gray' },
+              { text: chunk }
+            ]
+            : [
+              { text: key, color: 'cyan' },
+              { text: ': ', color: 'gray' },
+              { text: chunk }
+            ],
+          text,
+          type: 'header'
+        });
+      });
+    });
+  });
+}
+
+function createDetailRow(options = {}) {
+  const segments = options.segments ?? [{ text: options.text ?? '' }];
+  const text = options.text ?? segments.map((segment) => segment.text).join('');
+
+  return {
+    collapsible: false,
+    id: options.id ?? `${options.type ?? 'row'}-${text}`,
+    matchText: options.matchText ?? text,
+    path: options.path ?? null,
+    searchText: options.searchText ?? [text, options.path].filter(Boolean).join(' '),
+    segments,
+    text,
+    type: options.type ?? 'body',
+    ...options
+  };
+}
+
+function createPlainDetailRows(lines, options = {}) {
+  return lines.map((line, index) => createDetailRow({
+    id: `${options.idPrefix ?? options.type ?? 'row'}-${index}`,
+    path: options.path ?? null,
+    text: line,
+    type: options.type ?? 'body'
+  }));
+}
+
+function sanitizeTerminalText(value) {
+  return String(value ?? '').replace(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g, '\uFFFD');
+}
+
+function splitLongBodyLine(line, maxLength = BODY_LINE_MAX_LENGTH) {
+  if (line.length <= maxLength) {
+    return [line];
+  }
+
+  const chunks = [];
+
+  for (let index = 0; index < line.length; index += maxLength) {
+    chunks.push(line.slice(index, index + maxLength));
+  }
+
+  return chunks;
+}
+
+function splitBodyLines(value) {
+  return sanitizeTerminalText(value)
+    .split('\n')
+    .flatMap((line) => splitLongBodyLine(line));
+}
+
+function jsonPathToString(pathParts = []) {
+  if (pathParts.length === 0) {
+    return '$';
+  }
+
+  return pathParts.reduce((path, part) => {
+    if (typeof part === 'number') {
+      return `${path}[${part}]`;
+    }
+
+    if (/^[A-Za-z_$][\w$]*$/.test(part)) {
+      return path ? `${path}.${part}` : part;
+    }
+
+    return `${path}${path ? '' : '$'}[${JSON.stringify(part)}]`;
+  }, '');
+}
+
+function jsonNodeSummary(value) {
+  if (Array.isArray(value)) {
+    return `[...] ${value.length} items`;
+  }
+
+  if (value && typeof value === 'object') {
+    return `{...} ${Object.keys(value).length} keys`;
+  }
+
+  return '';
+}
+
+function jsonContainerOpen(value) {
+  return Array.isArray(value) ? '[' : '{';
+}
+
+function jsonContainerClose(value) {
+  return Array.isArray(value) ? ']' : '}';
+}
+
+function jsonValueType(value) {
+  if (value === null) {
+    return 'null';
+  }
+
+  if (Array.isArray(value)) {
+    return 'array';
+  }
+
+  return typeof value;
+}
+
+function jsonValueText(value) {
+  return typeof value === 'string' ? JSON.stringify(value) : String(value);
+}
+
+function jsonValueColor(value) {
+  const type = jsonValueType(value);
+
+  if (type === 'string') {
+    return 'green';
+  }
+
+  if (type === 'number') {
+    return 'yellow';
+  }
+
+  if (type === 'boolean') {
+    return 'magenta';
+  }
+
+  if (type === 'null') {
+    return 'gray';
+  }
+
+  return undefined;
+}
+
+function jsonLabelText(label, path) {
+  if (path === '$') {
+    return '$';
+  }
+
+  if (typeof label === 'number') {
+    return `[${label}]`;
+  }
+
+  return String(label);
+}
+
+function formatJsonRows(value, options = {}, pathParts = [], label = null, depth = 0) {
+  const rows = [];
+  const path = jsonPathToString(pathParts);
+  const indent = '  '.repeat(depth);
+  const collapsedPaths = new Set(options.collapsedPaths ?? []);
+  const isContainer = value && typeof value === 'object';
+  const labelText = jsonLabelText(label, path);
+  const prefix = path === '$' ? '' : `${labelText}: `;
+
+  if (!isContainer) {
+    const valueText = jsonValueText(value);
+
+    rows.push(createDetailRow({
+      id: `json-${path}`,
+      matchText: `${prefix}${valueText}`,
+      path,
+      segments: [
+        { text: indent },
+        ...(path === '$' ? [] : [{ text: labelText, color: 'cyan' }, { text: ': ', color: 'gray' }]),
+        { text: valueText, color: jsonValueColor(value) }
+      ],
+      type: `json-${jsonValueType(value)}`
+    }));
+
+    return rows;
+  }
+
+  const collapsed = collapsedPaths.has(path);
+  const entries = Array.isArray(value)
+    ? value.map((item, index) => [index, item])
+    : Object.entries(value);
+  const opener = jsonContainerOpen(value);
+  const closer = jsonContainerClose(value);
+  const summary = collapsed ? jsonNodeSummary(value) : `${opener} ${entries.length} ${Array.isArray(value) ? 'items' : 'keys'}`;
+
+  rows.push(createDetailRow({
+    collapsible: true,
+    collapsed,
+    id: `json-${path}`,
+    matchText: `${prefix}${summary}`,
+    path,
+    segments: [
+      { text: indent },
+      { text: collapsed ? '> ' : 'v ', color: 'gray' },
+      ...(path === '$'
+        ? [{ text: '$', color: 'cyan' }, { text: ' ', color: 'gray' }]
+        : [{ text: labelText, color: 'cyan' }, { text: ': ', color: 'gray' }]),
+      { text: summary, color: collapsed ? 'gray' : undefined }
+    ],
+    type: Array.isArray(value) ? 'json-array' : 'json-object'
+  }));
+
+  if (collapsed) {
+    return rows;
+  }
+
+  entries.forEach(([key, child]) => {
+    rows.push(...formatJsonRows(
+      child,
+      options,
+      [...pathParts, key],
+      key,
+      depth + 1
+    ));
+  });
+
+  rows.push(createDetailRow({
+    id: `json-${path}-close`,
+    matchText: closer,
+    path,
+    segments: [
+      { text: indent },
+      { text: closer, color: 'gray' }
+    ],
+    type: 'json-punctuation'
+  }));
+
+  return rows;
+}
+
+function appendTruncationRow(rows, payload = {}) {
+  if (!payload.truncated) {
+    return rows;
+  }
+
+  return [
+    ...rows,
+    createDetailRow({
+      id: 'body-truncated',
+      segments: [{ text: '[body truncated]', color: 'yellow' }],
+      type: 'warning'
+    })
+  ];
+}
+
+export function formatStructuredPayloadRows(payload = {}, options = {}) {
+  const body = String(payload.body || '');
+  const contentType = getContentType(payload.headers);
+  let lines;
+
+  if (body.length === 0) {
+    lines = ['(empty)'];
+    return appendTruncationRow(createPlainDetailRows(lines, { idPrefix: 'body-empty', type: 'body-empty' }), payload);
+  } else if (hasEncodedBody(payload.headers)) {
+    const encoding = getHeaderTokens(payload.headers, 'content-encoding').join(', ');
+    lines = [`(compressed body not shown: ${encoding})`];
+    return appendTruncationRow(createPlainDetailRows(lines, { idPrefix: 'body-compressed', type: 'warning' }), payload);
+  } else if (!isTextualContentType(contentType)) {
+    lines = [`(binary body omitted: ${contentType})`];
+    return appendTruncationRow(createPlainDetailRows(lines, { idPrefix: 'body-binary', type: 'warning' }), payload);
+  } else if (isJsonContentType(contentType)) {
+    try {
+      return appendTruncationRow(formatJsonRows(JSON.parse(body), options), payload);
+    } catch {
+      lines = splitBodyLines(body);
+      return appendTruncationRow(createPlainDetailRows(lines, { idPrefix: 'body-text', type: 'body' }), payload);
+    }
+  }
+
+  lines = splitBodyLines(body);
+
+  return appendTruncationRow(createPlainDetailRows(lines, { idPrefix: 'body-text', type: 'body' }), payload);
+}
+
+function formatPayloadBody(payload = {}, options = {}) {
+  return formatStructuredPayloadRows(payload, options).map((row) => row.text);
 }
 
 function headersToSearchText(headers = {}, options = {}) {
@@ -412,7 +773,7 @@ export function cycleValue(values, currentValue, direction = 1) {
   return values[nextIndex] ?? values[0];
 }
 
-export function getDetailLines(log, detailTab = 'request', options = {}) {
+export function getDetailRows(log, detailTab = 'request', options = {}) {
   if (!log) {
     return [];
   }
@@ -428,12 +789,111 @@ export function getDetailLines(log, detailTab = 'request', options = {}) {
     : options;
 
   return [
-    `${title} headers`,
-    ...formatHeaders(payload.headers, headerOptions),
-    '',
-    `${title} body`,
-    ...formatPayloadBody(payload)
+    createDetailRow({
+      id: `${detailTab}-headers-title`,
+      segments: [{ text: `${title} headers`, color: 'cyan', bold: true }],
+      type: 'section'
+    }),
+    ...formatHeaderDetailRows(payload.headers, headerOptions, detailTab),
+    createDetailRow({ id: `${detailTab}-spacer`, text: '', type: 'blank' }),
+    createDetailRow({
+      id: `${detailTab}-body-title`,
+      segments: [{ text: `${title} body`, color: 'cyan', bold: true }],
+      type: 'section'
+    }),
+    ...formatStructuredPayloadRows(payload, options)
   ];
+}
+
+export function getDetailLines(log, detailTab = 'request', options = {}) {
+  return getDetailRows(log, detailTab, options).map((row) => row.text);
+}
+
+export function parseDetailSearchQuery(query = '') {
+  const value = String(query ?? '').trim();
+
+  if (!value) {
+    return {
+      kind: 'empty',
+      pattern: '',
+      regex: null
+    };
+  }
+
+  const regexMatch = value.match(/^\/(.+)\/([a-z]*)$/i);
+
+  if (regexMatch) {
+    try {
+      return {
+        kind: 'regex',
+        pattern: regexMatch[1],
+        regex: new RegExp(regexMatch[1], regexMatch[2].includes('i') ? 'i' : '')
+      };
+    } catch {
+      return {
+        kind: 'invalid',
+        pattern: value,
+        regex: null
+      };
+    }
+  }
+
+  return {
+    kind: 'text',
+    pattern: value.toLowerCase(),
+    regex: null
+  };
+}
+
+function getDetailRowSearchText(row = {}) {
+  return [
+    row.searchText,
+    row.path,
+    row.matchText,
+    row.text
+  ].filter(Boolean).join(' ');
+}
+
+export function findDetailMatches(rows = [], query = '') {
+  const parsed = typeof query === 'string' ? parseDetailSearchQuery(query) : query;
+
+  if (parsed.kind === 'empty' || parsed.kind === 'invalid') {
+    return [];
+  }
+
+  return rows.reduce((matches, row, index) => {
+    const searchText = getDetailRowSearchText(row);
+    const matched = parsed.kind === 'regex'
+      ? parsed.regex.test(searchText)
+      : searchText.toLowerCase().includes(parsed.pattern);
+
+    if (matched) {
+      matches.push(index);
+    }
+
+    return matches;
+  }, []);
+}
+
+export function getNextDetailMatchIndex(matches = [], currentIndex = 0, direction = 1) {
+  if (matches.length === 0) {
+    return 0;
+  }
+
+  const current = Number.isInteger(currentIndex) ? currentIndex : 0;
+
+  return (current + direction + matches.length) % matches.length;
+}
+
+export function applyDetailMatches(rows = [], matches = [], activeMatchIndex = 0) {
+  const matchSet = new Set(matches);
+  const activeRowIndex = matches[activeMatchIndex] ?? -1;
+
+  return rows.map((row, index) => ({
+    ...row,
+    isActiveMatch: index === activeRowIndex,
+    isMatched: matchSet.has(index)
+  }));
 }
 
 export function getMaxScrollOffset(lines, visibleCount) {
@@ -446,6 +906,10 @@ export function getTrafficVisibleCount(bottomOffset, terminalRows = process.stdo
 
 export function getDetailVisibleCount(bottomOffset, terminalRows = process.stdout.rows) {
   return Math.max(4, getTerminalRows(terminalRows) - bottomOffset);
+}
+
+export function getDetailModalVisibleCount(bottomOffset = 10, terminalRows = process.stdout.rows) {
+  return Math.max(8, getTerminalRows(terminalRows) - bottomOffset);
 }
 
 export function getPageStep(visibleCount, amount = 'page') {
@@ -463,6 +927,30 @@ export function clampScrollOffset(currentOffset, direction, maxScrollOffset) {
     Math.max(0, max),
     Math.max(0, current + delta)
   );
+}
+
+export function clampDetailRowIndex(rowIndex, rows) {
+  const maxIndex = Math.max(0, rows.length - 1);
+  const value = Number.isFinite(Number(rowIndex)) ? Number(rowIndex) : 0;
+
+  return Math.min(maxIndex, Math.max(0, value));
+}
+
+export function getScrollOffsetForFocusedRow(focusedRow, currentOffset, visibleCount, maxScrollOffset) {
+  const focus = Number.isFinite(Number(focusedRow)) ? Number(focusedRow) : 0;
+  const current = Number.isFinite(Number(currentOffset)) ? Number(currentOffset) : 0;
+  const visible = Math.max(1, Number(visibleCount) || 1);
+  const max = Math.max(0, Number(maxScrollOffset) || 0);
+
+  if (focus < current) {
+    return Math.max(0, focus);
+  }
+
+  if (focus >= current + visible) {
+    return Math.min(max, focus - visible + 1);
+  }
+
+  return Math.min(max, Math.max(0, current));
 }
 
 export function getBoundaryLogId(logs, boundary) {
@@ -606,15 +1094,100 @@ const TrafficList = React.memo(function TrafficList({
   );
 });
 
+function renderDetailRow(row, key) {
+  if (row.isActiveMatch || row.isFocused) {
+    return h(
+      Text,
+      {
+        key,
+        backgroundColor: row.isActiveMatch ? 'yellow' : 'cyan',
+        color: 'black',
+        bold: row.isActiveMatch || row.isFocused,
+        wrap: 'truncate'
+      },
+      row.text
+    );
+  }
+
+  if (row.isMatched) {
+    return h(
+      Text,
+      {
+        key,
+        color: 'yellow',
+        bold: true,
+        wrap: 'truncate'
+      },
+      row.text
+    );
+  }
+
+  return h(
+    Text,
+    {
+      key,
+      bold: row.type === 'section',
+      wrap: 'truncate'
+    },
+    ...(row.segments ?? [{ text: row.text }]).map((segment, index) => h(
+      Text,
+      {
+        key: `${key}-${index}`,
+        color: segment.color,
+        bold: segment.bold
+      },
+      segment.text
+    ))
+  );
+}
+
+const DetailViewport = React.memo(function DetailViewport({
+  rows,
+  scrollOffset,
+  visibleCount,
+  focusedRow,
+  title,
+  subtitle,
+  borderColor,
+  flexGrow = 1
+}) {
+  const maxScrollOffset = getMaxScrollOffset(rows, visibleCount);
+  const safeScrollOffset = Math.min(scrollOffset, maxScrollOffset);
+  const visibleRows = rows
+    .slice(safeScrollOffset, safeScrollOffset + visibleCount)
+    .map((row, index) => ({
+      ...row,
+      isFocused: safeScrollOffset + index === focusedRow
+    }));
+  const scrollLabel = maxScrollOffset === 0
+    ? 'top'
+    : `${safeScrollOffset + 1}-${Math.min(rows.length, safeScrollOffset + visibleCount)}/${rows.length}`;
+
+  return h(
+    Box,
+    {
+      flexDirection: 'column',
+      flexGrow,
+      borderStyle: 'single',
+      borderColor,
+      paddingX: 1
+    },
+    h(Text, { bold: true, wrap: 'truncate' }, title),
+    h(Text, { color: 'gray', wrap: 'truncate' }, `${subtitle} | scroll ${scrollLabel}`),
+    ...visibleRows.map((row, index) => renderDetailRow(row, `${row.id}-${safeScrollOffset + index}`))
+  );
+});
+
 const DetailPane = React.memo(function DetailPane({
   bottomOffset,
   log,
   isFocused,
   detailTab,
+  rows,
+  focusedRow,
   scrollOffset,
-  publicTargetUrl = null,
-  proxyOrigin = null,
-  showCookieValues = false
+  matchCount = 0,
+  activeMatchIndex = 0
 }) {
   if (!log) {
     return h(
@@ -631,43 +1204,62 @@ const DetailPane = React.memo(function DetailPane({
   }
 
   const visibleCount = getDetailVisibleCount(bottomOffset);
-  const lines = getDetailLines(log, detailTab, {
-    publicTargetUrl,
-    proxyOrigin,
-    showCookieValues
-  });
-  const maxScrollOffset = getMaxScrollOffset(lines, visibleCount);
-  const safeScrollOffset = Math.min(scrollOffset, maxScrollOffset);
-  const visibleLines = lines.slice(safeScrollOffset, safeScrollOffset + visibleCount);
   const timing = `${log.statusCode ?? '---'} in ${log.responseTimeMs}ms`;
   const summary = `${log.method} ${log.path} | ${timing}`;
   const tabLabel = `${detailTab === 'request' ? '[Request]' : ' Request '} ${detailTab === 'response' ? '[Response]' : ' Response '}`;
-  const scrollLabel = maxScrollOffset === 0
-    ? 'top'
-    : `${safeScrollOffset + 1}-${Math.min(lines.length, safeScrollOffset + visibleCount)}/${lines.length}`;
+  const matchLabel = matchCount > 0 ? ` | match ${activeMatchIndex + 1}/${matchCount}` : '';
 
-  return h(
-    Box,
-    {
-      flexDirection: 'column',
-      flexGrow: 1,
-      borderStyle: 'single',
-      borderColor: isFocused ? 'cyan' : 'gray',
-      paddingX: 1
-    },
-    h(Text, { bold: true, color: statusColor(log.statusCode), wrap: 'truncate' }, summary),
-    h(Text, { color: 'gray', wrap: 'truncate' }, `${tabLabel} | scroll ${scrollLabel}`),
-    ...visibleLines.map((line, index) => h(
-      Text,
+  return h(DetailViewport, {
+    borderColor: isFocused ? 'cyan' : 'gray',
+    focusedRow,
+    rows,
+    scrollOffset,
+    title: summary,
+    subtitle: `${tabLabel}${matchLabel}`,
+    visibleCount
+  });
+});
+
+const DetailModal = React.memo(function DetailModal({
+  log,
+  detailTab,
+  rows,
+  focusedRow,
+  scrollOffset,
+  visibleCount,
+  matchCount,
+  activeMatchIndex
+}) {
+  if (!log) {
+    return h(
+      Box,
       {
-        key: `${detailTab}-${safeScrollOffset + index}`,
-        color: line.endsWith('headers') || line.endsWith('body') ? 'cyan' : undefined,
-        bold: line.endsWith('headers') || line.endsWith('body'),
-        wrap: 'truncate'
+        flexDirection: 'column',
+        flexGrow: 1,
+        borderStyle: 'single',
+        borderColor: 'cyan',
+        paddingX: 2,
+        paddingY: 1
       },
-      line
-    ))
-  );
+      h(Text, { color: 'gray' }, 'No request inspected')
+    );
+  }
+
+  const timing = `${log.statusCode ?? '---'} in ${log.responseTimeMs}ms`;
+  const title = `Details ${detailTab} | ${log.method} ${log.path} | ${timing}`;
+  const matchLabel = matchCount > 0 ? ` | match ${activeMatchIndex + 1}/${matchCount}` : '';
+  const subtitle = 'esc/q close | r req/res | / find | n/N next/prev | enter collapse';
+
+  return h(DetailViewport, {
+    borderColor: 'cyan',
+    focusedRow,
+    rows,
+    scrollOffset,
+    title,
+    subtitle: `${subtitle}${matchLabel}`,
+    visibleCount,
+    flexGrow: 1
+  });
 });
 
 function formatOptionToken(value, options = {}) {
@@ -749,6 +1341,35 @@ const FilterBar = React.memo(function FilterBar({
   );
 });
 
+const DetailSearchBar = React.memo(function DetailSearchBar({
+  activeMatchIndex,
+  matchCount,
+  query
+}) {
+  const displayQuery = query.length > 0 ? query : '(empty)';
+  const parsed = parseDetailSearchQuery(query);
+  const mode = parsed.kind === 'regex'
+    ? 'regex'
+    : (parsed.kind === 'invalid' ? 'invalid regex' : 'text/path');
+  const matchLabel = query.trim().length === 0
+    ? 'no query'
+    : `${matchCount} matches${matchCount > 0 ? ` | active ${activeMatchIndex + 1}` : ''}`;
+
+  return h(
+    Box,
+    {
+      flexDirection: 'column',
+      borderStyle: 'single',
+      borderColor: parsed.kind === 'invalid' ? 'yellow' : 'cyan',
+      paddingX: 1,
+      marginTop: 1
+    },
+    h(Text, { color: parsed.kind === 'invalid' ? 'yellow' : 'cyan', bold: true }, `Detail search | ${mode} | ${matchLabel}`),
+    h(Text, { wrap: 'truncate' }, `query ${displayQuery}_`),
+    h(Text, { color: 'gray', wrap: 'truncate' }, 'type text/path or /regex/ | backspace edit | enter/esc close, then n/N next/prev')
+  );
+});
+
 export const HELP_SECTIONS = [
   {
     title: 'Navigation',
@@ -767,6 +1388,9 @@ export const HELP_SECTIONS = [
     rows: [
       ['enter', 'inspect row'],
       ['r', 'request / response'],
+      ['o', 'open details modal'],
+      ['/', 'find in details'],
+      ['n / N', 'next / previous match'],
       ['wheel', 'scroll hovered pane']
     ]
   },
@@ -857,6 +1481,8 @@ const HelpModal = React.memo(function HelpModal() {
 });
 
 export function formatFooterText({
+  isDetailModalOpen = false,
+  isDetailSearchActive = false,
   isHelpOpen = false,
   isListFocused = true,
   isRawModeSupported = true
@@ -869,14 +1495,22 @@ export function formatFooterText({
     return 'help | esc/h/q close';
   }
 
+  if (isDetailSearchActive && !isListFocused) {
+    return isDetailModalOpen
+      ? 'detail search active  / edit  n/N match  j/k scroll  enter collapse  esc/q close'
+      : 'detail search active  / edit  n/N match  j/k scroll  enter collapse  o big  tab traffic  q quit';
+  }
+
   if (isListFocused) {
     return 'j/k move  [/] page  enter inspect  tab details  P rec  S stop  h help  q quit';
   }
 
-  return 'j/k scroll  [/] page  g/G top/bottom  r req/res  tab traffic  P rec  S stop  h help  q quit';
+  return 'j/k scroll  [/] page  g/G top/bottom  r req/res  / find  n/N match  o big  tab traffic  P rec  S stop  h help  q quit';
 }
 
 const Footer = React.memo(function Footer({
+  isDetailModalOpen,
+  isDetailSearchActive,
   isHelpOpen,
   isListFocused,
   isRawModeSupported
@@ -887,7 +1521,13 @@ const Footer = React.memo(function Footer({
     h(
       Text,
       { color: 'gray', wrap: 'truncate' },
-      formatFooterText({ isHelpOpen, isListFocused, isRawModeSupported })
+      formatFooterText({
+        isDetailModalOpen,
+        isDetailSearchActive,
+        isHelpOpen,
+        isListFocused,
+        isRawModeSupported
+      })
     )
   );
 });
@@ -949,6 +1589,8 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     isListFocused = true,
     isHelpOpen = false,
     isFilterOpen = false,
+    isDetailSearchOpen = false,
+    isDetailModalOpen = false,
     isReplayMode = false,
     detailPageSize = 1,
     trafficPageSize = 1
@@ -968,6 +1610,22 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     return { type: 'none' };
   }
 
+  if (isDetailSearchOpen) {
+    if (keyState.escape || keyState.return) {
+      return { type: 'finishDetailSearch' };
+    }
+
+    if (keyState.backspace || keyState.delete) {
+      return { type: 'backspaceDetailSearch' };
+    }
+
+    if (value && !keyState.ctrl && !keyState.meta) {
+      return { type: 'appendDetailSearch', value };
+    }
+
+    return { type: 'none' };
+  }
+
   const mouseEvent = parseInkMouseInput(value);
 
   if (mouseEvent) {
@@ -979,6 +1637,66 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   }
 
   if (isInkMouseInput(value)) {
+    return { type: 'none' };
+  }
+
+  if (isDetailModalOpen) {
+    if (keyState.escape || value === 'q') {
+      return { type: 'closeDetailModal' };
+    }
+
+    if (value === '/') {
+      return { type: 'openDetailSearch' };
+    }
+
+    if (value === 'n') {
+      return { type: 'moveDetailMatch', direction: 1 };
+    }
+
+    if (value === 'N') {
+      return { type: 'moveDetailMatch', direction: -1 };
+    }
+
+    if (value === 'r') {
+      return { type: 'toggleDetailTab' };
+    }
+
+    if (keyState.return) {
+      return { type: 'toggleDetailNode' };
+    }
+
+    if (keyState.upArrow || value === 'k') {
+      return { type: 'scrollDetails', direction: -1 };
+    }
+
+    if (keyState.downArrow || value === 'j') {
+      return { type: 'scrollDetails', direction: 1 };
+    }
+
+    if (keyState.pageUp || value === '[') {
+      return { type: 'scrollDetails', direction: -getPageStep(detailPageSize) };
+    }
+
+    if (keyState.pageDown || value === ']') {
+      return { type: 'scrollDetails', direction: getPageStep(detailPageSize) };
+    }
+
+    if (value === 'u' && keyState.ctrl) {
+      return { type: 'scrollDetails', direction: -getPageStep(detailPageSize, 'half') };
+    }
+
+    if (value === 'd' && keyState.ctrl) {
+      return { type: 'scrollDetails', direction: getPageStep(detailPageSize, 'half') };
+    }
+
+    if (value === 'g') {
+      return { type: 'scrollDetailsTo', boundary: 'top' };
+    }
+
+    if (value === 'G') {
+      return { type: 'scrollDetailsTo', boundary: 'bottom' };
+    }
+
     return { type: 'none' };
   }
 
@@ -1033,7 +1751,9 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   }
 
   if (value === '/') {
-    return { type: 'openFilter', focus: 'query' };
+    return isListFocused
+      ? { type: 'openFilter', focus: 'query' }
+      : { type: 'openDetailSearch' };
   }
 
   if (value === 'x') {
@@ -1048,8 +1768,12 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     return { type: 'followLatest' };
   }
 
+  if (value === 'o') {
+    return { type: 'openDetailModal' };
+  }
+
   if (keyState.return) {
-    return { type: 'inspectSelected' };
+    return isListFocused ? { type: 'inspectSelected' } : { type: 'toggleDetailNode' };
   }
 
   if (value === 'm') {
@@ -1074,6 +1798,14 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
 
   if (value === 's') {
     return { type: 'openFilter', focus: 'status' };
+  }
+
+  if (value === 'n' && !isListFocused) {
+    return { type: 'moveDetailMatch', direction: 1 };
+  }
+
+  if (value === 'N' && !isListFocused) {
+    return { type: 'moveDetailMatch', direction: -1 };
   }
 
   if (keyState.tab) {
@@ -1136,27 +1868,37 @@ function KeyboardControls({
   isListFocused,
   isHelpOpen,
   isFilterOpen,
+  isDetailSearchOpen,
+  isDetailModalOpen,
   isReplayMode,
   detailPageSize,
   trafficPageSize,
   onAppendSearch,
+  onAppendDetailSearch,
   onBackspaceSearch,
+  onBackspaceDetailSearch,
   onClearFilters,
   onClearLogs,
+  onCloseDetailModal,
   onCloseHelp,
   onCycleFilterFocus,
+  onFinishDetailSearch,
   onFinishSearch,
   onFollowLatest,
   onInspectSelected,
+  onMoveDetailMatch,
   onMoveSelectionTo,
   onMoveFilterOption,
   onMoveSelection,
+  onOpenDetailModal,
+  onOpenDetailSearch,
   onOpenFilter,
   onOpenHelp,
   onQuit,
   onScrollDetails,
   onScrollDetailsTo,
   onStopRecording,
+  onToggleDetailNode,
   onToggleFilterOption,
   onToggleDetailTab,
   onToggleFocus,
@@ -1169,6 +1911,8 @@ function KeyboardControls({
       isListFocused,
       isHelpOpen,
       isFilterOpen,
+      isDetailSearchOpen,
+      isDetailModalOpen,
       isReplayMode,
       detailPageSize,
       trafficPageSize
@@ -1178,14 +1922,23 @@ function KeyboardControls({
       case 'appendSearch':
         onAppendSearch(action.value);
         break;
+      case 'appendDetailSearch':
+        onAppendDetailSearch(action.value);
+        break;
       case 'backspaceSearch':
         onBackspaceSearch();
+        break;
+      case 'backspaceDetailSearch':
+        onBackspaceDetailSearch();
         break;
       case 'clearFilters':
         onClearFilters();
         break;
       case 'clearLogs':
         onClearLogs();
+        break;
+      case 'closeDetailModal':
+        onCloseDetailModal();
         break;
       case 'closeHelp':
         onCloseHelp();
@@ -1196,6 +1949,9 @@ function KeyboardControls({
       case 'finishSearch':
         onFinishSearch();
         break;
+      case 'finishDetailSearch':
+        onFinishDetailSearch();
+        break;
       case 'followLatest':
         onFollowLatest();
         break;
@@ -1205,6 +1961,9 @@ function KeyboardControls({
       case 'moveFilterOption':
         onMoveFilterOption(action.direction);
         break;
+      case 'moveDetailMatch':
+        onMoveDetailMatch(action.direction);
+        break;
       case 'moveSelection':
         onMoveSelection(action.direction);
         break;
@@ -1213,6 +1972,12 @@ function KeyboardControls({
         break;
       case 'openFilter':
         onOpenFilter(action.focus);
+        break;
+      case 'openDetailModal':
+        onOpenDetailModal();
+        break;
+      case 'openDetailSearch':
+        onOpenDetailSearch();
         break;
       case 'openHelp':
         onOpenHelp();
@@ -1231,6 +1996,9 @@ function KeyboardControls({
         break;
       case 'toggleDetailTab':
         onToggleDetailTab();
+        break;
+      case 'toggleDetailNode':
+        onToggleDetailNode();
         break;
       case 'toggleFilterOption':
         onToggleFilterOption();
@@ -1286,6 +2054,12 @@ export function App({
   const [statusOptionIndex, setStatusOptionIndex] = useState(0);
   const [detailTab, setDetailTab] = useState('request');
   const [detailScrollOffset, setDetailScrollOffset] = useState(0);
+  const [focusedDetailRow, setFocusedDetailRow] = useState(0);
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [detailSearchQuery, setDetailSearchQuery] = useState('');
+  const [isDetailSearchOpen, setIsDetailSearchOpen] = useState(false);
+  const [detailMatchIndex, setDetailMatchIndex] = useState(0);
+  const [collapsedDetailPaths, setCollapsedDetailPaths] = useState([]);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const isReplayMode = context.mode === 'replay';
   const showCookieValues = Boolean(context.showCookieValues);
@@ -1327,6 +2101,8 @@ export function App({
 
   useEffect(() => {
     setDetailScrollOffset(0);
+    setFocusedDetailRow(0);
+    setDetailMatchIndex(0);
   }, [inspectedLogId, detailTab]);
 
   const selectedIndex = useMemo(() => getSelectedIndex(filteredLogs, selectedLogId), [filteredLogs, selectedLogId]);
@@ -1334,18 +2110,29 @@ export function App({
   const inspectedLog = useMemo(() => {
     return filteredLogs.find((log) => log.id === inspectedLogId) ?? selectedLog;
   }, [filteredLogs, inspectedLogId, selectedLog]);
-  const detailLines = useMemo(
-    () => getDetailLines(inspectedLog, detailTab, {
+  const rawDetailRows = useMemo(
+    () => getDetailRows(inspectedLog, detailTab, {
+      collapsedPaths: collapsedDetailPaths,
       publicTargetUrl,
       proxyOrigin,
       showCookieValues
     }),
-    [detailTab, inspectedLog, publicTargetUrl, proxyOrigin, showCookieValues]
+    [collapsedDetailPaths, detailTab, inspectedLog, publicTargetUrl, proxyOrigin, showCookieValues]
   );
-  const bottomOffset = isFilterOpen ? 19 : 13;
+  const detailMatches = useMemo(
+    () => findDetailMatches(rawDetailRows, detailSearchQuery),
+    [detailSearchQuery, rawDetailRows]
+  );
+  const detailRows = useMemo(
+    () => applyDetailMatches(rawDetailRows, detailMatches, detailMatchIndex),
+    [detailMatchIndex, detailMatches, rawDetailRows]
+  );
+  const bottomOffset = isFilterOpen ? 19 : (isDetailSearchOpen ? 13 + DETAIL_SEARCH_BAR_HEIGHT : 13);
   const trafficVisibleCount = getTrafficVisibleCount(bottomOffset);
   const detailVisibleCount = getDetailVisibleCount(bottomOffset);
-  const maxDetailScrollOffset = getMaxScrollOffset(detailLines, detailVisibleCount);
+  const detailModalVisibleCount = getDetailModalVisibleCount(isDetailSearchOpen ? 11 + DETAIL_SEARCH_BAR_HEIGHT : 11);
+  const activeDetailVisibleCount = isDetailModalOpen ? detailModalVisibleCount : detailVisibleCount;
+  const maxDetailScrollOffset = getMaxScrollOffset(detailRows, activeDetailVisibleCount);
   const emptyText = context.mode === 'live'
     ? `Waiting for traffic at ${proxyOrigin}`
     : (isReplayMode ? 'No recorded traffic' : 'Waiting for traffic...');
@@ -1353,6 +2140,32 @@ export function App({
   useEffect(() => {
     setDetailScrollOffset((current) => Math.min(current, maxDetailScrollOffset));
   }, [maxDetailScrollOffset]);
+
+  useEffect(() => {
+    setFocusedDetailRow((current) => clampDetailRowIndex(current, detailRows));
+  }, [detailRows]);
+
+  useEffect(() => {
+    setDetailMatchIndex((current) => detailMatches.length === 0
+      ? 0
+      : Math.min(current, detailMatches.length - 1));
+  }, [detailMatches]);
+
+  useEffect(() => {
+    if (!detailSearchQuery.trim() || detailMatches.length === 0) {
+      return;
+    }
+
+    const activeRow = detailMatches[Math.min(detailMatchIndex, detailMatches.length - 1)];
+
+    setFocusedDetailRow(activeRow);
+    setDetailScrollOffset((current) => getScrollOffsetForFocusedRow(
+      activeRow,
+      current,
+      activeDetailVisibleCount,
+      maxDetailScrollOffset
+    ));
+  }, [activeDetailVisibleCount, detailMatchIndex, detailMatches, detailSearchQuery, maxDetailScrollOffset]);
 
   const clearFilters = () => {
     setMethodFilters([]);
@@ -1363,6 +2176,47 @@ export function App({
     setMethodOptionIndex(0);
     setStatusOptionIndex(0);
     setIsFollowingLatest(false);
+  };
+
+  const focusDetailRowAt = (rowIndex) => {
+    const safeRowIndex = clampDetailRowIndex(rowIndex, detailRows);
+
+    setFocusedDetailRow(safeRowIndex);
+    setDetailScrollOffset((current) => getScrollOffsetForFocusedRow(
+      safeRowIndex,
+      current,
+      activeDetailVisibleCount,
+      maxDetailScrollOffset
+    ));
+  };
+
+  const moveDetailFocus = (direction) => {
+    focusDetailRowAt(focusedDetailRow + direction);
+  };
+
+  const moveDetailMatch = (direction) => {
+    if (detailMatches.length === 0) {
+      return;
+    }
+
+    const nextMatchIndex = getNextDetailMatchIndex(detailMatches, detailMatchIndex, direction);
+
+    setDetailMatchIndex(nextMatchIndex);
+    focusDetailRowAt(detailMatches[nextMatchIndex]);
+  };
+
+  const toggleFocusedDetailNode = () => {
+    const row = detailRows[focusedDetailRow] ?? detailRows[detailScrollOffset];
+
+    if (!row?.collapsible || !row.path) {
+      return;
+    }
+
+    setCollapsedDetailPaths((current) => {
+      return current.includes(row.path)
+        ? current.filter((path) => path !== row.path)
+        : [...current, row.path];
+    });
   };
 
   return h(
@@ -1378,12 +2232,22 @@ export function App({
         isListFocused,
         isHelpOpen,
         isFilterOpen,
+        isDetailSearchOpen,
+        isDetailModalOpen,
         isReplayMode,
-        detailPageSize: detailVisibleCount,
+        detailPageSize: activeDetailVisibleCount,
         trafficPageSize: trafficVisibleCount,
+        onAppendDetailSearch: (value) => {
+          setDetailSearchQuery((current) => `${current}${value}`);
+          setDetailMatchIndex(0);
+        },
         onAppendSearch: (value) => {
           setSearchQuery((current) => `${current}${value}`);
           setIsFollowingLatest(false);
+        },
+        onBackspaceDetailSearch: () => {
+          setDetailSearchQuery((current) => current.slice(0, -1));
+          setDetailMatchIndex(0);
         },
         onBackspaceSearch: () => {
           setSearchQuery((current) => current.slice(0, -1));
@@ -1396,12 +2260,15 @@ export function App({
           setInspectedLogId(null);
           setIsFollowingLatest(false);
           setDetailScrollOffset(0);
+          setFocusedDetailRow(0);
         },
+        onCloseDetailModal: () => setIsDetailModalOpen(false),
         onCloseHelp: () => setIsHelpOpen(false),
         onCycleFilterFocus: (direction) => {
           setFilterFocus((current) => cycleValue(FILTER_FOCUS_ORDER, current, direction));
           setIsFollowingLatest(false);
         },
+        onFinishDetailSearch: () => setIsDetailSearchOpen(false),
         onFinishSearch: () => setIsFilterOpen(false),
         onQuit,
         onToggleFocus: () => setIsListFocused((current) => !current),
@@ -1420,6 +2287,7 @@ export function App({
 
           setIsFollowingLatest(false);
         },
+        onMoveDetailMatch: moveDetailMatch,
         onMoveSelection: (direction) => {
           setIsFollowingLatest(false);
           setSelectedLogId((currentId) => moveSelectedLogId(filteredLogs, currentId, direction));
@@ -1431,14 +2299,28 @@ export function App({
         onOpenFilter: (focus) => {
           setFilterFocus(focus);
           setIsFilterOpen(true);
+          setIsDetailSearchOpen(false);
           setIsFollowingLatest(false);
+        },
+        onOpenDetailModal: () => {
+          if (inspectedLog) {
+            setIsDetailModalOpen(true);
+            setIsListFocused(false);
+            setIsFilterOpen(false);
+          }
+        },
+        onOpenDetailSearch: () => {
+          setIsDetailSearchOpen(true);
+          setIsFilterOpen(false);
+          setIsListFocused(false);
         },
         onOpenHelp: () => setIsHelpOpen(true),
         onScrollDetails: (direction) => {
-          setDetailScrollOffset((current) => clampScrollOffset(current, direction, maxDetailScrollOffset));
+          moveDetailFocus(direction);
         },
         onScrollDetailsTo: (boundary) => {
-          setDetailScrollOffset(boundary === 'bottom' ? maxDetailScrollOffset : 0);
+          const rowIndex = boundary === 'bottom' ? Math.max(0, detailRows.length - 1) : 0;
+          focusDetailRowAt(rowIndex);
         },
         onStopRecording: () => {
           const result = trafficRecorder?.stopRecording?.();
@@ -1457,6 +2339,7 @@ export function App({
         onInspectSelected: () => {
           setInspectedLogId(selectedLog?.id ?? null);
           setDetailScrollOffset(0);
+          setFocusedDetailRow(0);
           if (selectedLog) {
             trafficRecorder?.recordInteraction?.(selectedLog, 'inspect');
           }
@@ -1482,6 +2365,7 @@ export function App({
         onToggleDetailTab: () => {
           setDetailTab((current) => cycleValue(DETAIL_TABS, current));
         },
+        onToggleDetailNode: toggleFocusedDetailNode,
         onTogglePause: () => {
           setIsPaused((current) => {
             const next = !current;
@@ -1507,7 +2391,18 @@ export function App({
       { flexDirection: 'row', flexGrow: 1 },
       isHelpOpen
         ? h(HelpModal)
-        : [
+        : (isDetailModalOpen
+          ? h(DetailModal, {
+            activeMatchIndex: detailMatchIndex,
+            detailTab,
+            focusedRow: focusedDetailRow,
+            log: inspectedLog,
+            matchCount: detailMatches.length,
+            rows: detailRows,
+            scrollOffset: detailScrollOffset,
+            visibleCount: detailModalVisibleCount
+          })
+          : [
           h(TrafficList, {
             key: 'traffic',
             bottomOffset,
@@ -1528,12 +2423,13 @@ export function App({
             log: inspectedLog,
             isFocused: !isListFocused,
             detailTab,
+            focusedRow: focusedDetailRow,
+            rows: detailRows,
             scrollOffset: detailScrollOffset,
-            publicTargetUrl,
-            proxyOrigin,
-            showCookieValues
+            matchCount: detailMatches.length,
+            activeMatchIndex: detailMatchIndex
           })
-        ]
+        ])
     ),
     isFilterOpen
       ? h(FilterBar, {
@@ -1547,10 +2443,18 @@ export function App({
         statusOptionIndex,
         visibleCount: filteredLogs.length
       })
-      : h(Footer, {
-        isHelpOpen,
-        isListFocused,
-        isRawModeSupported
-      })
+      : (isDetailSearchOpen
+        ? h(DetailSearchBar, {
+          activeMatchIndex: detailMatchIndex,
+          matchCount: detailMatches.length,
+          query: detailSearchQuery
+        })
+        : h(Footer, {
+          isDetailModalOpen,
+          isDetailSearchActive: detailSearchQuery.trim().length > 0,
+          isHelpOpen,
+          isListFocused: isDetailModalOpen ? false : isListFocused,
+          isRawModeSupported
+        }))
   );
 }

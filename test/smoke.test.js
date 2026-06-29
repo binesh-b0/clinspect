@@ -68,6 +68,7 @@ test('startInspector selects the live proxy engine for live mode', async () => {
   const inspector = startInspector(
     {
       mode: 'live',
+      bodyLimit: 12345,
       openBrowser: false,
       port: 9090,
       targetUrl: 'http://localhost:3000/'
@@ -81,7 +82,7 @@ test('startInspector selects the live proxy engine for live mode', async () => {
         }
       }),
       startLiveProxy: (stateStore, options) => {
-        calls.push(['live', options.port, options.targetUrl, typeof options.shouldCapture]);
+        calls.push(['live', options.port, options.targetUrl, options.bodyLimit, options.responseEncodingPolicy, typeof options.shouldCapture]);
 
         return {
           stop() {
@@ -95,12 +96,12 @@ test('startInspector selects the live proxy engine for live mode', async () => {
     }
   );
 
-  assert.deepEqual(calls, [['live', 9090, 'http://localhost:3000/', 'function']]);
+  assert.deepEqual(calls, [['live', 9090, 'http://localhost:3000/', 12345, 'readable', 'function']]);
 
   await inspector.stop();
 
   assert.deepEqual(calls, [
-    ['live', 9090, 'http://localhost:3000/', 'function'],
+    ['live', 9090, 'http://localhost:3000/', 12345, 'readable', 'function'],
     ['unmount'],
     ['stop'],
     ['exit', 0]

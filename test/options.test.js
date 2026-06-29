@@ -6,11 +6,13 @@ import {
   formatRecordingTimestamp,
   getCliHelpText,
   isHelpRequested,
+  parseBodyLimit,
   parseCliOptions,
   parsePort,
   parseRecordMode,
   parseTargetUrl
 } from '../src/cli/options.js';
+import { DEFAULT_BODY_LIMIT } from '../src/store/state.js';
 
 test('parsePort accepts valid TCP ports', () => {
   assert.equal(parsePort('1'), 1);
@@ -22,6 +24,13 @@ test('parsePort rejects invalid ports', () => {
   assert.throws(() => parsePort('0'), /port must be an integer/);
   assert.throws(() => parsePort('65536'), /port must be an integer/);
   assert.throws(() => parsePort('abc'), /port must be an integer/);
+});
+
+test('parseBodyLimit accepts bounded byte counts', () => {
+  assert.equal(parseBodyLimit('0'), 0);
+  assert.equal(parseBodyLimit('65536'), 65536);
+  assert.throws(() => parseBodyLimit('-1'), /body-limit must be an integer/);
+  assert.throws(() => parseBodyLimit('bad'), /body-limit must be an integer/);
 });
 
 test('parseTargetUrl accepts http and https URLs', () => {
@@ -47,6 +56,7 @@ test('recording option helpers validate modes and format default paths', () => {
 
 test('parseCliOptions defaults to demo mode without a target', () => {
   assert.deepEqual(parseCliOptions(['node', 'clinspect']), {
+    bodyLimit: DEFAULT_BODY_LIMIT,
     mode: 'demo',
     openBrowser: false,
     port: DEFAULT_PORT,
@@ -56,6 +66,7 @@ test('parseCliOptions defaults to demo mode without a target', () => {
       path: null
     },
     recordCookieValues: false,
+    responseEncodingPolicy: 'readable',
     showCookieValues: false,
     targetUrl: null
   });
@@ -70,6 +81,7 @@ test('parseCliOptions uses live mode when a target is provided', () => {
     '--port',
     '9090'
   ]), {
+    bodyLimit: DEFAULT_BODY_LIMIT,
     mode: 'live',
     openBrowser: false,
     port: 9090,
@@ -79,9 +91,29 @@ test('parseCliOptions uses live mode when a target is provided', () => {
       path: null
     },
     recordCookieValues: false,
+    responseEncodingPolicy: 'readable',
     showCookieValues: false,
     targetUrl: 'http://localhost:5173/'
   });
+});
+
+test('parseCliOptions supports body capture limit overrides', () => {
+  assert.equal(parseCliOptions([
+    'node',
+    'clinspect',
+    '--body-limit',
+    '131072'
+  ]).bodyLimit, 131072);
+});
+
+test('parseCliOptions supports preserving upstream response encoding', () => {
+  assert.equal(parseCliOptions([
+    'node',
+    'clinspect',
+    '--target',
+    'https://example.com',
+    '--preserve-encoding'
+  ]).responseEncodingPolicy, 'preserve');
 });
 
 test('parseCliOptions enables browser open flag', () => {
@@ -92,6 +124,7 @@ test('parseCliOptions enables browser open flag', () => {
     'https://example.com',
     '--open'
   ]), {
+    bodyLimit: DEFAULT_BODY_LIMIT,
     mode: 'live',
     openBrowser: true,
     port: DEFAULT_PORT,
@@ -101,6 +134,7 @@ test('parseCliOptions enables browser open flag', () => {
       path: null
     },
     recordCookieValues: false,
+    responseEncodingPolicy: 'readable',
     showCookieValues: false,
     targetUrl: 'https://example.com/'
   });
@@ -139,6 +173,7 @@ test('parseCliOptions supports cookie privacy flags', () => {
     'clinspect',
     '--show-cookie-values'
   ]), {
+    bodyLimit: DEFAULT_BODY_LIMIT,
     mode: 'demo',
     openBrowser: false,
     port: DEFAULT_PORT,
@@ -148,6 +183,7 @@ test('parseCliOptions supports cookie privacy flags', () => {
       path: null
     },
     recordCookieValues: false,
+    responseEncodingPolicy: 'readable',
     showCookieValues: true,
     targetUrl: null
   });
@@ -177,6 +213,7 @@ test('parseCliOptions supports replay mode and rejects live or recording flags',
     '--load',
     './captures/session.ndjson'
   ]), {
+    bodyLimit: DEFAULT_BODY_LIMIT,
     mode: 'replay',
     loadedSession: null,
     openBrowser: false,
@@ -187,6 +224,7 @@ test('parseCliOptions supports replay mode and rejects live or recording flags',
       path: null
     },
     recordCookieValues: false,
+    responseEncodingPolicy: 'readable',
     sessionPath: './captures/session.ndjson',
     showCookieValues: false,
     targetUrl: null
@@ -217,6 +255,10 @@ test('parseCliOptions supports replay mode and rejects live or recording flags',
     /load cannot be combined/
   );
   assert.throws(
+    () => parseCliOptions(['node', 'clinspect', '--load', './capture.ndjson', '--preserve-encoding']),
+    /load cannot be combined/
+  );
+  assert.throws(
     () => parseCliOptions(['node', 'clinspect', '--load', './capture.ndjson', '--record-path', './out.ndjson']),
     /load cannot be combined/
   );
@@ -234,10 +276,12 @@ test('help helpers detect help requests and expose command help', () => {
   const helpText = getCliHelpText();
 
   assert.match(helpText, /Usage: clinspect/);
+  assert.match(helpText, /--body-limit <bytes>/);
   assert.match(helpText, /--load <path>/);
   assert.match(helpText, /--target <url>/);
   assert.match(helpText, /--port <number>/);
   assert.match(helpText, /--open/);
+  assert.match(helpText, /--preserve-encoding/);
   assert.match(helpText, /--record <mode>/);
   assert.match(helpText, /--record-path <path>/);
   assert.match(helpText, /--show-cookie-values/);

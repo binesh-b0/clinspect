@@ -80,10 +80,11 @@ function getTargetKind(options = {}) {
 export function startInspector(options, runtime = {}) {
   const now = runtime.now ?? (() => new Date());
   const startedAt = now();
+  const bodyLimit = options.bodyLimit ?? DEFAULT_BODY_LIMIT;
   const loadSession = runtime.loadRecordedSession ?? loadRecordedSession;
   const loadedSession = options.mode === 'replay'
     ? loadSession(options.sessionPath, {
-      bodyLimit: DEFAULT_BODY_LIMIT,
+      bodyLimit,
       showCookieValues: options.showCookieValues
     })
     : null;
@@ -91,7 +92,7 @@ export function startInspector(options, runtime = {}) {
     ? Math.max(DEFAULT_MAX_ENTRIES, loadedSession.entries.length)
     : DEFAULT_MAX_ENTRIES;
   const stateStore = runtime.stateStore ?? new StateStore({
-    bodyLimit: DEFAULT_BODY_LIMIT,
+    bodyLimit,
     maxEntries
   });
   const renderApp = runtime.renderApp ?? render;
@@ -109,7 +110,7 @@ export function startInspector(options, runtime = {}) {
     ? (runtime.trafficRecorder ?? runtime.recorder ?? createNoopRecorder())
     : (runtime.trafficRecorder ?? runtime.recorder ?? createRuntimeRecorder({
       ...options.recording,
-      bodyLimit: DEFAULT_BODY_LIMIT,
+      bodyLimit,
       clinspectVersion: CLINSPECT_VERSION,
       cookieValuePolicy: options.recording?.mode === 'off'
         ? 'raw'
@@ -157,14 +158,15 @@ export function startInspector(options, runtime = {}) {
     engine = createNoopEngine();
   } else if (options.mode === 'live') {
     engine = startProxy(stateStore, {
-      bodyLimit: DEFAULT_BODY_LIMIT,
+      bodyLimit,
       port: options.port,
+      responseEncodingPolicy: options.responseEncodingPolicy ?? 'readable',
       shouldCapture: () => captureController.shouldCapture(),
       targetUrl: options.targetUrl
     });
   } else {
     engine = startDemoFeed(stateStore, {
-      bodyLimit: DEFAULT_BODY_LIMIT,
+      bodyLimit,
       shouldCapture: () => captureController.shouldCapture()
     });
   }

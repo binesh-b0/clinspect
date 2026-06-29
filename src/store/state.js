@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 
 export const DEFAULT_MAX_ENTRIES = 100;
-export const DEFAULT_BODY_LIMIT = 2048;
+export const DEFAULT_BODY_LIMIT = 1024 * 1024;
 
 function stringifyBody(value) {
   if (value === null || value === undefined) {

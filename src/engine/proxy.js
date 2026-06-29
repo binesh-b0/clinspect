@@ -88,6 +88,7 @@ export function startLiveProxy(stateStore, options = {}) {
   const {
     bodyLimit = DEFAULT_BODY_LIMIT,
     port,
+    responseEncodingPolicy = 'readable',
     shouldCapture,
     targetUrl
   } = options;
@@ -108,6 +109,7 @@ export function startLiveProxy(stateStore, options = {}) {
 
   const proxy = httpProxy.createProxyServer(proxyOptions);
   const sockets = new Set();
+  const requestReadableResponses = responseEncodingPolicy !== 'preserve';
   let stopped = false;
 
   const server = http.createServer((req, res) => {
@@ -158,7 +160,16 @@ export function startLiveProxy(stateStore, options = {}) {
       return originalEnd(chunk, encoding, callback);
     };
 
-    proxy.web(req, res, { target: targetUrl }, () => {
+    const proxyRequestOptions = requestReadableResponses
+      ? {
+        target: targetUrl,
+        headers: {
+          'accept-encoding': 'identity'
+        }
+      }
+      : { target: targetUrl };
+
+    proxy.web(req, res, proxyRequestOptions, () => {
       if (!res.headersSent) {
         res.statusCode = 502;
         res.setHeader('content-type', 'text/plain; charset=utf-8');

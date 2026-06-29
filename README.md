@@ -22,7 +22,7 @@ npm install
 npm start
 ```
 
-Runs the mock terminal inspector.
+Runs inspector.
 
 ```sh
 npm test
@@ -66,6 +66,18 @@ To open the local proxy URL automatically for a public target:
 clinspect --target https://www.example.com --port 8080 --open
 ```
 
+Live proxy mode requests readable upstream responses by default so the response pane can show text bodies. To preserve the client `Accept-Encoding` header exactly:
+
+```sh
+clinspect --target https://www.example.com --preserve-encoding
+```
+
+Captured request and response bodies are capped at 1 MiB by default. Use `--body-limit` only when you need a different capture budget:
+
+```sh
+clinspect --target https://www.example.com --body-limit 262144
+```
+
 Record every captured request to disk:
 
 ```sh
@@ -107,12 +119,15 @@ Current MVP behavior:
 - labels non-loopback live targets as public targets
 - can open the local proxy URL automatically for public targets with `--open`
 - forwards live HTTP requests to the upstream target
+- requests uncompressed upstream responses by default, with `--preserve-encoding` for exact `Accept-Encoding` forwarding
 - rewrites target redirects back to the local proxy origin where possible
-- captures request/response headers, status, timing, and capped text bodies
+- captures request/response headers, status, timing, and capped text bodies with a configurable `--body-limit`
 - preserves multiple `Set-Cookie` headers, masks cookie values in the UI by default, and records cookie values when recording is enabled
-- shows a traffic list and selected payload details
-- supports up/down inspection, stable held selection, `f` follow-latest mode, tab focus toggle, detail scrolling, request/response tab switching, capture pause/resume with `p`, recording start/pause/resume with `P`, recording stop with `S`, clear logs, `q` quit, and Ctrl-C cleanup
-- opens a bottom filter panel with `/`, supports multi-select method/status options, and searches all, path, status, method, time, host, port, headers, or body
+- shows a traffic list and selected payload details with structured, color-coded JSON response trees
+- opens a full-screen detail inspector with `o`, closes it with `esc` or `q`, and supports request/response tab switching with `r`
+- supports detail search with `/` when details are focused, including plain text, `/regex/`, JSON path/value matches, and `n`/`N` match navigation
+- supports up/down inspection, stable held selection, `f` follow-latest mode, tab focus toggle, detail scrolling, tree expand/collapse with `enter`, capture pause/resume with `p`, recording start/pause/resume with `P`, recording stop with `S`, clear logs, `q` quit, and Ctrl-C cleanup
+- opens a bottom traffic filter panel with `/` when the traffic list is focused, supports multi-select method/status options, and searches all, path, status, method, time, host, port, headers, or body
 - supports quick filter controls: `m` opens method filters, `s` opens status filters, `space` toggles options, and `x` clears active filters
 - supports opt-in NDJSON disk recording for all captured traffic or only inspected entries
 - can load recorded NDJSON sessions for offline inspection with `--load`

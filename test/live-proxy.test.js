@@ -128,6 +128,79 @@ test('startLiveProxy forwards requests and captures traffic logs', async () => {
   }
 });
 
+test('startLiveProxy requests readable upstream responses by default', async () => {
+  let upstreamAcceptEncoding = null;
+  const upstream = await startServer((req, res) => {
+    upstreamAcceptEncoding = req.headers['accept-encoding'];
+    req.resume();
+    req.on('end', () => {
+      res.setHeader('content-type', 'text/plain');
+      res.end('readable response');
+    });
+  });
+  const store = new StateStore({ maxEntries: 10, bodyLimit: 1000 });
+  const proxy = startLiveProxy(store, {
+    bodyLimit: 1000,
+    port: 0,
+    targetUrl: upstream.url
+  });
+
+  try {
+    await proxy.ready;
+
+    const response = await fetch(`${proxyUrl(proxy)}/encoding`, {
+      headers: {
+        'accept-encoding': 'gzip, br, zstd'
+      }
+    });
+
+    assert.equal(await response.text(), 'readable response');
+    assert.equal(upstreamAcceptEncoding, 'identity');
+
+    const [log] = store.getLogs();
+
+    assert.equal(log.response.body, 'readable response');
+  } finally {
+    await proxy.stop();
+    await closeServer(upstream.server);
+  }
+});
+
+test('startLiveProxy can preserve the client Accept-Encoding header', async () => {
+  let upstreamAcceptEncoding = null;
+  const upstream = await startServer((req, res) => {
+    upstreamAcceptEncoding = req.headers['accept-encoding'];
+    req.resume();
+    req.on('end', () => {
+      res.setHeader('content-type', 'text/plain');
+      res.end('preserved response');
+    });
+  });
+  const store = new StateStore({ maxEntries: 10, bodyLimit: 1000 });
+  const proxy = startLiveProxy(store, {
+    bodyLimit: 1000,
+    port: 0,
+    responseEncodingPolicy: 'preserve',
+    targetUrl: upstream.url
+  });
+
+  try {
+    await proxy.ready;
+
+    const response = await fetch(`${proxyUrl(proxy)}/encoding`, {
+      headers: {
+        'accept-encoding': 'gzip, br, zstd'
+      }
+    });
+
+    assert.equal(await response.text(), 'preserved response');
+    assert.equal(upstreamAcceptEncoding, 'gzip, br, zstd');
+  } finally {
+    await proxy.stop();
+    await closeServer(upstream.server);
+  }
+});
+
 test('startLiveProxy caps captured request and response bodies', async () => {
   const upstream = await startServer((req, res) => {
     req.resume();

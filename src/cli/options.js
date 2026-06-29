@@ -1,6 +1,8 @@
 import { Command, InvalidArgumentError } from 'commander';
+import { DEFAULT_BODY_LIMIT } from '../store/state.js';
 
 export const DEFAULT_PORT = 8080;
+export const MAX_BODY_LIMIT = 10 * 1024 * 1024;
 export const RECORDING_MODES = ['full', 'partial'];
 
 function padTimestampPart(value) {
@@ -33,6 +35,16 @@ export function parsePort(value) {
   return port;
 }
 
+export function parseBodyLimit(value) {
+  const limit = Number(value);
+
+  if (!Number.isInteger(limit) || limit < 0 || limit > MAX_BODY_LIMIT) {
+    throw new InvalidArgumentError(`body-limit must be an integer between 0 and ${MAX_BODY_LIMIT} bytes`);
+  }
+
+  return limit;
+}
+
 export function parseTargetUrl(value) {
   try {
     const url = new URL(value);
@@ -61,10 +73,12 @@ export function createProgram() {
   return new Command()
     .name('clinspect')
     .description('Terminal HTTP traffic inspector')
+    .option('--body-limit <bytes>', 'maximum request/response body bytes to capture', parseBodyLimit, DEFAULT_BODY_LIMIT)
     .option('--load <path>', 'load a recorded NDJSON session without starting live or demo capture')
     .option('-p, --port <number>', 'local proxy port for live mode', parsePort, DEFAULT_PORT)
     .option('-t, --target <url>', 'upstream target URL for live proxy mode', parseTargetUrl)
     .option('--open', 'open the local proxy URL in a browser for public live targets')
+    .option('--preserve-encoding', 'preserve client Accept-Encoding when proxying live traffic')
     .option('--record <mode>', 'record traffic to disk (full|partial)', parseRecordMode)
     .option('--record-path <path>', 'exact NDJSON file path for --record output')
     .option('--show-cookie-values', 'show raw Cookie and Set-Cookie values in the UI and search')
@@ -105,11 +119,13 @@ export function parseCliOptions(argv = process.argv) {
   program.parse(argv, { from: 'node' });
 
   const options = program.opts();
+  const bodyLimit = options.bodyLimit;
   const sessionPath = options.load ?? null;
   const targetUrl = options.target ?? null;
   const recordMode = options.record ?? 'off';
   const showCookieValues = Boolean(options.showCookieValues);
   const recordCookieValues = Boolean(options.recordCookieValues);
+  const responseEncodingPolicy = options.preserveEncoding ? 'preserve' : 'readable';
 
   if (sessionPath) {
     const hasReplayConflict = Boolean(
@@ -117,16 +133,18 @@ export function parseCliOptions(argv = process.argv) {
       options.open ||
       options.record ||
       options.recordPath ||
+      options.preserveEncoding ||
       recordCookieValues ||
       hasExplicitOption(argv, ['--port', '-p'])
     );
 
     if (hasReplayConflict) {
-      throw new InvalidArgumentError('load cannot be combined with --target, --port, --open, --record, --record-path, or --record-cookie-values');
+      throw new InvalidArgumentError('load cannot be combined with --target, --port, --open, --preserve-encoding, --record, --record-path, or --record-cookie-values');
     }
 
     return {
       mode: 'replay',
+      bodyLimit,
       loadedSession: null,
       openBrowser: false,
       port: DEFAULT_PORT,
@@ -136,6 +154,7 @@ export function parseCliOptions(argv = process.argv) {
         path: null
       },
       recordCookieValues: false,
+      responseEncodingPolicy,
       sessionPath,
       showCookieValues,
       targetUrl: null
@@ -152,6 +171,7 @@ export function parseCliOptions(argv = process.argv) {
 
   return {
     mode: targetUrl ? 'live' : 'demo',
+    bodyLimit,
     openBrowser: Boolean(options.open),
     port: options.port,
     recording: {
@@ -162,6 +182,7 @@ export function parseCliOptions(argv = process.argv) {
         : (options.recordPath ?? createDefaultRecordingPath())
     },
     recordCookieValues: recordMode !== 'off',
+    responseEncodingPolicy,
     showCookieValues,
     targetUrl
   };

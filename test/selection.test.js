@@ -2,22 +2,30 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   countActiveFilters,
+  applyDetailMatches,
+  clampDetailRowIndex,
   clampScrollOffset,
   cycleValue,
   extractPortFromHost,
+  findDetailMatches,
   filterLogs,
   formatFooterText,
   formatFilterLabel,
+  formatStructuredPayloadRows,
   formatRecordingLabel,
   HELP_SECTIONS,
   getBoundaryLogId,
   getDetailVisibleCount,
   getDetailLines,
+  getDetailRows,
   getKeyboardAction,
   getMaxScrollOffset,
   getMouseWheelTarget,
+  getNextDetailMatchIndex,
   getPageStep,
   getRenderHeight,
+  getScrollOffsetForFocusedRow,
+  parseDetailSearchQuery,
   getSelectedIndex,
   getSearchValues,
   getTrafficVisibleCount,
@@ -87,6 +95,11 @@ test('detail scroll helper clamps page-wise scrolling', () => {
   assert.equal(clampScrollOffset(8, 5, 10), 10);
   assert.equal(clampScrollOffset(Number.NaN, 5, 10), 5);
   assert.equal(clampScrollOffset(8, 5, Number.NaN), 0);
+  assert.equal(clampDetailRowIndex(5, [{}, {}, {}]), 2);
+  assert.equal(clampDetailRowIndex(-1, [{}, {}, {}]), 0);
+  assert.equal(getScrollOffsetForFocusedRow(12, 0, 5, 20), 8);
+  assert.equal(getScrollOffsetForFocusedRow(2, 10, 5, 20), 2);
+  assert.equal(getScrollOffsetForFocusedRow(12, 10, 5, 20), 10);
 });
 
 test('keyboard action helper resolves navigation aliases and page movement', () => {
@@ -146,6 +159,31 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
     getKeyboardAction('S', {}, { isReplayMode: true }),
     { type: 'none' }
   );
+  assert.deepEqual(
+    getKeyboardAction('', { return: true }, { isListFocused: true }),
+    { type: 'inspectSelected' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { return: true }, { isListFocused: false }),
+    { type: 'toggleDetailNode' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('/', {}, { isListFocused: true }),
+    { type: 'openFilter', focus: 'query' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('/', {}, { isListFocused: false }),
+    { type: 'openDetailSearch' }
+  );
+  assert.deepEqual(getKeyboardAction('o'), { type: 'openDetailModal' });
+  assert.deepEqual(
+    getKeyboardAction('n', {}, { isListFocused: false }),
+    { type: 'moveDetailMatch', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('N', {}, { isListFocused: false }),
+    { type: 'moveDetailMatch', direction: -1 }
+  );
 });
 
 test('keyboard action helper gates help modal and preserves filter query input', () => {
@@ -181,6 +219,37 @@ test('keyboard action helper gates help modal and preserves filter query input',
   );
 });
 
+test('keyboard action helper supports detail modal and detail search input', () => {
+  assert.deepEqual(
+    getKeyboardAction('q', {}, { isDetailModalOpen: true }),
+    { type: 'closeDetailModal' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { escape: true }, { isDetailModalOpen: true }),
+    { type: 'closeDetailModal' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('/', {}, { isDetailModalOpen: true }),
+    { type: 'openDetailSearch' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('j', {}, { isDetailModalOpen: true }),
+    { type: 'scrollDetails', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('a', {}, { isDetailSearchOpen: true }),
+    { type: 'appendDetailSearch', value: 'a' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isDetailSearchOpen: true }),
+    { type: 'backspaceDetailSearch' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { return: true }, { isDetailSearchOpen: true }),
+    { type: 'finishDetailSearch' }
+  );
+});
+
 test('mouse wheel routing maps the fixed traffic pane by terminal column', () => {
   assert.equal(getMouseWheelTarget(1), 'traffic');
   assert.equal(getMouseWheelTarget(51), 'traffic');
@@ -201,7 +270,15 @@ test('footer text shows mode-aware essential keymaps', () => {
   );
   assert.equal(
     formatFooterText({ isListFocused: false }),
-    'j/k scroll  [/] page  g/G top/bottom  r req/res  tab traffic  P rec  S stop  h help  q quit'
+    'j/k scroll  [/] page  g/G top/bottom  r req/res  / find  n/N match  o big  tab traffic  P rec  S stop  h help  q quit'
+  );
+  assert.equal(
+    formatFooterText({ isListFocused: false, isDetailSearchActive: true }),
+    'detail search active  / edit  n/N match  j/k scroll  enter collapse  o big  tab traffic  q quit'
+  );
+  assert.equal(
+    formatFooterText({ isListFocused: false, isDetailSearchActive: true, isDetailModalOpen: true }),
+    'detail search active  / edit  n/N match  j/k scroll  enter collapse  esc/q close'
   );
   assert.equal(formatFooterText({ isHelpOpen: true }), 'help | esc/h/q close');
 });
@@ -530,4 +607,163 @@ test('detail helpers build scrollable request and response lines', () => {
     '[body truncated]'
   ]);
   assert.equal(getMaxScrollOffset(getDetailLines(log, 'request'), 4), 2);
+});
+
+test('response details omit compressed bodies that would corrupt the terminal', () => {
+  const log = {
+    request: { headers: {}, body: '' },
+    response: {
+      headers: {
+        'content-encoding': 'zstd',
+        'content-type': 'text/html; charset=utf-8'
+      },
+      body: '\u0000\u001B[31mbinary',
+      truncated: true
+    }
+  };
+
+  assert.deepEqual(getDetailLines(log, 'response'), [
+    'Response headers',
+    'content-encoding: zstd',
+    'content-type: text/html; charset=utf-8',
+    '',
+    'Response body',
+    '(compressed body not shown: zstd)',
+    '[body truncated]'
+  ]);
+});
+
+test('response details omit binary content types and sanitize text bodies', () => {
+  const binaryLog = {
+    request: { headers: {}, body: '' },
+    response: {
+      headers: { 'content-type': 'image/png' },
+      body: 'png bytes',
+      truncated: false
+    }
+  };
+  const textLog = {
+    request: { headers: {}, body: '' },
+    response: {
+      headers: { 'content-type': 'application/json' },
+      body: 'line 1\r\nline 2\u001B[31m',
+      truncated: false
+    }
+  };
+
+  assert.deepEqual(getDetailLines(binaryLog, 'response').slice(3), [
+    'Response body',
+    '(binary body omitted: image/png)'
+  ]);
+  assert.deepEqual(getDetailLines(textLog, 'response').slice(3), [
+    'Response body',
+    'line 1\uFFFD',
+    'line 2\uFFFD[31m'
+  ]);
+});
+
+test('response details pretty-print JSON bodies and split long text lines', () => {
+  const jsonLog = {
+    request: { headers: {}, body: '' },
+    response: {
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+      body: '{"id":"one","items":[{"name":"Ada"}]}',
+      truncated: false
+    }
+  };
+  const longTextLog = {
+    request: { headers: {}, body: '' },
+    response: {
+      headers: { 'content-type': 'text/plain' },
+      body: `${'a'.repeat(120)}b`,
+      truncated: false
+    }
+  };
+
+  assert.deepEqual(getDetailLines(jsonLog, 'response').slice(3), [
+    'Response body',
+    'v $ { 2 keys',
+    '  id: "one"',
+    '  v items: [ 1 items',
+    '    v [0]: { 1 keys',
+    '      name: "Ada"',
+    '    }',
+    '  ]',
+    '}'
+  ]);
+  assert.deepEqual(getDetailLines(longTextLog, 'response').slice(3), [
+    'Response body',
+    'a'.repeat(120),
+    'b'
+  ]);
+});
+
+test('detail headers wrap long values without overflowing the pane', () => {
+  const reportTo = `{"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=${'x'.repeat(160)}"}]}`;
+  const log = {
+    request: { headers: {}, body: '' },
+    response: {
+      headers: { 'report-to': reportTo },
+      body: ''
+    }
+  };
+  const lines = getDetailLines(log, 'response');
+  const rows = getDetailRows(log, 'response');
+  const headerEndIndex = lines.indexOf('');
+  const headerLines = lines.slice(1, headerEndIndex);
+  const headerRows = rows.slice(1, headerEndIndex);
+
+  assert.equal(headerLines[0].startsWith('report-to: '), true);
+  assert.equal(headerLines[1].startsWith(' '.repeat('report-to: '.length)), true);
+  assert.equal(headerLines.length > 1, true);
+  assert.equal(headerLines.every((line) => line.length <= 120), true);
+  assert.equal(headerRows.every((row) => row.path === 'headers.report-to'), true);
+});
+
+test('structured detail rows expose JSON path metadata and collapse summaries', () => {
+  const payload = {
+    headers: { 'content-type': 'application/json' },
+    body: '{"items":[{"name":"Ada","active":true}],"total":1}',
+    truncated: false
+  };
+  const rows = formatStructuredPayloadRows(payload);
+  const collapsedRows = formatStructuredPayloadRows(payload, {
+    collapsedPaths: ['items[0]']
+  });
+
+  assert.deepEqual(rows.map((row) => row.path).filter(Boolean).slice(0, 6), [
+    '$',
+    'items',
+    'items[0]',
+    'items[0].name',
+    'items[0].active',
+    'items[0]'
+  ]);
+  assert.equal(rows.find((row) => row.path === 'items[0]')?.collapsible, true);
+  assert.equal(rows.find((row) => row.path === 'items[0].active')?.type, 'json-boolean');
+  assert.equal(collapsedRows.find((row) => row.path === 'items[0]')?.text, '    > [0]: {...} 2 keys');
+  assert.equal(collapsedRows.some((row) => row.path === 'items[0].name'), false);
+});
+
+test('detail search supports text regex paths and active match marking', () => {
+  const rows = getDetailRows({
+    request: { headers: {}, body: '' },
+    response: {
+      headers: { 'content-type': 'application/json' },
+      body: '{"items":[{"name":"Ada"}],"total":1}',
+      truncated: false
+    }
+  }, 'response');
+
+  const pathMatches = findDetailMatches(rows, 'items[0].name');
+  const regexMatches = findDetailMatches(rows, '/Ada|total/');
+  const applied = applyDetailMatches(rows, pathMatches, 0);
+
+  assert.equal(parseDetailSearchQuery('/Ada/i').kind, 'regex');
+  assert.equal(parseDetailSearchQuery('/[/').kind, 'invalid');
+  assert.equal(rows[pathMatches[0]].path, 'items[0].name');
+  assert.equal(regexMatches.length, 2);
+  assert.equal(applied[pathMatches[0]].isActiveMatch, true);
+  assert.equal(getNextDetailMatchIndex([2, 5], 1, 1), 0);
+  assert.equal(getNextDetailMatchIndex([2, 5], 0, -1), 1);
 });
