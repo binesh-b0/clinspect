@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createTrafficRecorder } from '../src/recording/recorder.js';
+import { createRuntimeRecorder, createTrafficRecorder } from '../src/recording/recorder.js';
 import { StateStore } from '../src/store/state.js';
 
 function fixedNow() {
@@ -229,6 +229,124 @@ test('full recording can pause disk writes without stopping capture state', asyn
       ['one', 'three']
     );
   });
+});
+
+test('runtime recorder can start full recording in the middle of a session', async () => {
+  await withTempDir(async (directory) => {
+    const filePath = path.join(directory, 'mid-session.ndjson');
+    const recorder = createRuntimeRecorder({
+      bodyLimit: 100,
+      clinspectVersion: '1.2.3',
+      createRecordingPath: () => filePath,
+      mode: 'off',
+      now: fixedNow,
+      path: null,
+      port: 8080,
+      proxyOrigin: 'http://localhost:8080',
+      sourceMode: 'live',
+      targetKind: 'local',
+      targetUrl: 'http://localhost:3000/'
+    });
+    const statuses = [];
+
+    recorder.on('status', (status) => statuses.push(status.state));
+
+    assert.deepEqual(recorder.getStatus(), {
+      mode: 'off',
+      path: null,
+      state: 'off',
+      error: null
+    });
+    assert.equal(recorder.recordCapture(createLog('before')), false);
+
+    assert.deepEqual(recorder.startFullRecording(), {
+      mode: 'full',
+      path: filePath,
+      state: 'recording',
+      error: null
+    });
+    assert.equal(recorder.recordCapture(createLog('after-one')), true);
+    assert.equal(recorder.setPaused(true), true);
+    assert.equal(recorder.recordCapture(createLog('paused')), false);
+    assert.equal(recorder.togglePaused(), false);
+    assert.equal(recorder.recordCapture(createLog('after-two')), true);
+    assert.deepEqual(await recorder.stopRecording(), {
+      mode: 'off',
+      path: null,
+      state: 'off',
+      error: null
+    });
+    assert.equal(recorder.recordCapture(createLog('stopped')), false);
+
+    const records = await readRecords(filePath);
+    const [session, ...rest] = records;
+    const trafficRecords = records.filter((record) => record.type === 'traffic');
+    const sessionEnd = rest.find((record) => record.type === 'session-end');
+
+    assert.deepEqual(statuses, ['recording', 'paused', 'recording', 'off']);
+    assert.equal(session.type, 'session');
+    assert.equal(session.recordingMode, 'full');
+    assert.equal(session.cookieValuePolicy, 'raw');
+    assert.equal(session.targetUrl, 'http://localhost:3000/');
+    assert.deepEqual(trafficRecords.map((record) => record.entry.id), ['after-one', 'after-two']);
+    assert.equal(sessionEnd.type, 'session-end');
+  });
+});
+
+test('runtime recorder preserves an active recording error instead of replacing it', () => {
+  let created = 0;
+  const recorder = createRuntimeRecorder({
+    createRecorder: (options) => {
+      created += 1;
+
+      return {
+        getStatus() {
+          return options.mode === 'off'
+            ? { mode: 'off', path: null, state: 'off', error: null }
+            : { mode: 'full', path: options.path, state: 'error', error: 'disk failed' };
+        },
+        recordCapture() {
+          return false;
+        },
+        recordInteraction() {
+          return false;
+        },
+        setPaused() {
+          return false;
+        },
+        togglePaused() {
+          return false;
+        },
+        stop() {
+          return Promise.resolve();
+        },
+        on() {
+          return this;
+        },
+        off() {
+          return this;
+        }
+      };
+    },
+    createRecordingPath: () => './first.ndjson',
+    mode: 'off',
+    path: null
+  });
+
+  assert.equal(created, 1);
+  assert.deepEqual(recorder.startFullRecording(), {
+    mode: 'full',
+    path: './first.ndjson',
+    state: 'error',
+    error: 'disk failed'
+  });
+  assert.deepEqual(recorder.startFullRecording({ path: './second.ndjson' }), {
+    mode: 'full',
+    path: './first.ndjson',
+    state: 'error',
+    error: 'disk failed'
+  });
+  assert.equal(created, 2);
 });
 
 test('partial recording writes inspected entries once', async () => {

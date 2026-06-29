@@ -83,6 +83,12 @@ export function createNoopRecorder() {
     setPaused() {
       return false;
     },
+    startFullRecording() {
+      return { ...OFF_STATUS };
+    },
+    stopRecording() {
+      return Promise.resolve({ ...OFF_STATUS });
+    },
     togglePaused() {
       return false;
     },
@@ -93,6 +99,103 @@ export function createNoopRecorder() {
       return this;
     },
     off() {
+      return this;
+    }
+  };
+}
+
+export function createRuntimeRecorder(options = {}) {
+  const {
+    createRecorder = createTrafficRecorder,
+    createRecordingPath = () => options.path ?? null,
+    ...baseOptions
+  } = options;
+  const emitter = new EventEmitter();
+  let activeRecorder = createRecorder(baseOptions);
+
+  const getStatus = () => activeRecorder.getStatus?.() ?? { ...OFF_STATUS };
+  const forwardStatus = () => emitter.emit('status', getStatus());
+
+  const attachActiveRecorder = (recorder) => {
+    activeRecorder.off?.('status', forwardStatus);
+    activeRecorder = recorder;
+    activeRecorder.on?.('status', forwardStatus);
+    forwardStatus();
+  };
+
+  activeRecorder.on?.('status', forwardStatus);
+
+  const startFullRecording = (overrides = {}) => {
+    const currentStatus = getStatus();
+
+    if (currentStatus.mode !== 'off') {
+      return currentStatus;
+    }
+
+    const recorder = createRecorder({
+      ...baseOptions,
+      ...overrides,
+      cookieValuePolicy: overrides.cookieValuePolicy ?? 'raw',
+      mode: 'full',
+      path: overrides.path ?? baseOptions.path ?? createRecordingPath()
+    });
+
+    attachActiveRecorder(recorder);
+
+    return getStatus();
+  };
+  const stopRecording = () => {
+    const currentStatus = getStatus();
+
+    if (currentStatus.mode === 'off') {
+      return Promise.resolve(currentStatus);
+    }
+
+    const recorderToStop = activeRecorder;
+
+    return Promise.resolve(recorderToStop.stop?.())
+      .then(() => {
+        if (activeRecorder === recorderToStop) {
+          attachActiveRecorder(createNoopRecorder());
+        }
+
+        return getStatus();
+      });
+  };
+
+  return {
+    getStatus,
+    recordCapture(entry) {
+      return activeRecorder.recordCapture?.(entry) ?? false;
+    },
+    recordInteraction(entry, interaction) {
+      return activeRecorder.recordInteraction?.(entry, interaction) ?? false;
+    },
+    isPaused() {
+      return activeRecorder.isPaused?.() ?? false;
+    },
+    setPaused(value) {
+      return activeRecorder.setPaused?.(value) ?? false;
+    },
+    startFullRecording,
+    stopRecording,
+    togglePaused() {
+      if (getStatus().mode === 'off') {
+        startFullRecording();
+        return false;
+      }
+
+      return activeRecorder.togglePaused?.() ?? false;
+    },
+    stop() {
+      return activeRecorder.stop?.() ?? Promise.resolve();
+    },
+    on(eventName, listener) {
+      emitter.on(eventName, listener);
+      return this;
+    },
+    off(eventName, listener) {
+      emitter.off(eventName, listener);
       return this;
     }
   };

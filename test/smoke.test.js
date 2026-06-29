@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 import { StateStore } from '../src/store/state.js';
 
@@ -31,6 +34,22 @@ function createClock(startedAt, endedAt) {
   let index = 0;
 
   return () => values[Math.min(index++, values.length - 1)];
+}
+
+async function withTempDir(callback) {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'clinspect-smoke-'));
+
+  try {
+    return await callback(directory);
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+}
+
+async function readRecords(filePath) {
+  const text = await readFile(filePath, 'utf8');
+
+  return text.trim().split('\n').map((line) => JSON.parse(line));
 }
 
 test('runtime modules import without syntax or ESM errors', async () => {
@@ -285,6 +304,86 @@ test('startInspector passes partial recorder into App without full capture subsc
   assert.deepEqual(calls, [['render', true]]);
 
   await inspector.stop();
+});
+
+test('startInspector can start full recording in the middle of a session', async () => {
+  await withTempDir(async (directory) => {
+    const { startInspector } = await import('../src/index.js');
+    const calls = [];
+    const stateStore = new StateStore();
+    const filePath = path.join(directory, 'mid-session.ndjson');
+    let appRecorder = null;
+    const inspector = startInspector(
+      {
+        mode: 'demo',
+        openBrowser: false,
+        port: 8080,
+        recording: {
+          mode: 'off',
+          path: null
+        },
+        targetUrl: null
+      },
+      {
+        createRecordingPath: () => filePath,
+        stateStore,
+        stdout: createSilentStdout(),
+        renderApp: (node) => {
+          appRecorder = node.props.trafficRecorder;
+          calls.push(['render', node.props.trafficRecorder.getStatus().mode]);
+
+          return {
+            unmount() {
+              calls.push(['unmount']);
+            }
+          };
+        },
+        startDemoFeed: () => ({
+          stop() {
+            calls.push(['engine-stop']);
+          }
+        }),
+        exitProcess: (code) => {
+          calls.push(['exit', code]);
+        }
+      }
+    );
+
+    stateStore.addLog({ id: 'before', path: '/before' });
+    assert.equal(appRecorder.getStatus().mode, 'off');
+
+    appRecorder.togglePaused();
+    assert.deepEqual(appRecorder.getStatus(), {
+      mode: 'full',
+      path: filePath,
+      state: 'recording',
+      error: null
+    });
+    stateStore.addLog({ id: 'after', path: '/after' });
+    assert.deepEqual(await appRecorder.stopRecording(), {
+      mode: 'off',
+      path: null,
+      state: 'off',
+      error: null
+    });
+    stateStore.addLog({ id: 'after-stop', path: '/after-stop' });
+
+    await inspector.stop();
+
+    const records = await readRecords(filePath);
+    const trafficRecords = records.filter((record) => record.type === 'traffic');
+
+    assert.deepEqual(calls, [
+      ['render', 'off'],
+      ['unmount'],
+      ['engine-stop'],
+      ['exit', 0]
+    ]);
+    assert.deepEqual(trafficRecords.map((record) => record.entry.id), ['after']);
+    assert.equal(records[0].type, 'session');
+    assert.equal(records[0].recordingMode, 'full');
+    assert.equal(records.at(-1).type, 'session-end');
+  });
 });
 
 test('startInspector loads replay sessions without starting capture engines', async () => {

@@ -9,6 +9,7 @@ import {
   formatFooterText,
   formatFilterLabel,
   formatRecordingLabel,
+  HELP_SECTIONS,
   getBoundaryLogId,
   getDetailVisibleCount,
   getDetailLines,
@@ -121,6 +122,22 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
     getKeyboardAction('G', {}, { isListFocused: false }),
     { type: 'scrollDetailsTo', boundary: 'bottom' }
   );
+  assert.deepEqual(
+    getKeyboardAction('P', {}, { isReplayMode: false }),
+    { type: 'toggleRecordingPause' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('P', {}, { isReplayMode: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('S', {}, { isReplayMode: false }),
+    { type: 'stopRecording' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('S', {}, { isReplayMode: true }),
+    { type: 'none' }
+  );
 });
 
 test('keyboard action helper gates help modal and preserves filter query input', () => {
@@ -168,13 +185,20 @@ test('getRenderHeight keeps one terminal row free for Ink updates', () => {
 test('footer text shows mode-aware essential keymaps', () => {
   assert.equal(
     formatFooterText({ isListFocused: true }),
-    'j/k move  Pg/C-u/C-d scroll  enter inspect  tab details  h help  q quit'
+    'j/k move  Pg/C-u/C-d scroll  enter inspect  tab details  P rec  S stop  h help  q quit'
   );
   assert.equal(
     formatFooterText({ isListFocused: false }),
-    'j/k scroll  Pg/C-u/C-d scroll  g/G top/bottom  r req/res  tab traffic  h help  q quit'
+    'j/k scroll  Pg/C-u/C-d scroll  g/G top/bottom  r req/res  tab traffic  P rec  S stop  h help  q quit'
   );
   assert.equal(formatFooterText({ isHelpOpen: true }), 'help | esc/h/q close');
+});
+
+test('help sections describe starting, pausing, and stopping recording', () => {
+  const captureSection = HELP_SECTIONS.find((section) => section.title === 'Capture');
+
+  assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'P'), ['P', 'start / pause recording']);
+  assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'S'), ['S', 'stop recording']);
 });
 
 test('filterLogs narrows by method, status family, and search text', () => {

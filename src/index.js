@@ -4,6 +4,7 @@ import React from 'react';
 import { render } from 'ink';
 import chalk from 'chalk';
 import {
+  createDefaultRecordingPath,
   parseCliOptions,
   formatCliError,
   getCliHelpText,
@@ -17,7 +18,7 @@ import { getProxyOrigin, isPublicTargetUrl } from './target.js';
 import { App } from './ui/App.js';
 import { createStableStdout } from './ui/stable-output.js';
 import { createTerminalScreen } from './ui/terminal-screen.js';
-import { createNoopRecorder, createTrafficRecorder } from './recording/recorder.js';
+import { createNoopRecorder, createRuntimeRecorder, createTrafficRecorder } from './recording/recorder.js';
 import { loadRecordedSession } from './recording/session-loader.js';
 
 const h = React.createElement;
@@ -103,14 +104,18 @@ export function startInspector(options, runtime = {}) {
   const terminalScreen = runtime.terminalScreen ?? createTerminalScreen(stdout);
   const sessionStats = createSessionStats();
   const summaryOptions = runtime.summaryTheme ? { theme: runtime.summaryTheme } : {};
+  const createRecorder = runtime.createTrafficRecorder ?? createTrafficRecorder;
   const trafficRecorder = options.mode === 'replay'
     ? (runtime.trafficRecorder ?? runtime.recorder ?? createNoopRecorder())
-    : (runtime.trafficRecorder ?? runtime.recorder ?? createTrafficRecorder({
+    : (runtime.trafficRecorder ?? runtime.recorder ?? createRuntimeRecorder({
       ...options.recording,
       bodyLimit: DEFAULT_BODY_LIMIT,
       clinspectVersion: CLINSPECT_VERSION,
-      cookieValuePolicy: options.recording?.cookieValuePolicy ??
-        (options.recording?.mode === 'off' ? 'masked' : 'raw'),
+      cookieValuePolicy: options.recording?.mode === 'off'
+        ? 'raw'
+        : (options.recording?.cookieValuePolicy ?? 'raw'),
+      createRecorder,
+      createRecordingPath: runtime.createRecordingPath ?? (() => createDefaultRecordingPath()),
       recordCookieValues: options.recordCookieValues,
       port: options.port,
       proxyOrigin: getProxyOrigin(options.port ?? 8080),
@@ -118,7 +123,11 @@ export function startInspector(options, runtime = {}) {
       targetKind: getTargetKind(options),
       targetUrl: options.targetUrl
     }));
-  const handleRecordAdd = (logEntry) => trafficRecorder.recordCapture?.(logEntry);
+  const handleRecordAdd = (logEntry) => {
+    if (trafficRecorder.getStatus?.().mode === 'full') {
+      trafficRecorder.recordCapture?.(logEntry);
+    }
+  };
   const handleStatsAdd = (logEntry) => sessionStats.record(logEntry);
   const appContext = options.mode === 'replay'
     ? {
@@ -140,9 +149,7 @@ export function startInspector(options, runtime = {}) {
 
   stateStore.on('add', handleStatsAdd);
 
-  if (trafficRecorder.getStatus?.().mode === 'full') {
-    stateStore.on('add', handleRecordAdd);
-  }
+  stateStore.on('add', handleRecordAdd);
 
   let engine;
 

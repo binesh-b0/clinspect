@@ -749,7 +749,7 @@ const FilterBar = React.memo(function FilterBar({
   );
 });
 
-const HELP_SECTIONS = [
+export const HELP_SECTIONS = [
   {
     title: 'Navigation',
     rows: [
@@ -782,7 +782,8 @@ const HELP_SECTIONS = [
     title: 'Capture',
     rows: [
       ['p', 'pause capture'],
-      ['P', 'pause recording']
+      ['P', 'start / pause recording'],
+      ['S', 'stop recording']
     ]
   },
   {
@@ -868,10 +869,10 @@ export function formatFooterText({
   }
 
   if (isListFocused) {
-    return 'j/k move  Pg/C-u/C-d scroll  enter inspect  tab details  h help  q quit';
+    return 'j/k move  Pg/C-u/C-d scroll  enter inspect  tab details  P rec  S stop  h help  q quit';
   }
 
-  return 'j/k scroll  Pg/C-u/C-d scroll  g/G top/bottom  r req/res  tab traffic  h help  q quit';
+  return 'j/k scroll  Pg/C-u/C-d scroll  g/G top/bottom  r req/res  tab traffic  P rec  S stop  h help  q quit';
 }
 
 const Footer = React.memo(function Footer({
@@ -1062,6 +1063,10 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     return isReplayMode ? { type: 'none' } : { type: 'toggleRecordingPause' };
   }
 
+  if (value === 'S') {
+    return isReplayMode ? { type: 'none' } : { type: 'stopRecording' };
+  }
+
   if (value === 'r') {
     return { type: 'toggleDetailTab' };
   }
@@ -1150,6 +1155,7 @@ function KeyboardControls({
   onQuit,
   onScrollDetails,
   onScrollDetailsTo,
+  onStopRecording,
   onToggleFilterOption,
   onToggleDetailTab,
   onToggleFocus,
@@ -1218,6 +1224,9 @@ function KeyboardControls({
         break;
       case 'scrollDetailsTo':
         onScrollDetailsTo(action.boundary);
+        break;
+      case 'stopRecording':
+        onStopRecording();
         break;
       case 'toggleDetailTab':
         onToggleDetailTab();
@@ -1429,6 +1438,13 @@ export function App({
         },
         onScrollDetailsTo: (boundary) => {
           setDetailScrollOffset(boundary === 'bottom' ? maxDetailScrollOffset : 0);
+        },
+        onStopRecording: () => {
+          const result = trafficRecorder?.stopRecording?.();
+
+          Promise.resolve(result)
+            .catch(() => {})
+            .finally(() => setRecordingStatus(getRecordingStatus(trafficRecorder)));
         },
         onFollowLatest: () => {
           setIsFollowingLatest(true);

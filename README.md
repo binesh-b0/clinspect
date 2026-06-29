@@ -111,7 +111,7 @@ Current MVP behavior:
 - captures request/response headers, status, timing, and capped text bodies
 - preserves multiple `Set-Cookie` headers, masks cookie values in the UI by default, and records cookie values when recording is enabled
 - shows a traffic list and selected payload details
-- supports up/down inspection, stable held selection, `f` follow-latest mode, tab focus toggle, detail scrolling, request/response tab switching, capture pause/resume with `p`, recording pause/resume with `P`, clear logs, `q` quit, and Ctrl-C cleanup
+- supports up/down inspection, stable held selection, `f` follow-latest mode, tab focus toggle, detail scrolling, request/response tab switching, capture pause/resume with `p`, recording start/pause/resume with `P`, recording stop with `S`, clear logs, `q` quit, and Ctrl-C cleanup
 - opens a bottom filter panel with `/`, supports multi-select method/status options, and searches all, path, status, method, time, host, port, headers, or body
 - supports quick filter controls: `m` opens method filters, `s` opens status filters, `space` toggles options, and `x` clears active filters
 - supports opt-in NDJSON disk recording for all captured traffic or only inspected entries
