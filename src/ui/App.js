@@ -32,6 +32,20 @@ function pad(value, length) {
   return String(value).padEnd(length).slice(0, length);
 }
 
+function padLeft(value, length) {
+  return String(value).padStart(length).slice(-length);
+}
+
+export function getRenderHeight(terminalRows = process.stdout.rows) {
+  const rows = Number.isFinite(terminalRows) && terminalRows > 0
+    ? Math.floor(terminalRows)
+    : 24;
+
+  // Ink clears the whole terminal when rendered output is >= stdout.rows.
+  // Keep one row free so routine UI updates use incremental line erases.
+  return Math.max(1, rows - 1);
+}
+
 function formatTime(timestamp) {
   return new Date(timestamp).toLocaleTimeString('en-US', {
     hour12: false,
@@ -67,6 +81,16 @@ function rowColor(log) {
   }
 
   return METHOD_COLORS[log.method] ?? 'white';
+}
+
+function formatTrafficRow(log, selected = false) {
+  const marker = selected ? '>' : ' ';
+  const method = pad(log.method, 6);
+  const status = String(log.statusCode ?? '---').padEnd(3);
+  const path = pad(truncate(log.path, 15), 15);
+  const duration = padLeft(`${log.responseTimeMs}ms`, 6);
+
+  return `${marker} ${formatTime(log.timestamp)} ${method} ${status} ${path} ${duration}`;
 }
 
 function formatHeaders(headers) {
@@ -268,7 +292,7 @@ export function getMaxScrollOffset(lines, visibleCount) {
   return Math.max(0, lines.length - Math.max(1, visibleCount));
 }
 
-function Header({ context = {}, logsCount, visibleCount, isPaused }) {
+const Header = React.memo(function Header({ context = {}, logsCount, visibleCount, isPaused }) {
   const mode = context.mode === 'live' ? 'live proxy' : 'demo mode';
   const target = context.targetUrl ?? 'mock traffic';
   const port = context.port ?? 8080;
@@ -291,7 +315,7 @@ function Header({ context = {}, logsCount, visibleCount, isPaused }) {
       ? h(Text, { color: 'gray', wrap: 'truncate' }, `target ${target}`)
       : null
   );
-}
+});
 
 export function formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery) {
   const parts = [];
@@ -311,7 +335,7 @@ export function formatFilterLabel(methodFilters, statusFilters, searchField, sea
   return parts.length > 0 ? parts.join(' | ') : 'none';
 }
 
-function TrafficList({
+const TrafficList = React.memo(function TrafficList({
   bottomOffset,
   emptyText,
   logs,
@@ -347,32 +371,30 @@ function TrafficList({
     },
     h(Text, { bold: true }, `Traffic ${isFocused ? 'focused' : 'idle'} | ${isFollowingLatest ? 'follow' : 'hold'}`),
     h(Text, { color: 'gray', wrap: 'truncate' }, `filters ${filterLabel}`),
-    h(Text, { color: 'gray' }, '  time     meth   st  path'),
+    h(Text, { color: 'gray' }, '  time     meth   st  path            dur'),
     logs.length === 0
       ? h(Text, { color: 'gray', wrap: 'truncate' }, noRowsText)
       : visibleLogs.map((log, offset) => {
         const absoluteIndex = startIndex + offset;
         const selected = absoluteIndex === selectedIndex;
-        const marker = selected ? '>' : ' ';
-        const method = pad(log.method, 6);
-        const status = String(log.statusCode ?? '---').padEnd(3);
-        const row = `${marker} ${formatTime(log.timestamp)} ${method} ${status} ${truncate(log.path, 16)} ${log.responseTimeMs}ms`;
+        const row = formatTrafficRow(log, selected);
 
         return h(
           Text,
           {
             key: log.id,
-            color: selected ? 'black' : rowColor(log),
+            bold: selected,
             backgroundColor: selected ? 'cyan' : undefined,
+            color: selected ? 'black' : rowColor(log),
             wrap: 'truncate'
           },
           row
         );
       })
   );
-}
+});
 
-function DetailPane({ bottomOffset, log, isFocused, detailTab, scrollOffset }) {
+const DetailPane = React.memo(function DetailPane({ bottomOffset, log, isFocused, detailTab, scrollOffset }) {
   if (!log) {
     return h(
       Box,
@@ -383,7 +405,7 @@ function DetailPane({ bottomOffset, log, isFocused, detailTab, scrollOffset }) {
         borderColor: isFocused ? 'cyan' : 'gray',
         paddingX: 1
       },
-      h(Text, { color: 'gray' }, 'No request selected')
+      h(Text, { color: 'gray' }, 'No request inspected')
     );
   }
 
@@ -422,7 +444,7 @@ function DetailPane({ bottomOffset, log, isFocused, detailTab, scrollOffset }) {
       line
     ))
   );
-}
+});
 
 function formatOptionToken(value, options = {}) {
   const displayValue = options.label ?? value;
@@ -455,7 +477,7 @@ function focusedMarker(row, filterFocus) {
   return row === filterFocus ? '>' : ' ';
 }
 
-function FilterBar({
+const FilterBar = React.memo(function FilterBar({
   filterFocus,
   logsCount,
   methodFilters,
@@ -501,9 +523,9 @@ function FilterBar({
     ),
     h(Text, { color: 'gray', wrap: 'truncate' }, 'up/down row | left/right option | space select | x clear filters | enter/esc close')
   );
-}
+});
 
-function Footer({
+const Footer = React.memo(function Footer({
   isListFocused,
   isRawModeSupported,
   isFollowingLatest,
@@ -517,8 +539,9 @@ function Footer({
   const filterSummary = activeFilters > 0
     ? ` | filters ${activeFilters} (${formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery)}) | x clear filters`
     : '';
+  const navigationHelp = isListFocused ? 'up/down move | enter inspect' : 'up/down scroll';
   const text = isRawModeSupported
-    ? `up/down ${isListFocused ? 'inspect' : 'scroll'} | tab ${isListFocused ? 'traffic' : 'details'} | r req/res | p ${isPaused ? 'resume' : 'pause'} | m methods | s statuses | / filter | c clear logs | f latest | q quit${filterSummary}`
+    ? `${navigationHelp} | tab ${isListFocused ? 'details' : 'traffic'} | r req/res | p ${isPaused ? 'resume' : 'pause'} | m methods | s statuses | / filter | c clear logs | f latest | q quit${filterSummary}`
     : 'keyboard input unavailable in this shell | Ctrl-C or SIGTERM quit';
 
   return h(
@@ -530,7 +553,7 @@ function Footer({
       text
     )
   );
-}
+});
 
 export function getSelectedIndex(logs, selectedLogId) {
   if (logs.length === 0) {
@@ -583,6 +606,7 @@ function KeyboardControls({
   onCycleFilterFocus,
   onFinishSearch,
   onFollowLatest,
+  onInspectSelected,
   onMoveFilterOption,
   onMoveSelection,
   onOpenFilter,
@@ -674,6 +698,11 @@ function KeyboardControls({
       return;
     }
 
+    if (key.return) {
+      onInspectSelected();
+      return;
+    }
+
     if (input === 'm') {
       onOpenFilter('method');
       return;
@@ -734,8 +763,14 @@ export function App({
   onQuit = () => {}
 }) {
   const { isRawModeSupported } = useStdin();
+  const renderHeight = getRenderHeight();
   const [logs, setLogs] = useState(() => stateStore.getLogs());
   const [selectedLogId, setSelectedLogId] = useState(() => {
+    const initialLogs = stateStore.getLogs();
+
+    return initialLogs[initialLogs.length - 1]?.id ?? null;
+  });
+  const [inspectedLogId, setInspectedLogId] = useState(() => {
     const initialLogs = stateStore.getLogs();
 
     return initialLogs[initialLogs.length - 1]?.id ?? null;
@@ -770,18 +805,22 @@ export function App({
   }, [stateStore]);
 
   useEffect(() => {
-    setSelectedLogId((currentId) => resolveSelectedLogId(filteredLogs, currentId, {
-      followLatest: isFollowingLatest
-    }));
+    const resolveOptions = { followLatest: isFollowingLatest };
+
+    setSelectedLogId((currentId) => resolveSelectedLogId(filteredLogs, currentId, resolveOptions));
+    setInspectedLogId((currentId) => resolveSelectedLogId(filteredLogs, currentId, resolveOptions));
   }, [filteredLogs, isFollowingLatest]);
 
   useEffect(() => {
     setDetailScrollOffset(0);
-  }, [selectedLogId, detailTab]);
+  }, [inspectedLogId, detailTab]);
 
   const selectedIndex = useMemo(() => getSelectedIndex(filteredLogs, selectedLogId), [filteredLogs, selectedLogId]);
   const selectedLog = useMemo(() => filteredLogs[selectedIndex] ?? null, [filteredLogs, selectedIndex]);
-  const detailLines = useMemo(() => getDetailLines(selectedLog, detailTab), [selectedLog, detailTab]);
+  const inspectedLog = useMemo(() => {
+    return filteredLogs.find((log) => log.id === inspectedLogId) ?? selectedLog;
+  }, [filteredLogs, inspectedLogId, selectedLog]);
+  const detailLines = useMemo(() => getDetailLines(inspectedLog, detailTab), [inspectedLog, detailTab]);
   const bottomOffset = isFilterOpen ? 19 : 13;
   const detailVisibleCount = Math.max(4, (process.stdout.rows || 24) - bottomOffset);
   const maxDetailScrollOffset = getMaxScrollOffset(detailLines, detailVisibleCount);
@@ -809,7 +848,7 @@ export function App({
     Box,
     {
       flexDirection: 'column',
-      height: process.stdout.rows || 24,
+      height: renderHeight,
       paddingX: 1
     },
     isRawModeSupported
@@ -829,6 +868,7 @@ export function App({
         onClearLogs: () => {
           stateStore.clear();
           setSelectedLogId(null);
+          setInspectedLogId(null);
           setIsFollowingLatest(false);
           setDetailScrollOffset(0);
         },
@@ -871,7 +911,14 @@ export function App({
         },
         onFollowLatest: () => {
           setIsFollowingLatest(true);
-          setSelectedLogId(resolveSelectedLogId(filteredLogs, selectedLogId, { followLatest: true }));
+          const latestLogId = resolveSelectedLogId(filteredLogs, selectedLogId, { followLatest: true });
+
+          setSelectedLogId(latestLogId);
+          setInspectedLogId(latestLogId);
+        },
+        onInspectSelected: () => {
+          setInspectedLogId(selectedLog?.id ?? null);
+          setDetailScrollOffset(0);
         },
         onToggleFilterOption: () => {
           if (filterFocus === 'field') {
@@ -926,7 +973,7 @@ export function App({
       }),
       h(DetailPane, {
         bottomOffset,
-        log: selectedLog,
+        log: inspectedLog,
         isFocused: !isListFocused,
         detailTab,
         scrollOffset: detailScrollOffset

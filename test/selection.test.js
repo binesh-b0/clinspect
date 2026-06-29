@@ -8,6 +8,7 @@ import {
   formatFilterLabel,
   getDetailLines,
   getMaxScrollOffset,
+  getRenderHeight,
   getSelectedIndex,
   getSearchValues,
   moveSelectedLogId,
@@ -53,6 +54,12 @@ test('getSelectedIndex resolves missing selections to the first row', () => {
   assert.equal(getSelectedIndex(logs, 'two'), 1);
   assert.equal(getSelectedIndex(logs, 'missing'), 0);
   assert.equal(getSelectedIndex([], 'missing'), -1);
+});
+
+test('getRenderHeight keeps one terminal row free for Ink updates', () => {
+  assert.equal(getRenderHeight(40), 39);
+  assert.equal(getRenderHeight(2), 1);
+  assert.equal(getRenderHeight(undefined), 23);
 });
 
 test('filterLogs narrows by method, status family, and search text', () => {

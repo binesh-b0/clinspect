@@ -14,6 +14,7 @@ import { startLiveProxy, startMockTrafficFeed } from './engine/proxy.js';
 import { DEFAULT_BODY_LIMIT, StateStore } from './store/state.js';
 import { getProxyOrigin, isPublicTargetUrl } from './target.js';
 import { App } from './ui/App.js';
+import { createStableStdout } from './ui/stable-output.js';
 
 const h = React.createElement;
 
@@ -61,6 +62,7 @@ export function startInspector(options, runtime = {}) {
   const exitProcess = runtime.exitProcess ?? process.exit;
   const openBrowserUrl = runtime.openUrl ?? openUrl;
   const captureController = runtime.captureController ?? createCaptureController();
+  const stdout = runtime.stdout ?? createStableStdout(process.stdout);
   const engine = options.mode === 'live'
     ? startProxy(stateStore, {
       bodyLimit: DEFAULT_BODY_LIMIT,
@@ -123,7 +125,10 @@ export function startInspector(options, runtime = {}) {
       captureController,
       onQuit: () => shutdown(0)
     }),
-    { exitOnCtrlC: false }
+    {
+      exitOnCtrlC: false,
+      stdout
+    }
   );
 
   return {
