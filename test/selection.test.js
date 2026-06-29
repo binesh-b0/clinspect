@@ -107,6 +107,14 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
     { type: 'scrollDetails', direction: -8 }
   );
   assert.deepEqual(
+    getKeyboardAction(']', {}, { isListFocused: true, trafficPageSize: 9 }),
+    { type: 'moveSelection', direction: 9 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('[', {}, { isListFocused: false, detailPageSize: 6 }),
+    { type: 'scrollDetails', direction: -6 }
+  );
+  assert.deepEqual(
     getKeyboardAction('d', { ctrl: true }, { isListFocused: true, trafficPageSize: 11 }),
     { type: 'moveSelection', direction: 5 }
   );
@@ -164,6 +172,10 @@ test('keyboard action helper gates help modal and preserves filter query input',
     { type: 'appendSearch', value: '?' }
   );
   assert.deepEqual(
+    getKeyboardAction('[', {}, { isFilterOpen: true, filterFocus: 'query' }),
+    { type: 'appendSearch', value: '[' }
+  );
+  assert.deepEqual(
     getKeyboardAction('?', {}, { isFilterOpen: true, filterFocus: 'method' }),
     { type: 'none' }
   );
@@ -185,11 +197,11 @@ test('getRenderHeight keeps one terminal row free for Ink updates', () => {
 test('footer text shows mode-aware essential keymaps', () => {
   assert.equal(
     formatFooterText({ isListFocused: true }),
-    'j/k move  Pg/C-u/C-d scroll  enter inspect  tab details  P rec  S stop  h help  q quit'
+    'j/k move  [/] page  enter inspect  tab details  P rec  S stop  h help  q quit'
   );
   assert.equal(
     formatFooterText({ isListFocused: false }),
-    'j/k scroll  Pg/C-u/C-d scroll  g/G top/bottom  r req/res  tab traffic  P rec  S stop  h help  q quit'
+    'j/k scroll  [/] page  g/G top/bottom  r req/res  tab traffic  P rec  S stop  h help  q quit'
   );
   assert.equal(formatFooterText({ isHelpOpen: true }), 'help | esc/h/q close');
 });
@@ -199,6 +211,12 @@ test('help sections describe starting, pausing, and stopping recording', () => {
 
   assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'P'), ['P', 'start / pause recording']);
   assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'S'), ['S', 'stop recording']);
+});
+
+test('help sections describe bracket page movement', () => {
+  const navigationSection = HELP_SECTIONS.find((section) => section.title === 'Navigation');
+
+  assert.deepEqual(navigationSection.rows.find(([keys]) => keys === '[ / ]'), ['[ / ]', 'move page']);
 });
 
 test('filterLogs narrows by method, status family, and search text', () => {

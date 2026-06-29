@@ -755,6 +755,7 @@ export const HELP_SECTIONS = [
     rows: [
       ['j/k', 'move line'],
       ['up/down', 'move line'],
+      ['[ / ]', 'move page'],
       ['PgUp/PgDn', 'move page'],
       ['Ctrl-u/d', 'move half page'],
       ['g/G', 'top / bottom'],
@@ -869,10 +870,10 @@ export function formatFooterText({
   }
 
   if (isListFocused) {
-    return 'j/k move  Pg/C-u/C-d scroll  enter inspect  tab details  P rec  S stop  h help  q quit';
+    return 'j/k move  [/] page  enter inspect  tab details  P rec  S stop  h help  q quit';
   }
 
-  return 'j/k scroll  Pg/C-u/C-d scroll  g/G top/bottom  r req/res  tab traffic  P rec  S stop  h help  q quit';
+  return 'j/k scroll  [/] page  g/G top/bottom  r req/res  tab traffic  P rec  S stop  h help  q quit';
 }
 
 const Footer = React.memo(function Footer({
@@ -1091,13 +1092,13 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
       : { type: 'scrollDetails', direction: 1 };
   }
 
-  if (keyState.pageUp) {
+  if (keyState.pageUp || value === '[') {
     return isListFocused
       ? { type: 'moveSelection', direction: -getPageStep(trafficPageSize) }
       : { type: 'scrollDetails', direction: -getPageStep(detailPageSize) };
   }
 
-  if (keyState.pageDown) {
+  if (keyState.pageDown || value === ']') {
     return isListFocused
       ? { type: 'moveSelection', direction: getPageStep(trafficPageSize) }
       : { type: 'scrollDetails', direction: getPageStep(detailPageSize) };
