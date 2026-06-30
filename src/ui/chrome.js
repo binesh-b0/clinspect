@@ -14,73 +14,128 @@ import {
   getCommandMatches,
   getCommandSuggestionRows
 } from './commands.js';
+import {
+  DEFAULT_KEY_BINDINGS,
+  formatKeyToken,
+  getBindingLabel,
+  getBindingPairLabel
+} from './key-bindings.js';
 
-export const HELP_SECTIONS = [
-  {
-    title: 'Move',
-    rows: [
-      ['j/k', 'move line'],
-      ['[ / ]', 'move page'],
-      ['Ctrl-u/d', 'move half page'],
-      ['g/G', 'top / bottom'],
-      ['tab', 'switch pane']
-    ]
-  },
-  {
-    title: 'Inspect',
-    rows: [
-      ['enter', 'inspect row'],
-      ['r', 'request / response'],
-      ['o', 'details modal'],
-      ['/', 'find details'],
-      ['n / N', 'next / previous match'],
-      ['wheel', 'scroll pane']
-    ]
-  },
-  {
-    title: 'Filter',
-    rows: [
-      ['/', 'text search'],
-      ['m / s', 'method / status'],
-      ['space', 'toggle option'],
-      ['x', 'clear filters']
-    ]
-  },
-  {
-    title: 'Compose',
-    rows: [
-      ['n', 'new request'],
-      ['E', 'edit and resend'],
-      ['e', 'edit selected request'],
-      ['l', 'saved requests'],
-      ['1-7', 'jump sections'],
-      ['a/d', 'add / delete row'],
-      ['space', 'enable / disable row'],
-      ['enter/y', 'preview / send'],
-      ['esc', 'close composer']
-    ]
-  },
-  {
-    title: 'Display / Export',
-    rows: [
-      ['t', 'cycle path mode'],
-      ['v', 'cycle list density'],
-      ['w', 'cycle pane width'],
-      ['F', 'show / hide static'],
-      ['L', 'list display modal'],
-      ['y', 'copy item'],
-      ['D', 'download item'],
-      ['m / r', 'masked / raw export']
-    ]
-  },
-  {
-    title: 'Capture / Session',
-    rows: [
-      ['f', 'follow latest'],
-      ['h', 'help']
-    ]
-  }
+const COMPOSER_TAB_ACTION_IDS = [
+  'composer.selectTab.params',
+  'composer.selectTab.headers',
+  'composer.selectTab.body',
+  'composer.selectTab.auth',
+  'composer.selectTab.cookies',
+  'composer.selectTab.env',
+  'composer.selectTab.save'
 ];
+
+function getActionLabel(bindings, actionId, options = {}) {
+  return getBindingLabel(bindings, actionId, options);
+}
+
+function getActionPairLabel(bindings, firstActionId, secondActionId, options = {}) {
+  return getBindingPairLabel(bindings, firstActionId, secondActionId, options);
+}
+
+function getComposerTabLabel(bindings) {
+  const labels = COMPOSER_TAB_ACTION_IDS.map((actionId) => getActionLabel(bindings, actionId, { limit: 1 }));
+
+  return labels.join('/') === '1/2/3/4/5/6/7' ? '1-7' : labels.join('/');
+}
+
+function getNthActionLabel(bindings, actionId, index = 0) {
+  const tokens = bindings?.[actionId] ?? DEFAULT_KEY_BINDINGS[actionId] ?? [];
+  const token = tokens[index] ?? tokens[0];
+  return token ? formatKeyToken(token) : 'unbound';
+}
+
+function getPreviewSendLabel(bindings) {
+  const previewLabel = getActionLabel(bindings, 'composer.preview', { limit: 1 });
+  const confirmTokens = bindings?.['composerConfirm.confirm'] ?? DEFAULT_KEY_BINDINGS['composerConfirm.confirm'];
+  const confirmToken = confirmTokens.find((token) => formatKeyToken(token) !== previewLabel) ?? confirmTokens[0];
+
+  return `${previewLabel}/${confirmToken ? formatKeyToken(confirmToken) : 'unbound'}`;
+}
+
+function getCommandSuggestionLabel(bindings) {
+  const next = getActionLabel(bindings, 'command.nextSuggestion');
+  const previous = getActionLabel(bindings, 'command.previousSuggestion');
+
+  return next === 'tab/down' && previous === 'up' ? 'tab/up/down' : `${next}/${previous}`;
+}
+
+export function getHelpSections(keyBindings = DEFAULT_KEY_BINDINGS) {
+  return [
+    {
+      title: 'Move',
+      rows: [
+        [getActionPairLabel(keyBindings, 'main.moveDown', 'main.moveUp'), 'move line'],
+        [getActionPairLabel(keyBindings, 'main.pageUp', 'main.pageDown', { separator: ' / ' }), 'move page'],
+        [getActionPairLabel(keyBindings, 'main.halfPageUp', 'main.halfPageDown'), 'move half page'],
+        [getActionPairLabel(keyBindings, 'main.top', 'main.bottom'), 'top / bottom'],
+        [getActionLabel(keyBindings, 'main.toggleFocus'), 'switch pane']
+      ]
+    },
+    {
+      title: 'Inspect',
+      rows: [
+        [getActionLabel(keyBindings, 'main.inspect'), 'inspect row'],
+        [getActionLabel(keyBindings, 'main.toggleDetailTab'), 'request / response'],
+        [getActionLabel(keyBindings, 'main.openDetailModal'), 'details modal'],
+        [getActionLabel(keyBindings, 'main.openSearch'), 'find details'],
+        [getActionPairLabel(keyBindings, 'main.nextMatch', 'main.previousMatch', { separator: ' / ' }), 'next / previous match'],
+        ['wheel', 'scroll pane']
+      ]
+    },
+    {
+      title: 'Filter',
+      rows: [
+        [getActionLabel(keyBindings, 'main.openSearch'), 'text search'],
+        [getActionPairLabel(keyBindings, 'main.methodFilter', 'main.statusFilter', { separator: ' / ' }), 'method / status'],
+        [getActionLabel(keyBindings, 'filter.toggleOption'), 'toggle option'],
+        [getActionLabel(keyBindings, 'filter.clear'), 'clear filters']
+      ]
+    },
+    {
+      title: 'Compose',
+      rows: [
+        [getActionLabel(keyBindings, 'main.openComposer'), 'new request'],
+        [getActionLabel(keyBindings, 'main.editRequest', { limit: 1 }), 'edit and resend'],
+        [getNthActionLabel(keyBindings, 'detail.editRequest', 1), 'edit selected request'],
+        [getActionLabel(keyBindings, 'main.openLibrary'), 'saved requests'],
+        [getComposerTabLabel(keyBindings), 'jump sections'],
+        [getActionPairLabel(keyBindings, 'composer.addRow', 'composer.deleteRow'), 'add / delete row'],
+        [getActionLabel(keyBindings, 'composer.toggleField'), 'enable / disable row'],
+        [getPreviewSendLabel(keyBindings), 'preview / send'],
+        [getActionLabel(keyBindings, 'composer.close'), 'close composer']
+      ]
+    },
+    {
+      title: 'Display / Export',
+      rows: [
+        [getActionLabel(keyBindings, 'main.cyclePathDisplay'), 'cycle path mode'],
+        [getActionLabel(keyBindings, 'main.cycleDensity'), 'cycle list density'],
+        [getActionLabel(keyBindings, 'main.cyclePaneWidth'), 'cycle pane width'],
+        [getActionLabel(keyBindings, 'main.toggleFrameworkAssets'), 'show / hide static'],
+        [getActionLabel(keyBindings, 'main.openListDisplay'), 'list display modal'],
+        [getActionLabel(keyBindings, 'main.copy'), 'copy item'],
+        [getActionLabel(keyBindings, 'main.download'), 'download item'],
+        [getActionPairLabel(keyBindings, 'export.masked', 'export.raw', { separator: ' / ' }), 'masked / raw export']
+      ]
+    },
+    {
+      title: 'Capture / Session',
+      rows: [
+        [getActionLabel(keyBindings, 'main.followLatest'), 'follow latest'],
+        [getActionLabel(keyBindings, 'main.openHelp'), 'help']
+      ]
+    }
+  ];
+}
+
+export const HELP_SECTIONS = getHelpSections();
 
 const HELP_KEY_WIDTH = 10;
 const HELP_COLUMN_GAP_WIDTH = 3;
@@ -156,7 +211,9 @@ function renderCommandHelpRows(width) {
   ];
 }
 
-export const HelpModal = React.memo(function HelpModal() {
+export const HelpModal = React.memo(function HelpModal({
+  keyBindings = DEFAULT_KEY_BINDINGS
+}) {
   const columns = Number.isFinite(process.stdout.columns) && process.stdout.columns > 0
     ? process.stdout.columns
     : 80;
@@ -164,7 +221,8 @@ export const HelpModal = React.memo(function HelpModal() {
   const useColumns = width >= 68;
   const contentWidth = Math.max(26, width - 6);
   const columnWidth = useColumns ? Math.floor((contentWidth - HELP_COLUMN_GAP_WIDTH) / 2) : contentWidth;
-  const [leftSections, rightSections] = getHelpColumns(HELP_SECTIONS);
+  const helpSections = getHelpSections(keyBindings);
+  const [leftSections, rightSections] = getHelpColumns(helpSections);
 
   return h(
     Box,
@@ -194,10 +252,10 @@ export const HelpModal = React.memo(function HelpModal() {
           h(Box, { width: HELP_COLUMN_GAP_WIDTH }, h(Text, {}, '')),
           h(Box, { flexDirection: 'column', width: columnWidth }, ...renderHelpSections(rightSections, columnWidth))
         )
-        : h(Box, { flexDirection: 'column' }, ...renderHelpSections(HELP_SECTIONS, contentWidth)),
+        : h(Box, { flexDirection: 'column' }, ...renderHelpSections(helpSections, contentWidth)),
       h(Text, {}, ''),
       h(Box, { flexDirection: 'column', width: contentWidth }, ...renderCommandHelpRows(contentWidth)),
-      h(Text, { color: 'gray' }, 'esc/h/q close')
+      h(Text, { color: 'gray' }, `${getActionLabel(keyBindings, 'help.close')} close`)
     )
   );
 });
@@ -265,6 +323,7 @@ function getListDisplayLabel(key) {
 export const ListDisplayModal = React.memo(function ListDisplayModal({
   focusIndex = 0,
   hideFrameworkAssets,
+  keyBindings = DEFAULT_KEY_BINDINGS,
   listDisplay
 }) {
   const columns = Number.isFinite(process.stdout.columns) && process.stdout.columns > 0
@@ -299,9 +358,11 @@ export const ListDisplayModal = React.memo(function ListDisplayModal({
         const selected = index === safeFocusIndex;
         const value = formatListDisplayValue(normalized, key, { hideFrameworkAssets });
         const label = getListDisplayLabel(key);
+        const optionKeys = getActionPairLabel(keyBindings, 'listDisplay.previousOption', 'listDisplay.nextOption');
+        const toggleKey = getActionLabel(keyBindings, 'listDisplay.toggleOption');
         const hint = key === 'pathMode' || key === 'density' || key === 'widthMode'
-          ? 'change with left/right arrows'
-          : 'show/hide with space';
+          ? `change with ${optionKeys}${optionKeys === 'left/right' ? ' arrows' : ''}`
+          : `show/hide with ${toggleKey}`;
         const text = `${selected ? '>' : ' '} ${pad(label, 14)} ${pad(value, 13)} ${hint}`;
 
         return h(Text, {
@@ -312,7 +373,7 @@ export const ListDisplayModal = React.memo(function ListDisplayModal({
         }, text);
       }),
       h(Text, {}, ''),
-      h(Text, { color: 'gray' }, 'j/k select row  r reset  enter/esc close')
+      h(Text, { color: 'gray' }, `${getActionPairLabel(keyBindings, 'listDisplay.moveDown', 'listDisplay.moveUp')} select row  ${getActionLabel(keyBindings, 'listDisplay.reset')} reset  ${getNthActionLabel(keyBindings, 'listDisplay.close', 1)}/${getNthActionLabel(keyBindings, 'listDisplay.close', 0)} close`)
     )
   );
 });
@@ -343,6 +404,7 @@ export function formatFooterText({
   isListFocused = true,
   isRawModeSupported = true,
   isReplayMode = false,
+  keyBindings = DEFAULT_KEY_BINDINGS,
   recordingStatus = OFF_RECORDING_STATUS
 } = {}) {
   const withStatus = (value) => {
@@ -353,8 +415,14 @@ export function formatFooterText({
 
     return status ? `${value} | ${status}` : value;
   };
-  const liveDetailActions = isLiveMode ? ['E edit'] : [];
-  const liveDetailModalActions = isLiveMode ? [formatFooterBinding('E', 'edit')] : [];
+  const commandKey = getActionLabel(keyBindings, 'global.openCommandPrompt', { limit: 1 });
+  const moveKeys = getActionPairLabel(keyBindings, 'main.moveDown', 'main.moveUp');
+  const pageKeys = getActionPairLabel(keyBindings, 'main.pageUp', 'main.pageDown', { separator: ' / ' });
+  const matchKeys = getActionPairLabel(keyBindings, 'main.nextMatch', 'main.previousMatch');
+  const closeDetailKeys = getActionLabel(keyBindings, 'detail.close', { limit: 2 });
+  const detailEditKey = getActionLabel(keyBindings, 'detail.editRequest', { limit: 1 });
+  const liveDetailActions = isLiveMode ? [`${detailEditKey} edit`] : [];
+  const liveDetailModalActions = isLiveMode ? [formatFooterBinding(detailEditKey, 'edit')] : [];
 
   if (!isRawModeSupported) {
     return 'keyboard input unavailable in this shell | Ctrl-C or SIGTERM quit';
@@ -365,86 +433,86 @@ export function formatFooterText({
   }
 
   if (isExportPromptOpen) {
-    return 'export  m masked  r raw  esc cancel';
+    return `export  ${getActionLabel(keyBindings, 'export.masked', { limit: 1 })} masked  ${getActionLabel(keyBindings, 'export.raw', { limit: 1 })} raw  ${getActionLabel(keyBindings, 'export.cancel', { limit: 1 })} cancel`;
   }
 
   if (isListDisplayOpen) {
-    return 'list display  j/k select row  left/right change value  space show/hide  r reset  enter/esc close';
+    return `list display  ${getActionPairLabel(keyBindings, 'listDisplay.moveDown', 'listDisplay.moveUp')} select row  ${getActionPairLabel(keyBindings, 'listDisplay.previousOption', 'listDisplay.nextOption')} change value  ${getActionLabel(keyBindings, 'listDisplay.toggleOption', { limit: 1 })} show/hide  ${getActionLabel(keyBindings, 'listDisplay.reset', { limit: 1 })} reset  ${getNthActionLabel(keyBindings, 'listDisplay.close', 1)}/${getNthActionLabel(keyBindings, 'listDisplay.close', 0)} close`;
   }
 
   if (isHelpOpen) {
-    return 'help | esc/h/q close';
+    return `help | ${getActionLabel(keyBindings, 'help.close')} close`;
   }
 
   if (isComposerOpen) {
     if (isComposerConfirmOpen) {
-      return 'preview  enter/y send  esc/n edit';
+      return `preview  ${getActionLabel(keyBindings, 'composerConfirm.confirm', { limit: 2 })} send  ${getActionLabel(keyBindings, 'composerConfirm.cancel', { limit: 2 })} edit`;
     }
 
     return isComposerTextFocused
-      ? 'typing  backspace delete  tab next  enter preview  esc close  1-7 sections'
-      : 'composer  1-7 sections  tab fields  enter preview  a add  d delete  s save  l library  R reveal  esc close';
+      ? `typing  ${getActionLabel(keyBindings, 'composer.backspace', { limit: 1 })} ${getActionLabel(keyBindings, 'composer.delete', { limit: 1 })}  ${getActionLabel(keyBindings, 'composer.nextField', { limit: 1 })} next  ${getActionLabel(keyBindings, 'composer.preview', { limit: 1 })} preview  ${getActionLabel(keyBindings, 'composer.close', { limit: 1 })} close  ${getComposerTabLabel(keyBindings)} sections`
+      : `composer  ${getComposerTabLabel(keyBindings)} sections  ${getActionLabel(keyBindings, 'composer.nextField', { limit: 1 })} fields  ${getActionLabel(keyBindings, 'composer.preview', { limit: 1 })} preview  ${getActionLabel(keyBindings, 'composer.addRow', { limit: 1 })} add  ${getActionLabel(keyBindings, 'composer.deleteRow', { limit: 1 })} delete  ${getActionLabel(keyBindings, 'composer.save', { limit: 1 })} save  ${getActionLabel(keyBindings, 'composer.openLibrary', { limit: 1 })} library  ${getActionLabel(keyBindings, 'composer.revealSecrets', { limit: 1 })} reveal  ${getActionLabel(keyBindings, 'composer.close', { limit: 1 })} close`;
   }
 
   if (isDetailSearchActive && !isListFocused) {
     return isDetailModalOpen
       ? withStatus(joinFooterParts([
         'detail search active',
-        '/ edit',
-        'n/N match',
+        `${getActionLabel(keyBindings, 'detail.openSearch', { limit: 1 })} edit`,
+        `${matchKeys} match`,
         ...liveDetailActions,
-        'j/k scroll',
-        'enter collapse',
-        'esc/q close',
-        ': command'
+        `${moveKeys} scroll`,
+        `${getActionLabel(keyBindings, 'detail.toggleNode', { limit: 1 })} collapse`,
+        `${closeDetailKeys} close`,
+        `${commandKey} command`
       ]))
       : withStatus(joinFooterParts([
         'detail search active',
-        '/ edit',
-        'n/N match',
+        `${getActionLabel(keyBindings, 'main.openSearch', { limit: 1 })} edit`,
+        `${matchKeys} match`,
         ...liveDetailActions,
-        'j/k scroll',
-        'enter collapse',
-        'o big',
-        'tab traffic',
-        ': command'
+        `${moveKeys} scroll`,
+        `${getActionLabel(keyBindings, 'main.inspect', { limit: 1 })} collapse`,
+        `${getActionLabel(keyBindings, 'main.openDetailModal', { limit: 1 })} big`,
+        `${getActionLabel(keyBindings, 'main.toggleFocus', { limit: 1 })} traffic`,
+        `${commandKey} command`
       ]));
   }
 
   if (isDetailModalOpen) {
     return withStatus(joinFooterParts([
-      formatFooterBinding('j/k', 'scroll'),
-      formatFooterBinding('[ / ]', 'page'),
-      formatFooterBinding('r', 'req/res'),
-      formatFooterBinding('/', 'find'),
-      formatFooterBinding('n/N', 'match'),
+      formatFooterBinding(getActionPairLabel(keyBindings, 'detail.scrollDown', 'detail.scrollUp'), 'scroll'),
+      formatFooterBinding(getActionPairLabel(keyBindings, 'detail.pageUp', 'detail.pageDown', { separator: ' / ' }), 'page'),
+      formatFooterBinding(getActionLabel(keyBindings, 'detail.toggleTab', { limit: 1 }), 'req/res'),
+      formatFooterBinding(getActionLabel(keyBindings, 'detail.openSearch', { limit: 1 }), 'find'),
+      formatFooterBinding(getActionPairLabel(keyBindings, 'detail.nextMatch', 'detail.previousMatch'), 'match'),
       ...liveDetailModalActions,
-      formatFooterBinding('enter', 'collapse'),
-      formatFooterBinding('esc/q', 'close'),
-      ': command'
+      formatFooterBinding(getActionLabel(keyBindings, 'detail.toggleNode', { limit: 1 }), 'collapse'),
+      formatFooterBinding(closeDetailKeys, 'close'),
+      `${commandKey} command`
     ]));
   }
 
   if (isListFocused) {
     return withStatus(joinFooterParts([
-      formatFooterBinding('j/k', 'move'),
-      formatFooterBinding('[ / ]', 'page'),
-      formatFooterBinding('enter', 'inspect'),
-      formatFooterBinding('tab', 'details'),
-      ': command',
-      formatFooterBinding('h', 'help')
+      formatFooterBinding(moveKeys, 'move'),
+      formatFooterBinding(pageKeys, 'page'),
+      formatFooterBinding(getActionLabel(keyBindings, 'main.inspect', { limit: 1 }), 'inspect'),
+      formatFooterBinding(getActionLabel(keyBindings, 'main.toggleFocus', { limit: 1 }), 'details'),
+      `${commandKey} command`,
+      formatFooterBinding(getActionLabel(keyBindings, 'main.openHelp', { limit: 1 }), 'help')
     ]));
   }
 
   return withStatus(joinFooterParts([
-    formatFooterBinding('j/k', 'scroll'),
-    formatFooterBinding('[ / ]', 'page'),
-    formatFooterBinding('r', 'req/res'),
-    formatFooterBinding('/', 'find'),
-    formatFooterBinding('n/N', 'match'),
-    formatFooterBinding('tab', 'traffic'),
-    ': command',
-    formatFooterBinding('h', 'help')
+    formatFooterBinding(moveKeys, 'scroll'),
+    formatFooterBinding(pageKeys, 'page'),
+    formatFooterBinding(getActionLabel(keyBindings, 'main.toggleDetailTab', { limit: 1 }), 'req/res'),
+    formatFooterBinding(getActionLabel(keyBindings, 'main.openSearch', { limit: 1 }), 'find'),
+    formatFooterBinding(matchKeys, 'match'),
+    formatFooterBinding(getActionLabel(keyBindings, 'main.toggleFocus', { limit: 1 }), 'traffic'),
+    `${commandKey} command`,
+    formatFooterBinding(getActionLabel(keyBindings, 'main.openHelp', { limit: 1 }), 'help')
   ]));
 }
 
@@ -466,6 +534,7 @@ export const Footer = React.memo(function Footer({
   isListFocused,
   isRawModeSupported,
   isReplayMode,
+  keyBindings,
   recordingStatus
 }) {
   return h(
@@ -492,6 +561,7 @@ export const Footer = React.memo(function Footer({
         isListFocused,
         isRawModeSupported,
         isReplayMode,
+        keyBindings,
         recordingStatus
       })
     )
@@ -500,6 +570,7 @@ export const Footer = React.memo(function Footer({
 
 export const CommandModal = React.memo(function CommandModal({
   input = '',
+  keyBindings = DEFAULT_KEY_BINDINGS,
   selectedIndex = -1,
   status = ''
 }) {
@@ -517,10 +588,11 @@ export const CommandModal = React.memo(function CommandModal({
   const selectedRow = rows.find((row) => row.command && row.isSelected);
   const statusColor = /^unknown|^ambiguous|^command required/.test(status) ? 'red' : 'gray';
   const inputText = input ? `:${input}_` : ':_';
-  const commandHelpText = 'enter run  tab/up/down select  esc cancel';
+  const submitKey = getActionLabel(keyBindings, 'command.submit', { limit: 1 });
+  const commandHelpText = `${submitKey} run  ${getCommandSuggestionLabel(keyBindings)} select  ${getActionLabel(keyBindings, 'command.close', { limit: 1 })} cancel`;
   const selectedStatusText = formatCommandSelectionStatus(selectedRow);
   const statusText = status || (matches.length === 0 ? 'No command matches' : selectedStatusText || commandHelpText);
-  const statusHelpText = !status && selectedStatusText && contentWidth >= 36 ? 'enter run' : '';
+  const statusHelpText = !status && selectedStatusText && contentWidth >= 36 ? `${submitKey} run` : '';
   const statusTextWidth = statusHelpText
     ? Math.max(8, contentWidth - statusHelpText.length - 1)
     : contentWidth;
@@ -618,6 +690,7 @@ export const CommandModal = React.memo(function CommandModal({
 });
 
 export const ResendConfirmBar = React.memo(function ResendConfirmBar({
+  keyBindings = DEFAULT_KEY_BINDINGS,
   pendingResend,
   isResending
 }) {
@@ -628,9 +701,11 @@ export const ResendConfirmBar = React.memo(function ResendConfirmBar({
   const title = canExactResend
     ? 'Confirm normalized resend'
     : 'Edit required before resend';
+  const editKey = getActionLabel(keyBindings, 'resend.edit', { limit: 1 });
+  const cancelKey = getActionLabel(keyBindings, 'resend.cancel', { limit: 2 });
   const help = canExactResend
-    ? 'enter/y send | E edit | esc/n cancel'
-    : 'E edit | esc/n cancel';
+    ? `${getActionLabel(keyBindings, 'resend.confirm', { limit: 2 })} send | ${editKey} edit | ${cancelKey} cancel`
+    : `${editKey} edit | ${cancelKey} cancel`;
   const signals = [
     `${summary.headers ?? 0} headers`,
     `${summary.cookies ?? 0} cookies`,

@@ -14,6 +14,32 @@ import {
   getDisplayHeaderValue,
   getHeaderTokens
 } from './traffic.js';
+import {
+  DEFAULT_KEY_BINDINGS,
+  formatKeyToken,
+  getBindingLabel,
+  getBindingPairLabel
+} from './key-bindings.js';
+
+function getDetailBindingLabel(keyBindings, actionId, options = {}) {
+  return getBindingLabel(keyBindings, actionId, options);
+}
+
+function getDetailBindingPairLabel(keyBindings, firstActionId, secondActionId, options = {}) {
+  return getBindingPairLabel(keyBindings, firstActionId, secondActionId, options);
+}
+
+function getReversedBindingLabel(keyBindings, actionId) {
+  const tokens = keyBindings?.[actionId] ?? DEFAULT_KEY_BINDINGS[actionId] ?? [];
+  const firstToken = tokens[1] ?? tokens[0];
+  const secondToken = tokens[0];
+
+  if (!firstToken || !secondToken) {
+    return firstToken ? formatKeyToken(firstToken) : 'unbound';
+  }
+
+  return `${formatKeyToken(firstToken)}/${formatKeyToken(secondToken)}`;
+}
 
 function hasEncodedBody(headers = {}) {
   const encodings = getHeaderTokens(headers, 'content-encoding');
@@ -1165,6 +1191,7 @@ export const DetailModal = React.memo(function DetailModal({
   detailTab,
   rows,
   focusedRow,
+  keyBindings = DEFAULT_KEY_BINDINGS,
   scrollOffset,
   visibleCount,
   matchCount,
@@ -1188,7 +1215,13 @@ export const DetailModal = React.memo(function DetailModal({
   const timing = `${log.statusCode ?? '---'} in ${log.responseTimeMs}ms`;
   const title = `Details ${detailTab} | ${log.method} ${log.path} | ${timing}`;
   const matchLabel = matchCount > 0 ? ` | match ${activeMatchIndex + 1}/${matchCount}` : '';
-  const subtitle = 'esc/q close | r req/res | / find | n/N next/prev | enter collapse';
+  const subtitle = [
+    `${getDetailBindingLabel(keyBindings, 'detail.close', { limit: 2 })} close`,
+    `${getDetailBindingLabel(keyBindings, 'detail.toggleTab', { limit: 1 })} req/res`,
+    `${getDetailBindingLabel(keyBindings, 'detail.openSearch', { limit: 1 })} find`,
+    `${getDetailBindingPairLabel(keyBindings, 'detail.nextMatch', 'detail.previousMatch')} next/prev`,
+    `${getDetailBindingLabel(keyBindings, 'detail.toggleNode', { limit: 1 })} collapse`
+  ].join(' | ');
 
   return h(DetailViewport, {
     borderColor: 'cyan',
@@ -1205,6 +1238,7 @@ export const DetailModal = React.memo(function DetailModal({
 
 export const DetailSearchBar = React.memo(function DetailSearchBar({
   activeMatchIndex,
+  keyBindings = DEFAULT_KEY_BINDINGS,
   matchCount,
   query
 }) {
@@ -1228,6 +1262,6 @@ export const DetailSearchBar = React.memo(function DetailSearchBar({
     },
     h(Text, { color: parsed.kind === 'invalid' ? 'yellow' : 'cyan', bold: true }, `Detail search | ${mode} | ${matchLabel}`),
     h(Text, { wrap: 'truncate' }, `query ${displayQuery}_`),
-    h(Text, { color: 'gray', wrap: 'truncate' }, 'type text/path or /regex/ | backspace edit | enter/esc close, then n/N next/prev')
+    h(Text, { color: 'gray', wrap: 'truncate' }, `type text/path or /regex/ | ${getDetailBindingLabel(keyBindings, 'detailSearch.backspace', { limit: 1 })} edit | ${getReversedBindingLabel(keyBindings, 'detailSearch.close')} close, then ${getDetailBindingPairLabel(keyBindings, 'detail.nextMatch', 'detail.previousMatch')} next/prev`)
   );
 });

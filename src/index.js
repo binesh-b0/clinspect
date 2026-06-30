@@ -11,6 +11,7 @@ import {
   isHelpRequested
 } from './cli/options.js';
 import { openUrl } from './browser.js';
+import { loadProjectConfig } from './config.js';
 import { sendManualRequest } from './engine/manual-request.js';
 import { createManualRequestStore } from './engine/manual-request-store.js';
 import { startLiveProxy, startMockTrafficFeed } from './engine/proxy.js';
@@ -100,6 +101,8 @@ export function startInspector(options, runtime = {}) {
   const renderApp = runtime.renderApp ?? render;
   const startDemoFeed = runtime.startDemoFeed ?? runtime.startFeed ?? startMockTrafficFeed;
   const startProxy = runtime.startLiveProxy ?? startLiveProxy;
+  const loadConfig = runtime.loadProjectConfig ?? loadProjectConfig;
+  const projectConfig = runtime.projectConfig ?? loadConfig(runtime.configPath);
   const manualRequestStore = runtime.manualRequestStore ?? createManualRequestStore({
     path: runtime.manualRequestStorePath
   });
@@ -250,6 +253,8 @@ export function startInspector(options, runtime = {}) {
         manualRequestStore,
         manualRequestSender,
         trafficRecorder,
+        keyBindings: projectConfig.keyBindings,
+        keyBindingWarnings: projectConfig.keyBindingWarnings,
         onQuit: () => shutdown(0)
       }),
       {

@@ -108,6 +108,72 @@ test('startInspector selects the live proxy engine for live mode', async () => {
   ]);
 });
 
+test('startInspector loads project key binding config and passes it into App', async () => {
+  const { startInspector } = await import('../src/index.js');
+  const { normalizeKeyBindings } = await import('../src/ui/App.js');
+  const keyBindingConfig = normalizeKeyBindings({
+    keyBindings: {
+      'main.moveDown': ['z'],
+      'main.moveUp': ['a']
+    }
+  });
+  const calls = [];
+  let appProps;
+  const inspector = startInspector(
+    {
+      bodyLimit: 12345,
+      mode: 'demo',
+      openBrowser: false
+    },
+    {
+      stateStore: new StateStore(),
+      stdout: createSilentStdout(),
+      loadProjectConfig: () => ({
+        keyBindings: keyBindingConfig.bindings,
+        keyBindingWarnings: ['duplicate key binding z for main.moveUp; main.moveDown keeps it']
+      }),
+      renderApp: (node) => {
+        appProps = node.props;
+
+        return {
+          unmount() {
+            calls.push(['unmount']);
+          }
+        };
+      },
+      startFeed: () => ({
+        stop() {
+          calls.push(['stop']);
+        }
+      }),
+      trafficRecorder: {
+        getStatus() {
+          return { error: null, mode: 'off', state: 'off' };
+        },
+        stop() {
+          calls.push(['recorder-stop']);
+        }
+      },
+      exitProcess: (code) => {
+        calls.push(['exit', code]);
+      }
+    }
+  );
+
+  assert.deepEqual(appProps.keyBindings['main.moveDown'], ['z']);
+  assert.deepEqual(appProps.keyBindings['main.moveUp'], ['a']);
+  assert.deepEqual(appProps.keyBindingWarnings, ['duplicate key binding z for main.moveUp; main.moveDown keeps it']);
+
+  await inspector.stop();
+
+  assert.deepEqual(calls, [
+    ['unmount'],
+    ['stop'],
+    ['recorder-stop'],
+    ['exit', 0]
+  ]);
+});
+
 test('startInspector contains interactive output in the alternate terminal screen', async () => {
   const { startInspector } = await import('../src/index.js');
   const {

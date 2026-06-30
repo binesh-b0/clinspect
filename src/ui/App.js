@@ -94,6 +94,7 @@ import {
   getCommandSuggestionIndex,
   resolveCommandInput
 } from './commands.js';
+import { normalizeKeyBindings } from './key-bindings.js';
 
 export {
   DEFAULT_TRAFFIC_LIST_DISPLAY,
@@ -171,8 +172,15 @@ export {
   HELP_SECTIONS,
   formatFooterText,
   formatPaneWidthLabel,
+  getHelpSections,
   getCommandHelpRows
 } from './chrome.js';
+export {
+  DEFAULT_KEY_BINDINGS,
+  getBindingLabel,
+  matchesKeyBinding,
+  normalizeKeyBindings
+} from './key-bindings.js';
 
 export function App({
   stateStore,
@@ -181,6 +189,8 @@ export function App({
   manualRequestStore = null,
   manualRequestSender = null,
   trafficRecorder = null,
+  keyBindings: keyBindingInput = null,
+  keyBindingWarnings = [],
   onQuit = () => {}
 }) {
   const { isRawModeSupported } = useStdin();
@@ -249,6 +259,13 @@ export function App({
   const showCookieValues = Boolean(context.showCookieValues);
   const proxyOrigin = getProxyOrigin(context.port ?? 8080);
   const publicTargetUrl = context.mode === 'live' ? context.targetUrl : null;
+  const keyBindings = useMemo(() => {
+    if (keyBindingInput?.bindings) {
+      return keyBindingInput.bindings;
+    }
+
+    return normalizeKeyBindings(keyBindingInput ? { keyBindings: keyBindingInput } : undefined).bindings;
+  }, [keyBindingInput]);
   const frameworkSummary = useMemo(() => summarizeFrameworkAssets(logs), [logs]);
   const paneLayout = getPaneLayout(trafficListDisplay);
   const trafficPaneWidth = paneLayout.trafficPaneWidth;
@@ -328,6 +345,9 @@ export function App({
   const emptyText = context.mode === 'live'
     ? `Waiting for traffic at ${proxyOrigin}`
     : (isReplayMode ? 'No recorded traffic' : 'Waiting for traffic...');
+  const keyBindingStatus = keyBindingWarnings.length > 0
+    ? `key bindings: ${keyBindingWarnings[0]}${keyBindingWarnings.length > 1 ? ` (+${keyBindingWarnings.length - 1} more)` : ''}`
+    : '';
 
   useEffect(() => {
     setDetailScrollOffset((current) => Math.min(current, maxDetailScrollOffset));
@@ -1090,6 +1110,7 @@ export function App({
         isComposerBodyEditorOpen: composer.isBodyEditorOpen,
         isComposerLibraryOpen: composer.isLibraryOpen,
         isComposerTextFocused: getFocusedComposerDescriptor(composer)?.kind === 'text',
+        keyBindings,
         detailPageSize: activeDetailVisibleCount,
         showTrafficPane: paneLayout.showTrafficPane,
         trafficPaneWidth,
@@ -1354,21 +1375,26 @@ export function App({
       { flexDirection: 'row', flexGrow: 1 },
       commandState.isOpen
         ? h(CommandModal, {
+          keyBindings,
           input: commandState.input,
           selectedIndex: commandState.selectedIndex,
           status: commandState.status
         })
         : (isHelpOpen
-        ? h(HelpModal)
+        ? h(HelpModal, {
+          keyBindings
+        })
         : (isListDisplayOpen
           ? h(ListDisplayModal, {
             focusIndex: listDisplayFocusIndex,
             hideFrameworkAssets,
+            keyBindings,
             listDisplay: trafficListDisplay
           })
         : (composer.isOpen
           ? h(RequestComposerPanel, {
             composer,
+            keyBindings,
             library: manualLibrary,
             targetUrl: context.targetUrl
           })
@@ -1377,6 +1403,7 @@ export function App({
             activeMatchIndex: detailMatchIndex,
             detailTab,
             focusedRow: focusedDetailRow,
+            keyBindings,
             log: inspectedLog,
             matchCount: detailMatches.length,
             rows: detailRows,
@@ -1388,6 +1415,7 @@ export function App({
     isFilterOpen
         ? h(FilterBar, {
         filterFocus,
+        keyBindings,
         logsCount: logs.length,
         methodFilters,
         methodOptionIndex,
@@ -1399,18 +1427,21 @@ export function App({
       })
         : (pendingResend
           ? h(ResendConfirmBar, {
+          keyBindings,
           isResending,
           pendingResend
         })
           : (isDetailSearchOpen
           ? h(DetailSearchBar, {
           activeMatchIndex: detailMatchIndex,
+          keyBindings,
           matchCount: detailMatches.length,
           query: detailSearchQuery
         })
           : h(Footer, {
-          commandStatus: commandState.status,
+          commandStatus: commandState.status || keyBindingStatus,
           exportStatus,
+          keyBindings,
           resendStatus,
           isComposerConfirmOpen: composer.isConfirmOpen,
           isComposerOpen: composer.isOpen,

@@ -21,6 +21,39 @@ import {
   truncate
 } from './shared.js';
 import { cycleValue } from './traffic.js';
+import {
+  DEFAULT_KEY_BINDINGS,
+  getBindingLabel,
+  getBindingPairLabel
+} from './key-bindings.js';
+
+const COMPOSER_TAB_ACTION_BY_TAB = {
+  params: 'composer.selectTab.params',
+  headers: 'composer.selectTab.headers',
+  body: 'composer.selectTab.body',
+  auth: 'composer.selectTab.auth',
+  cookies: 'composer.selectTab.cookies',
+  env: 'composer.selectTab.env',
+  save: 'composer.selectTab.save'
+};
+
+function getComposerBindingLabel(keyBindings, actionId, options = {}) {
+  return getBindingLabel(keyBindings, actionId, options);
+}
+
+function getComposerBindingPairLabel(keyBindings, firstActionId, secondActionId, options = {}) {
+  return getBindingPairLabel(keyBindings, firstActionId, secondActionId, options);
+}
+
+function getComposerTabShortcutLabel(tab, keyBindings = DEFAULT_KEY_BINDINGS) {
+  return getComposerBindingLabel(keyBindings, COMPOSER_TAB_ACTION_BY_TAB[tab], { limit: 1 });
+}
+
+function getComposerTabRangeLabel(keyBindings = DEFAULT_KEY_BINDINGS) {
+  const labels = COMPOSER_TABS.map((tab) => getComposerTabShortcutLabel(tab, keyBindings));
+
+  return labels.join('/') === '1/2/3/4/5/6/7' ? '1-7' : labels.join('/');
+}
 
 function createComposerTableRow(values = {}) {
   return {
@@ -534,7 +567,7 @@ function getComposerPreviewAuthSummary(auth = {}) {
   return auth.mode ?? 'none';
 }
 
-function renderComposerPreview(composer) {
+function renderComposerPreview(composer, keyBindings = DEFAULT_KEY_BINDINGS) {
   const draft = composer.draft;
   const params = formatComposerPreviewRows(draft.params, { revealSecrets: composer.revealSecrets });
   const headers = formatComposerPreviewRows(draft.headers, { revealSecrets: composer.revealSecrets });
@@ -561,7 +594,7 @@ function renderComposerPreview(composer) {
     ...cookies.map((row, index) => h(Text, { key: `preview-cookie-${index}`, wrap: 'truncate' }, `  ${row}`)),
     h(Text, { key: 'preview-space-2' }, ''),
     h(Text, { key: 'preview-confirm', color: 'yellow', bold: true }, 'Send this request?'),
-    h(Text, { key: 'preview-help', color: 'gray' }, 'enter/y send | esc/n edit')
+    h(Text, { key: 'preview-help', color: 'gray' }, `${getComposerBindingLabel(keyBindings, 'composerConfirm.confirm', { limit: 2 })} send | ${getComposerBindingLabel(keyBindings, 'composerConfirm.cancel', { limit: 2 })} edit`)
   ];
 }
 
@@ -582,7 +615,7 @@ function renderComposerTableEmpty(activeTab) {
   return h(Text, { color: 'gray' }, `${COMPOSER_TAB_LABELS[activeTab]} has no rows.`);
 }
 
-function renderComposerTabBody(composer) {
+function renderComposerTabBody(composer, keyBindings = DEFAULT_KEY_BINDINGS) {
   if (composer.isBodyEditorOpen) {
     const descriptor = getFocusedComposerDescriptor(composer);
     const value = descriptor?.kind === 'text'
@@ -597,7 +630,7 @@ function renderComposerTabBody(composer) {
         { key: `editor-${index}`, wrap: 'truncate' },
         `${padLeft(index + 1, 3)} ${line}${index === lines.length - 1 ? '_' : ''}`
       )),
-      h(Text, { key: 'editor-help', color: 'gray' }, 'enter newline | esc back to Body tab | Ctrl-C quit')
+      h(Text, { key: 'editor-help', color: 'gray' }, `${getComposerBindingLabel(keyBindings, 'composerBody.newline', { limit: 1 })} newline | ${getComposerBindingLabel(keyBindings, 'composerBody.close', { limit: 1 })} back to Body tab | ${getComposerBindingLabel(keyBindings, 'global.quit', { limit: 1 })} quit`)
     ];
   }
 
@@ -611,7 +644,7 @@ function renderComposerTabBody(composer) {
   return tabDescriptors.map((descriptor, index) => renderComposerDescriptor(composer, descriptor, index + 2));
 }
 
-function renderComposerLibrary(composer, library) {
+function renderComposerLibrary(composer, library, keyBindings = DEFAULT_KEY_BINDINGS) {
   const requests = flattenRequestLibrary(library);
   const selectedIndex = Math.max(0, Math.min(requests.length - 1, composer.libraryIndex));
 
@@ -619,7 +652,7 @@ function renderComposerLibrary(composer, library) {
     h(Text, { key: 'library-title', color: 'cyan', bold: true }, 'Saved requests'),
     library.warning ? h(Text, { key: 'library-warning', color: 'yellow', wrap: 'truncate' }, library.warning) : null,
     requests.length === 0
-      ? h(Text, { key: 'library-empty', color: 'gray' }, 'No saved requests. Compose a request and press s to save it.')
+      ? h(Text, { key: 'library-empty', color: 'gray' }, `No saved requests. Compose a request and press ${getComposerBindingLabel(keyBindings, 'composer.save', { limit: 1 })} to save it.`)
       : requests.slice(0, 18).map((request, index) => {
         const selected = index === selectedIndex;
 
@@ -634,14 +667,14 @@ function renderComposerLibrary(composer, library) {
           `${selected ? '>' : ' '} ${pad(request.collection ?? 'Default', 14)} ${pad(request.method, 7)} ${request.name || request.url}`
         );
       }),
-    h(Text, { key: 'library-help', color: 'gray' }, 'j/k move | enter open | esc/l close')
+    h(Text, { key: 'library-help', color: 'gray' }, `${getComposerBindingPairLabel(keyBindings, 'composerLibrary.moveDown', 'composerLibrary.moveUp')} move | ${getComposerBindingLabel(keyBindings, 'composerLibrary.open', { limit: 1 })} open | ${getComposerBindingLabel(keyBindings, 'composerLibrary.close', { limit: 2 })} close`)
   ].filter(Boolean);
 }
 
-function getComposerTabShortcut(tab) {
+function getComposerTabShortcut(tab, keyBindings = DEFAULT_KEY_BINDINGS) {
   const index = COMPOSER_TABS.indexOf(tab);
 
-  return index === -1 ? '' : String(index + 1);
+  return index === -1 ? '' : getComposerTabShortcutLabel(tab, keyBindings);
 }
 
 function formatComposerAuthSummary(auth = {}) {
@@ -678,18 +711,18 @@ function getComposerTabSummary(composer, tab) {
   return draft.collection || 'Default';
 }
 
-export function getComposerSectionRows(composer, library = {}) {
+export function getComposerSectionRows(composer, library = {}, keyBindings = DEFAULT_KEY_BINDINGS) {
   return [
     ...COMPOSER_TABS.map((tab) => ({
       active: !composer.isLibraryOpen && tab === composer.activeTab,
-      key: getComposerTabShortcut(tab),
+      key: getComposerTabShortcut(tab, keyBindings),
       label: COMPOSER_TAB_LABELS[tab],
       summary: getComposerTabSummary(composer, tab),
       tab
     })),
     {
       active: Boolean(composer.isLibraryOpen),
-      key: 'l',
+      key: getComposerBindingLabel(keyBindings, 'composer.openLibrary', { limit: 1 }),
       label: 'Library',
       summary: String(flattenRequestLibrary(library).length),
       tab: 'library'
@@ -697,7 +730,7 @@ export function getComposerSectionRows(composer, library = {}) {
   ];
 }
 
-function renderComposerSectionRail(composer, library) {
+function renderComposerSectionRail(composer, library, keyBindings = DEFAULT_KEY_BINDINGS) {
   return h(
     Box,
     {
@@ -707,9 +740,9 @@ function renderComposerSectionRail(composer, library) {
       width: COMPOSER_RAIL_WIDTH
     },
     h(Text, { color: 'cyan', bold: true }, 'Sections'),
-    h(Text, { color: 'gray' }, '1-7 jump'),
+    h(Text, { color: 'gray' }, `${getComposerTabRangeLabel(keyBindings)} jump`),
     h(Text, {}, ''),
-    ...getComposerSectionRows(composer, library).map((item) => {
+    ...getComposerSectionRows(composer, library, keyBindings).map((item) => {
       const text = `${item.active ? '>' : ' '} ${pad(item.key, 2)} ${pad(item.label, 8)} ${truncate(item.summary, 8)}`;
 
       return h(
@@ -728,6 +761,7 @@ function renderComposerSectionRail(composer, library) {
 
 export const RequestComposerPanel = React.memo(function RequestComposerPanel({
   composer,
+  keyBindings = DEFAULT_KEY_BINDINGS,
   library,
   targetUrl
 }) {
@@ -745,13 +779,13 @@ export const RequestComposerPanel = React.memo(function RequestComposerPanel({
   const descriptors = getComposerFieldDescriptors(composer);
   const sectionTitle = composer.isLibraryOpen
     ? 'Library'
-    : `${getComposerTabShortcut(composer.activeTab)} ${COMPOSER_TAB_LABELS[composer.activeTab]}`;
+    : `${getComposerTabShortcut(composer.activeTab, keyBindings)} ${COMPOSER_TAB_LABELS[composer.activeTab]}`;
   const isTextFocused = getFocusedComposerDescriptor(composer)?.kind === 'text';
   const helpText = composer.isConfirmOpen
-    ? 'preview | enter/y send | esc/n edit'
+    ? `preview | ${getComposerBindingLabel(keyBindings, 'composerConfirm.confirm', { limit: 2 })} send | ${getComposerBindingLabel(keyBindings, 'composerConfirm.cancel', { limit: 2 })} edit`
     : (isTextFocused
-      ? 'typing | backspace delete | tab next | enter preview | esc close | 1-7 sections'
-      : '1-7 sections | [/] section | tab fields | enter preview | a add | d delete | s save | l library | R reveal | esc close');
+      ? `typing | ${getComposerBindingLabel(keyBindings, 'composer.backspace', { limit: 1 })} ${getComposerBindingLabel(keyBindings, 'composer.delete', { limit: 1 })} | ${getComposerBindingLabel(keyBindings, 'composer.nextField', { limit: 1 })} next | ${getComposerBindingLabel(keyBindings, 'composer.preview', { limit: 1 })} preview | ${getComposerBindingLabel(keyBindings, 'composer.close', { limit: 1 })} close | ${getComposerTabRangeLabel(keyBindings)} sections`
+      : `${getComposerTabRangeLabel(keyBindings)} sections | ${getComposerBindingPairLabel(keyBindings, 'composer.previousTab', 'composer.nextTab')} section | ${getComposerBindingLabel(keyBindings, 'composer.nextField', { limit: 1 })} fields | ${getComposerBindingLabel(keyBindings, 'composer.preview', { limit: 1 })} preview | ${getComposerBindingLabel(keyBindings, 'composer.addRow', { limit: 1 })} add | ${getComposerBindingLabel(keyBindings, 'composer.deleteRow', { limit: 1 })} delete | ${getComposerBindingLabel(keyBindings, 'composer.save', { limit: 1 })} save | ${getComposerBindingLabel(keyBindings, 'composer.openLibrary', { limit: 1 })} library | ${getComposerBindingLabel(keyBindings, 'composer.revealSecrets', { limit: 1 })} reveal | ${getComposerBindingLabel(keyBindings, 'composer.close', { limit: 1 })} close`);
 
   return h(
     Box,
@@ -776,21 +810,21 @@ export const RequestComposerPanel = React.memo(function RequestComposerPanel({
       h(
         Box,
         { flexDirection: 'row', flexGrow: 1 },
-        renderComposerSectionRail(composer, library),
+        renderComposerSectionRail(composer, library, keyBindings),
         h(
           Box,
           { flexDirection: 'column', flexGrow: 1 },
           composer.isLibraryOpen
-            ? renderComposerLibrary(composer, library)
+            ? renderComposerLibrary(composer, library, keyBindings)
             : (composer.isConfirmOpen
-              ? renderComposerPreview(composer)
+              ? renderComposerPreview(composer, keyBindings)
               : [
               h(Text, { key: 'request-line', color: 'gray' }, 'Request'),
               renderComposerDescriptor(composer, descriptors[0], 0),
               renderComposerDescriptor(composer, descriptors[1], 1),
               h(Text, { key: 'tabs-space' }, ''),
               h(Text, { key: 'section-title', color: 'cyan', bold: true }, sectionTitle),
-              ...renderComposerTabBody(composer)
+              ...renderComposerTabBody(composer, keyBindings)
             ])
         )
       ),

@@ -35,6 +35,11 @@ import {
   padLeft,
   truncate
 } from './shared.js';
+import {
+  DEFAULT_KEY_BINDINGS,
+  getBindingLabel,
+  getBindingPairLabel
+} from './key-bindings.js';
 
 function formatTime(timestamp) {
   return new Date(timestamp).toLocaleTimeString('en-US', {
@@ -1107,6 +1112,7 @@ function focusedMarker(row, filterFocus) {
 
 export const FilterBar = React.memo(function FilterBar({
   filterFocus,
+  keyBindings = DEFAULT_KEY_BINDINGS,
   logsCount,
   methodFilters,
   methodOptionIndex,
@@ -1149,7 +1155,7 @@ export const FilterBar = React.memo(function FilterBar({
       { wrap: 'truncate' },
       `${focusedMarker('status', filterFocus)} status ${formatOptionsLine(STATUS_OPTIONS, statusFilters, statusOptionIndex, filterFocus === 'status')}`
     ),
-    h(Text, { color: 'gray', wrap: 'truncate' }, 'up/down row | left/right option | space select | x clear filters | enter/esc close')
+    h(Text, { color: 'gray', wrap: 'truncate' }, `${getBindingPairLabel(keyBindings, 'filter.previousField', 'filter.nextField')} row | ${getBindingPairLabel(keyBindings, 'filter.previousOption', 'filter.nextOption')} option | ${getBindingLabel(keyBindings, 'filter.toggleOption', { limit: 1 })} select | ${getBindingLabel(keyBindings, 'filter.clear', { limit: 1 })} clear filters | ${getBindingLabel(keyBindings, 'filter.close', { limit: 2 })} close`)
   );
 });
 

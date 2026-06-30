@@ -186,6 +186,31 @@ Composer:
 - `s` saves the draft.
 - `enter` previews; `enter` or `y` confirms send; `esc` or `n` edits.
 
+### Project-local key binding config
+
+At startup, clinspect reads optional key binding overrides from:
+
+```text
+./.clinspect/config.json
+```
+
+Example:
+
+```json
+{
+  "schemaVersion": 1,
+  "keyBindings": {
+    "main.moveDown": ["j", "down"],
+    "main.moveUp": ["k", "up"],
+    "main.openHelp": ["h"]
+  }
+}
+```
+
+The file is project-local only. Missing config preserves the built-in bindings. Partial config merges over defaults. Invalid JSON, unknown action IDs, invalid tokens, or duplicate bindings in the same active context are non-fatal; clinspect falls back for invalid entries and shows a warning in the UI.
+
+Use one-character printable tokens such as `j`, `K`, `/`, `[`, and `]`, or named tokens such as `ctrl-c`, `escape`, `enter`, `tab`, `shift-tab`, `backspace`, `delete`, `home`, `end`, `up`, `down`, `left`, `right`, `pageup`, and `pagedown`.
+
 ## Project Layout
 
 ```text

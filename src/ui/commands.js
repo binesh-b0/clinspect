@@ -5,8 +5,12 @@ import {
   TRAFFIC_LIST_WIDTH
 } from './shared.js';
 import { getPageStep } from './detail.js';
-import { getComposerTabFromShortcut } from './composer.js';
 import { getMouseWheelTarget } from './traffic.js';
+import {
+  DEFAULT_KEY_BINDINGS,
+  matchesKeyBinding,
+  normalizeKeyBindings
+} from './key-bindings.js';
 
 export const COMMAND_DEFINITIONS = [
   {
@@ -61,6 +65,36 @@ const COMMAND_HINTS_BY_KEY = new Map([
   ['p', 'use :pause-capture'],
   ['c', 'use :clear-logs']
 ]);
+
+const COMMAND_HINTS_BY_ACTION = new Map([
+  ['main.hintQuit', 'use :quit'],
+  ['main.hintResend', 'use :resend'],
+  ['main.hintRecord', 'use :record'],
+  ['main.hintStopRecording', 'use :stop-recording'],
+  ['main.hintPause', 'use :pause-capture'],
+  ['main.hintClear', 'use :clear-logs'],
+  ['detail.hintResend', 'use :resend']
+]);
+
+const COMPOSER_TAB_ACTIONS = [
+  ['composer.selectTab.params', 'params'],
+  ['composer.selectTab.headers', 'headers'],
+  ['composer.selectTab.body', 'body'],
+  ['composer.selectTab.auth', 'auth'],
+  ['composer.selectTab.cookies', 'cookies'],
+  ['composer.selectTab.env', 'env'],
+  ['composer.selectTab.save', 'save']
+];
+
+const COMPOSER_LIBRARY_TAB_ACTIONS = [
+  ['composerLibrary.selectTab.params', 'params'],
+  ['composerLibrary.selectTab.headers', 'headers'],
+  ['composerLibrary.selectTab.body', 'body'],
+  ['composerLibrary.selectTab.auth', 'auth'],
+  ['composerLibrary.selectTab.cookies', 'cookies'],
+  ['composerLibrary.selectTab.env', 'env'],
+  ['composerLibrary.selectTab.save', 'save']
+];
 
 function isBackspaceInput(value, keyState = {}) {
   return Boolean(keyState.backspace || keyState.delete || value === '\u007F' || value === '\b');
@@ -160,6 +194,25 @@ export function getCommandHintForKey(input = '') {
   return COMMAND_HINTS_BY_KEY.get(String(input ?? '')) ?? null;
 }
 
+function getCommandHintForAction(actionId) {
+  return COMMAND_HINTS_BY_ACTION.get(actionId) ?? null;
+}
+
+function resolveActiveKeyBindings(keyBindings) {
+  if (!keyBindings) {
+    return DEFAULT_KEY_BINDINGS;
+  }
+  if (keyBindings.bindings) {
+    return keyBindings.bindings;
+  }
+  return normalizeKeyBindings({ keyBindings }).bindings;
+}
+
+function getMatchedComposerTab(input, key, bindings, actions) {
+  const matchedAction = actions.find(([actionId]) => matchesKeyBinding(input, key, bindings, actionId));
+  return matchedAction?.[1] ?? null;
+}
+
 export function resolveCommandInput(input = '', selectedIndex = -1) {
   const value = normalizeCommandInput(input);
 
@@ -238,35 +291,38 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     isComposerLibraryOpen = false,
     isComposerTextFocused = false,
     detailPageSize = 1,
+    keyBindings: configuredKeyBindings,
     showTrafficPane = true,
     trafficPageSize = 1,
     trafficPaneWidth = TRAFFIC_LIST_WIDTH
   } = options;
   const value = input ?? '';
   const keyState = key ?? {};
+  const keyBindings = resolveActiveKeyBindings(configuredKeyBindings);
+  const matches = (actionId) => matchesKeyBinding(value, keyState, keyBindings, actionId);
 
-  if (value === 'c' && keyState.ctrl) {
+  if (matches('global.quit')) {
     return { type: 'quit' };
   }
 
   if (isCommandOpen) {
-    if (keyState.escape) {
+    if (matches('command.close')) {
       return { type: 'closeCommandPrompt' };
     }
 
-    if (keyState.return) {
+    if (matches('command.submit')) {
       return { type: 'submitCommand' };
     }
 
-    if (isBackspaceInput(value, keyState) || isDeleteInput(value, keyState)) {
+    if (matches('command.delete')) {
       return { type: 'backspaceCommandText' };
     }
 
-    if (keyState.tab || keyState.downArrow) {
+    if (matches('command.nextSuggestion')) {
       return { type: 'cycleCommandSuggestion', direction: 1 };
     }
 
-    if (keyState.upArrow) {
+    if (matches('command.previousSuggestion')) {
       return { type: 'cycleCommandSuggestion', direction: -1 };
     }
 
@@ -278,15 +334,15 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   }
 
   if (isExportPromptOpen) {
-    if (keyState.escape) {
+    if (matches('export.cancel')) {
       return { type: 'cancelExport' };
     }
 
-    if (value === 'm' || value === 'M') {
+    if (matches('export.masked')) {
       return { type: 'finishExport', secretPolicy: 'masked' };
     }
 
-    if (value === 'r' || value === 'R') {
+    if (matches('export.raw')) {
       return { type: 'finishExport', secretPolicy: 'raw' };
     }
 
@@ -294,7 +350,7 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   }
 
   if (isHelpOpen) {
-    if (keyState.escape || value === 'h' || value === 'q') {
+    if (matches('help.close')) {
       return { type: 'closeHelp' };
     }
 
@@ -302,31 +358,31 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   }
 
   if (isListDisplayOpen) {
-    if (keyState.escape || keyState.return) {
+    if (matches('listDisplay.close')) {
       return { type: 'closeListDisplay' };
     }
 
-    if (keyState.upArrow || value === 'k') {
+    if (matches('listDisplay.moveUp')) {
       return { type: 'moveListDisplayFocus', direction: -1 };
     }
 
-    if (keyState.downArrow || value === 'j') {
+    if (matches('listDisplay.moveDown')) {
       return { type: 'moveListDisplayFocus', direction: 1 };
     }
 
-    if (keyState.leftArrow) {
+    if (matches('listDisplay.previousOption')) {
       return { type: 'cycleListDisplayOption', direction: -1 };
     }
 
-    if (keyState.rightArrow) {
+    if (matches('listDisplay.nextOption')) {
       return { type: 'cycleListDisplayOption', direction: 1 };
     }
 
-    if (value === ' ') {
+    if (matches('listDisplay.toggleOption')) {
       return { type: 'toggleListDisplayColumn' };
     }
 
-    if (value === 'r') {
+    if (matches('listDisplay.reset')) {
       return { type: 'resetListDisplay' };
     }
 
@@ -338,15 +394,15 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
       return { type: 'none' };
     }
 
-    if (keyState.return || value === 'y' || value === 'Y') {
+    if (matches('resend.confirm')) {
       return { type: 'sendResend' };
     }
 
-    if (value === 'E' || value === 'e') {
+    if (matches('resend.edit')) {
       return { type: 'editPendingResend' };
     }
 
-    if (keyState.escape || value === 'n' || value === 'N') {
+    if (matches('resend.cancel')) {
       return { type: 'cancelResend' };
     }
 
@@ -363,11 +419,11 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     }
 
     if (isComposerConfirmOpen) {
-      if (keyState.return || value === 'y' || value === 'Y') {
+      if (matches('composerConfirm.confirm')) {
         return { type: 'sendComposer' };
       }
 
-      if (keyState.escape || value === 'n' || value === 'N') {
+      if (matches('composerConfirm.cancel')) {
         return { type: 'closeComposerPreview' };
       }
 
@@ -375,25 +431,25 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     }
 
     if (isComposerLibraryOpen) {
-      const shortcutTab = getComposerTabFromShortcut(value);
+      const shortcutTab = getMatchedComposerTab(value, keyState, keyBindings, COMPOSER_LIBRARY_TAB_ACTIONS);
 
       if (shortcutTab) {
         return { type: 'selectComposerTab', tab: shortcutTab };
       }
 
-      if (keyState.escape || value === 'l') {
+      if (matches('composerLibrary.close')) {
         return { type: 'closeComposerLibrary' };
       }
 
-      if (keyState.return) {
+      if (matches('composerLibrary.open')) {
         return { type: 'loadComposerLibraryRequest' };
       }
 
-      if (keyState.upArrow || value === 'k') {
+      if (matches('composerLibrary.moveUp')) {
         return { type: 'moveComposerLibrary', direction: -1 };
       }
 
-      if (keyState.downArrow || value === 'j') {
+      if (matches('composerLibrary.moveDown')) {
         return { type: 'moveComposerLibrary', direction: 1 };
       }
 
@@ -401,24 +457,36 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     }
 
     if (isComposerBodyEditorOpen) {
-      if (keyState.escape) {
+      if (matches('composerBody.close')) {
         return { type: 'closeComposerBodyEditor' };
       }
 
-      if (keyState.return) {
+      if (matches('composerBody.newline')) {
         return { type: 'insertComposerText', value: '\n' };
       }
 
-      if (isBackspaceInput(value, keyState) || isDeleteInput(value, keyState)) {
-        return { type: isDeleteInput(value, keyState) ? 'deleteComposerText' : 'backspaceComposerText' };
+      if (matches('composerBody.delete')) {
+        return { type: 'deleteComposerText' };
       }
 
-      if (keyState.leftArrow || keyState.rightArrow) {
-        return { type: 'moveComposerCursor', direction: keyState.leftArrow ? -1 : 1 };
+      if (matches('composerBody.backspace')) {
+        return { type: 'backspaceComposerText' };
       }
 
-      if (keyState.home || keyState.end) {
-        return { type: 'moveComposerCursorTo', boundary: keyState.home ? 'start' : 'end' };
+      if (matches('composerBody.cursorLeft')) {
+        return { type: 'moveComposerCursor', direction: -1 };
+      }
+
+      if (matches('composerBody.cursorRight')) {
+        return { type: 'moveComposerCursor', direction: 1 };
+      }
+
+      if (matches('composerBody.cursorStart')) {
+        return { type: 'moveComposerCursorTo', boundary: 'start' };
+      }
+
+      if (matches('composerBody.cursorEnd')) {
+        return { type: 'moveComposerCursorTo', boundary: 'end' };
       }
 
       if (value && !keyState.ctrl && !keyState.meta) {
@@ -428,76 +496,88 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
       return { type: 'none' };
     }
 
-    if (keyState.escape) {
+    if (matches('composer.close')) {
       return { type: 'closeComposer' };
     }
 
-    if (keyState.return) {
+    if (matches('composer.preview')) {
       return { type: 'previewComposerSend' };
     }
 
-    if (value === '[') {
+    if (matches('composer.previousTab')) {
       return { type: 'cycleComposerTab', direction: -1 };
     }
 
-    if (value === ']') {
+    if (matches('composer.nextTab')) {
       return { type: 'cycleComposerTab', direction: 1 };
     }
 
-    if (!isComposerTextFocused && getComposerTabFromShortcut(value)) {
-      return { type: 'selectComposerTab', tab: getComposerTabFromShortcut(value) };
+    const shortcutTab = !isComposerTextFocused
+      ? getMatchedComposerTab(value, keyState, keyBindings, COMPOSER_TAB_ACTIONS)
+      : null;
+
+    if (shortcutTab) {
+      return { type: 'selectComposerTab', tab: shortcutTab };
     }
 
-    if (keyState.shiftTab || (keyState.shift && keyState.tab)) {
+    if (matches('composer.previousField')) {
       return { type: 'cycleComposerFocus', direction: -1 };
     }
 
-    if (keyState.tab || keyState.downArrow) {
+    if (matches('composer.nextField')) {
       return { type: 'cycleComposerFocus', direction: 1 };
     }
 
-    if (keyState.upArrow) {
-      return { type: 'cycleComposerFocus', direction: -1 };
-    }
-
-    if (value === 'a' && !isComposerTextFocused) {
+    if (!isComposerTextFocused && matches('composer.addRow')) {
       return { type: 'addComposerRow' };
     }
 
-    if (value === 'd' && !isComposerTextFocused) {
+    if (!isComposerTextFocused && matches('composer.deleteRow')) {
       return { type: 'deleteComposerRow' };
     }
 
-    if (value === ' ' && !isComposerTextFocused) {
+    if (!isComposerTextFocused && matches('composer.toggleField')) {
       return { type: 'toggleComposerField' };
     }
 
-    if (value === 's' && !isComposerTextFocused) {
+    if (!isComposerTextFocused && matches('composer.save')) {
       return { type: 'saveComposerRequest' };
     }
 
-    if (value === 'l' && !isComposerTextFocused) {
+    if (!isComposerTextFocused && matches('composer.openLibrary')) {
       return { type: 'openComposerLibrary' };
     }
 
-    if (value === 'R' && !isComposerTextFocused) {
+    if (!isComposerTextFocused && matches('composer.revealSecrets')) {
       return { type: 'toggleComposerReveal' };
     }
 
-    if (value === 'o' && !isComposerTextFocused) {
+    if (!isComposerTextFocused && matches('composer.openBodyEditor')) {
       return { type: 'openComposerBodyEditor' };
     }
 
-    if (keyState.leftArrow || keyState.rightArrow) {
-      return { type: 'moveComposerHorizontal', direction: keyState.leftArrow ? -1 : 1 };
+    if (matches('composer.previousOption')) {
+      return { type: 'moveComposerHorizontal', direction: -1 };
     }
 
-    if (keyState.home || keyState.end) {
-      return { type: 'moveComposerCursorTo', boundary: keyState.home ? 'start' : 'end' };
+    if (matches('composer.nextOption')) {
+      return { type: 'moveComposerHorizontal', direction: 1 };
     }
 
-    if (isBackspaceInput(value, keyState) || isDeleteInput(value, keyState)) {
-      return { type: isDeleteInput(value, keyState) ? 'deleteComposerText' : 'backspaceComposerText' };
+    if (matches('composer.cursorStart')) {
+      return { type: 'moveComposerCursorTo', boundary: 'start' };
+    }
+
+    if (matches('composer.cursorEnd')) {
+      return { type: 'moveComposerCursorTo', boundary: 'end' };
+    }
+
+    if (matches('composer.delete')) {
+      return { type: 'deleteComposerText' };
+    }
+
+    if (matches('composer.backspace')) {
+      return { type: 'backspaceComposerText' };
     }
 
     if (value && !keyState.ctrl && !keyState.meta) {
@@ -508,11 +588,11 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   }
 
   if (isDetailSearchOpen) {
-    if (keyState.escape || keyState.return) {
+    if (matches('detailSearch.close')) {
       return { type: 'finishDetailSearch' };
     }
 
-    if (isBackspaceInput(value, keyState) || isDeleteInput(value, keyState)) {
+    if (matches('detailSearch.delete') || matches('detailSearch.backspace')) {
       return { type: 'backspaceDetailSearch' };
     }
 
@@ -537,84 +617,84 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     return { type: 'none' };
   }
 
-  if (value === ':' && !isFilterOpen) {
+  if (matches('global.openCommandPrompt') && !isFilterOpen) {
     return { type: 'openCommandPrompt' };
   }
 
-  if (value === 'F' && !isFilterOpen) {
+  if (matches('main.toggleFrameworkAssets') && !isFilterOpen) {
     return { type: 'toggleFrameworkAssets' };
   }
 
   if (isDetailModalOpen) {
-    if (keyState.escape || value === 'q') {
+    if (matches('detail.close')) {
       return { type: 'closeDetailModal' };
     }
 
-    if (value === 'y') {
+    if (matches('detail.copy')) {
       return { type: 'startExport', action: 'copy' };
     }
 
-    if (value === 'D') {
+    if (matches('detail.download')) {
       return { type: 'startExport', action: 'download' };
     }
 
-    if (value === '/') {
+    if (matches('detail.openSearch')) {
       return { type: 'openDetailSearch' };
     }
 
-    if (value === 'R') {
-      return { type: 'showCommandHint', message: getCommandHintForKey(value) };
+    if (matches('detail.hintResend')) {
+      return { type: 'showCommandHint', message: getCommandHintForAction('detail.hintResend') };
     }
 
-    if ((value === 'E' || value === 'e') && isLiveMode) {
+    if (matches('detail.editRequest') && isLiveMode) {
       return { type: 'openComposer', mode: 'edit-resend' };
     }
 
-    if (value === 'n') {
+    if (matches('detail.nextMatch')) {
       return { type: 'moveDetailMatch', direction: 1 };
     }
 
-    if (value === 'N') {
+    if (matches('detail.previousMatch')) {
       return { type: 'moveDetailMatch', direction: -1 };
     }
 
-    if (value === 'r') {
+    if (matches('detail.toggleTab')) {
       return { type: 'toggleDetailTab' };
     }
 
-    if (keyState.return) {
+    if (matches('detail.toggleNode')) {
       return { type: 'toggleDetailNode' };
     }
 
-    if (keyState.upArrow || value === 'k') {
+    if (matches('detail.scrollUp')) {
       return { type: 'scrollDetails', direction: -1 };
     }
 
-    if (keyState.downArrow || value === 'j') {
+    if (matches('detail.scrollDown')) {
       return { type: 'scrollDetails', direction: 1 };
     }
 
-    if (keyState.pageUp || value === '[') {
+    if (matches('detail.pageUp')) {
       return { type: 'scrollDetails', direction: -getPageStep(detailPageSize) };
     }
 
-    if (keyState.pageDown || value === ']') {
+    if (matches('detail.pageDown')) {
       return { type: 'scrollDetails', direction: getPageStep(detailPageSize) };
     }
 
-    if (value === 'u' && keyState.ctrl) {
+    if (matches('detail.halfPageUp')) {
       return { type: 'scrollDetails', direction: -getPageStep(detailPageSize, 'half') };
     }
 
-    if (value === 'd' && keyState.ctrl) {
+    if (matches('detail.halfPageDown')) {
       return { type: 'scrollDetails', direction: getPageStep(detailPageSize, 'half') };
     }
 
-    if (value === 'g') {
+    if (matches('detail.top')) {
       return { type: 'scrollDetailsTo', boundary: 'top' };
     }
 
-    if (value === 'G') {
+    if (matches('detail.bottom')) {
       return { type: 'scrollDetailsTo', boundary: 'bottom' };
     }
 
@@ -622,35 +702,35 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   }
 
   if (isFilterOpen) {
-    if (keyState.escape || keyState.return) {
+    if (matches('filter.close')) {
       return { type: 'finishSearch' };
     }
 
-    if (value === 'x') {
+    if (matches('filter.clear')) {
       return { type: 'clearFilters' };
     }
 
-    if (keyState.tab || keyState.downArrow) {
+    if (matches('filter.nextField')) {
       return { type: 'cycleFilterFocus', direction: 1 };
     }
 
-    if (keyState.upArrow) {
+    if (matches('filter.previousField')) {
       return { type: 'cycleFilterFocus', direction: -1 };
     }
 
-    if (keyState.rightArrow) {
+    if (matches('filter.nextOption')) {
       return { type: 'moveFilterOption', direction: 1 };
     }
 
-    if (keyState.leftArrow) {
+    if (matches('filter.previousOption')) {
       return { type: 'moveFilterOption', direction: -1 };
     }
 
-    if (value === ' ' && filterFocus !== 'query') {
+    if (matches('filter.toggleOption') && filterFocus !== 'query') {
       return { type: 'toggleFilterOption' };
     }
 
-    if (isBackspaceInput(value, keyState) || isDeleteInput(value, keyState)) {
+    if (matches('filter.delete') || matches('filter.backspace')) {
       return filterFocus === 'query'
         ? { type: 'backspaceSearch' }
         : { type: 'none' };
@@ -663,159 +743,159 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     return { type: 'none' };
   }
 
-  if (value === 'h') {
+  if (matches('main.openHelp')) {
     return { type: 'openHelp' };
   }
 
-  if (value === 'L') {
+  if (matches('main.openListDisplay')) {
     return { type: 'openListDisplay' };
   }
 
-  if (value === 't') {
+  if (matches('main.cyclePathDisplay')) {
     return { type: 'cycleTrafficPathMode', direction: 1 };
   }
 
-  if (value === 'v') {
+  if (matches('main.cycleDensity')) {
     return { type: 'cycleTrafficDensity', direction: 1 };
   }
 
-  if (value === 'w') {
+  if (matches('main.cyclePaneWidth')) {
     return { type: 'cyclePaneWidthMode', direction: 1 };
   }
 
-  if (value === 'y') {
+  if (matches('main.copy')) {
     return { type: 'startExport', action: 'copy' };
   }
 
-  if (value === 'D') {
+  if (matches('main.download')) {
     return { type: 'startExport', action: 'download' };
   }
 
-  if (value === 'n' && isLiveMode && isListFocused) {
+  if (matches('main.openComposer') && isLiveMode && isListFocused) {
     return { type: 'openComposer', mode: 'blank' };
   }
 
-  if (value === 'R') {
-    return { type: 'showCommandHint', message: getCommandHintForKey(value) };
+  if (matches('main.hintResend')) {
+    return { type: 'showCommandHint', message: getCommandHintForAction('main.hintResend') };
   }
 
-  if ((value === 'E' || value === 'e') && isLiveMode) {
+  if (matches('main.editRequest') && isLiveMode) {
     return { type: 'openComposer', mode: 'edit-resend' };
   }
 
-  if (value === 'l' && isLiveMode) {
+  if (matches('main.openLibrary') && isLiveMode) {
     return { type: 'openComposerLibrary' };
   }
 
-  if (value === 'q') {
-    return { type: 'showCommandHint', message: getCommandHintForKey(value) };
+  if (matches('main.hintQuit')) {
+    return { type: 'showCommandHint', message: getCommandHintForAction('main.hintQuit') };
   }
 
-  if (value === '/') {
+  if (matches('main.openSearch')) {
     return isListFocused
       ? { type: 'openFilter', focus: 'query' }
       : { type: 'openDetailSearch' };
   }
 
-  if (value === 'x') {
+  if (matches('main.clearFilter')) {
     return { type: 'clearFilters' };
   }
 
-  if (value === 'c') {
-    return { type: 'showCommandHint', message: getCommandHintForKey(value) };
+  if (matches('main.hintClear')) {
+    return { type: 'showCommandHint', message: getCommandHintForAction('main.hintClear') };
   }
 
-  if (value === 'f') {
+  if (matches('main.followLatest')) {
     return { type: 'followLatest' };
   }
 
-  if (value === 'o') {
+  if (matches('main.openDetailModal')) {
     return { type: 'openDetailModal' };
   }
 
-  if (keyState.return) {
+  if (matches('main.inspect')) {
     return isListFocused ? { type: 'inspectSelected' } : { type: 'toggleDetailNode' };
   }
 
-  if (value === 'm') {
+  if (matches('main.methodFilter')) {
     return { type: 'openFilter', focus: 'method' };
   }
 
-  if (value === 'p') {
-    return { type: 'showCommandHint', message: getCommandHintForKey(value) };
+  if (matches('main.hintPause')) {
+    return { type: 'showCommandHint', message: getCommandHintForAction('main.hintPause') };
   }
 
-  if (value === 'P') {
-    return { type: 'showCommandHint', message: getCommandHintForKey(value) };
+  if (matches('main.hintRecord')) {
+    return { type: 'showCommandHint', message: getCommandHintForAction('main.hintRecord') };
   }
 
-  if (value === 'S') {
-    return { type: 'showCommandHint', message: getCommandHintForKey(value) };
+  if (matches('main.hintStopRecording')) {
+    return { type: 'showCommandHint', message: getCommandHintForAction('main.hintStopRecording') };
   }
 
-  if (value === 'r') {
+  if (matches('main.toggleDetailTab')) {
     return { type: 'toggleDetailTab' };
   }
 
-  if (value === 's') {
+  if (matches('main.statusFilter')) {
     return { type: 'openFilter', focus: 'status' };
   }
 
-  if (value === 'n' && !isListFocused) {
+  if (matches('main.nextMatch') && !isListFocused) {
     return { type: 'moveDetailMatch', direction: 1 };
   }
 
-  if (value === 'N' && !isListFocused) {
+  if (matches('main.previousMatch') && !isListFocused) {
     return { type: 'moveDetailMatch', direction: -1 };
   }
 
-  if (keyState.tab) {
+  if (matches('main.toggleFocus')) {
     return { type: 'toggleFocus' };
   }
 
-  if (keyState.upArrow || value === 'k') {
+  if (matches('main.moveUp')) {
     return isListFocused
       ? { type: 'moveSelection', direction: -1 }
       : { type: 'scrollDetails', direction: -1 };
   }
 
-  if (keyState.downArrow || value === 'j') {
+  if (matches('main.moveDown')) {
     return isListFocused
       ? { type: 'moveSelection', direction: 1 }
       : { type: 'scrollDetails', direction: 1 };
   }
 
-  if (keyState.pageUp || value === '[') {
+  if (matches('main.pageUp')) {
     return isListFocused
       ? { type: 'moveSelection', direction: -getPageStep(trafficPageSize) }
       : { type: 'scrollDetails', direction: -getPageStep(detailPageSize) };
   }
 
-  if (keyState.pageDown || value === ']') {
+  if (matches('main.pageDown')) {
     return isListFocused
       ? { type: 'moveSelection', direction: getPageStep(trafficPageSize) }
       : { type: 'scrollDetails', direction: getPageStep(detailPageSize) };
   }
 
-  if (value === 'u' && keyState.ctrl) {
+  if (matches('main.halfPageUp')) {
     return isListFocused
       ? { type: 'moveSelection', direction: -getPageStep(trafficPageSize, 'half') }
       : { type: 'scrollDetails', direction: -getPageStep(detailPageSize, 'half') };
   }
 
-  if (value === 'd' && keyState.ctrl) {
+  if (matches('main.halfPageDown')) {
     return isListFocused
       ? { type: 'moveSelection', direction: getPageStep(trafficPageSize, 'half') }
       : { type: 'scrollDetails', direction: getPageStep(detailPageSize, 'half') };
   }
 
-  if (value === 'g') {
+  if (matches('main.top')) {
     return isListFocused
       ? { type: 'moveSelectionTo', boundary: 'first' }
       : { type: 'scrollDetailsTo', boundary: 'top' };
   }
 
-  if (value === 'G') {
+  if (matches('main.bottom')) {
     return isListFocused
       ? { type: 'moveSelectionTo', boundary: 'last' }
       : { type: 'scrollDetailsTo', boundary: 'bottom' };
@@ -845,6 +925,7 @@ export function KeyboardControls({
   isComposerLibraryOpen,
   isComposerTextFocused,
   detailPageSize,
+  keyBindings,
   showTrafficPane,
   trafficPaneWidth,
   trafficPageSize,
@@ -951,6 +1032,7 @@ export function KeyboardControls({
       isComposerLibraryOpen,
       isComposerTextFocused,
       detailPageSize,
+      keyBindings,
       showTrafficPane,
       trafficPaneWidth,
       trafficPageSize

@@ -9,6 +9,7 @@ import {
   COMMAND_DEFINITIONS,
   createBlankComposerState,
   createComposerStateFromLog,
+  DEFAULT_KEY_BINDINGS,
   cycleDetailWidthMode,
   cyclePaneWidthMode,
   cycleTrafficDensity,
@@ -41,6 +42,7 @@ import {
   getDetailVisibleCount,
   getDetailLines,
   getDetailRows,
+  getHelpSections,
   getKeyboardAction,
   getMaxScrollOffset,
   getMouseWheelTarget,
@@ -57,6 +59,7 @@ import {
   getSearchValues,
   getTrafficVisibleCount,
   moveSelectedLogId,
+  normalizeKeyBindings,
   normalizeTrafficListDisplay,
   resolveCommandInput,
   resolveSelectedLogId,
@@ -65,6 +68,10 @@ import {
   toggleTrafficColumn,
   toggleFilterValue
 } from '../src/ui/App.js';
+
+function getTestKeyBindings(overrides = {}) {
+  return normalizeKeyBindings({ keyBindings: overrides }).bindings;
+}
 
 const logs = [
   { id: 'one' },
@@ -888,6 +895,79 @@ test('keyboard action helper supports detail modal and detail search input', () 
   );
 });
 
+test('keyboard action helper supports custom key bindings without stealing text input', () => {
+  const movementBindings = getTestKeyBindings({
+    'main.moveDown': ['z'],
+    'main.moveUp': ['a']
+  });
+
+  assert.deepEqual(
+    getKeyboardAction('z', {}, { isListFocused: true, keyBindings: movementBindings }),
+    { type: 'moveSelection', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('a', {}, { isListFocused: false, keyBindings: movementBindings }),
+    { type: 'scrollDetails', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('j', {}, { isListFocused: true, keyBindings: movementBindings }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('z', {}, { filterFocus: 'query', isFilterOpen: true, keyBindings: movementBindings }),
+    { type: 'appendSearch', value: 'z' }
+  );
+
+  const exportBindings = getTestKeyBindings({
+    'main.copy': ['b'],
+    'main.download': ['X'],
+    'export.masked': ['1'],
+    'export.raw': ['2']
+  });
+
+  assert.deepEqual(
+    getKeyboardAction('b', {}, { keyBindings: exportBindings }),
+    { type: 'startExport', action: 'copy' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('X', {}, { keyBindings: exportBindings }),
+    { type: 'startExport', action: 'download' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('1', {}, { isExportPromptOpen: true, keyBindings: exportBindings }),
+    { type: 'finishExport', secretPolicy: 'masked' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('2', {}, { isExportPromptOpen: true, keyBindings: exportBindings }),
+    { type: 'finishExport', secretPolicy: 'raw' }
+  );
+
+  const composerBindings = getTestKeyBindings({
+    'composer.addRow': ['+'],
+    'composer.deleteRow': ['-'],
+    'composer.save': ['!'],
+    'composer.selectTab.auth': ['8'],
+    'composerLibrary.open': ['o']
+  });
+
+  assert.deepEqual(
+    getKeyboardAction('+', {}, { isComposerOpen: true, isComposerTextFocused: false, keyBindings: composerBindings }),
+    { type: 'addComposerRow' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('+', {}, { isComposerOpen: true, isComposerTextFocused: true, keyBindings: composerBindings }),
+    { type: 'insertComposerText', value: '+' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('8', {}, { isComposerOpen: true, isComposerTextFocused: false, keyBindings: composerBindings }),
+    { type: 'selectComposerTab', tab: 'auth' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('o', {}, { isComposerOpen: true, isComposerLibraryOpen: true, keyBindings: composerBindings }),
+    { type: 'loadComposerLibraryRequest' }
+  );
+});
+
 test('mouse wheel routing maps the active traffic pane by terminal column', () => {
   assert.equal(getMouseWheelTarget(1), 'traffic');
   assert.equal(getMouseWheelTarget(51), 'traffic');
@@ -986,6 +1066,37 @@ test('footer text shows mode-aware essential keymaps', () => {
     ''
   );
   assert.equal(formatFooterText({ isHelpOpen: true }), 'help | esc/h/q close');
+});
+
+test('footer and help labels reflect custom key bindings', () => {
+  const keyBindings = getTestKeyBindings({
+    'global.openCommandPrompt': [';'],
+    'main.moveDown': ['z'],
+    'main.moveUp': ['a'],
+    'main.openHelp': ['?'],
+    'main.openSearch': ['.'],
+    'export.masked': ['1'],
+    'export.raw': ['2']
+  });
+
+  assert.equal(
+    formatFooterText({ isListFocused: true, keyBindings }),
+    'z/a: move  [ / ]: page  enter: inspect  tab: details  ; command  ?: help'
+  );
+  assert.equal(
+    formatFooterText({ isExportPromptOpen: true, keyBindings }),
+    'export  1 masked  2 raw  esc cancel'
+  );
+
+  const customSections = getHelpSections(keyBindings);
+  const moveSection = customSections.find((section) => section.title === 'Move');
+  const inspectSection = customSections.find((section) => section.title === 'Inspect');
+  const exportSection = customSections.find((section) => section.title === 'Display / Export');
+
+  assert.deepEqual(moveSection.rows.find((row) => row[1] === 'move line'), ['z/a', 'move line']);
+  assert.deepEqual(inspectSection.rows.find((row) => row[1] === 'find details'), ['.', 'find details']);
+  assert.deepEqual(exportSection.rows.find((row) => row[1] === 'masked / raw export'), ['1 / 2', 'masked / raw export']);
+  assert.equal(DEFAULT_KEY_BINDINGS['main.moveDown'][0], 'j');
 });
 
 test('command help rows are generated from command definitions', () => {
