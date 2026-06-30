@@ -3409,7 +3409,6 @@ export const HELP_SECTIONS = [
     title: 'Compose',
     rows: [
       ['n', 'new request'],
-      [':resend', 'exact resend'],
       ['E', 'edit and resend'],
       ['e', 'edit selected request'],
       ['l', 'saved requests'],
@@ -3436,19 +3435,16 @@ export const HELP_SECTIONS = [
   {
     title: 'Capture / Session',
     rows: [
-      [':pause', 'pause capture'],
-      [':record', 'record on/off'],
-      [':stop', 'stop recording'],
       ['f', 'follow latest'],
-      [':clear', 'clear logs'],
-      ['h / :help', 'help'],
-      [':quit', 'quit']
+      ['h', 'help']
     ]
   }
 ];
 
 const HELP_KEY_WIDTH = 10;
 const HELP_COLUMN_GAP_WIDTH = 3;
+const COMMAND_HELP_COMMAND_WIDTH = 18;
+const COMMAND_HELP_ALIAS_WIDTH = 24;
 
 function getHelpSectionHeight(section) {
   return section.rows.length + 2;
@@ -3483,11 +3479,47 @@ function renderHelpSections(sections, width) {
   ].filter(Boolean));
 }
 
+export function getCommandHelpRows(commands = COMMAND_DEFINITIONS) {
+  return commands.map((command) => ({
+    aliases: (command.aliases ?? []).map((alias) => `:${alias}`).join(', '),
+    command: `:${command.name}`,
+    description: command.description
+  }));
+}
+
+function renderCommandHelpRows(width) {
+  const useColumns = width >= COMMAND_HELP_COMMAND_WIDTH + COMMAND_HELP_ALIAS_WIDTH + 18;
+  const descriptionWidth = Math.max(
+    8,
+    width - COMMAND_HELP_COMMAND_WIDTH - COMMAND_HELP_ALIAS_WIDTH - 2
+  );
+
+  return [
+    h(Text, { key: 'commands-title', bold: true, color: 'cyan' }, 'Commands'),
+    ...getCommandHelpRows().map((row) => (
+      useColumns
+        ? h(
+          Box,
+          { key: row.command, width },
+          h(Text, { color: 'cyan' }, pad(row.command, COMMAND_HELP_COMMAND_WIDTH)),
+          h(Text, { color: 'gray' }, pad(row.aliases, COMMAND_HELP_ALIAS_WIDTH)),
+          h(Text, { wrap: 'truncate' }, truncate(row.description, descriptionWidth))
+        )
+        : h(
+          Box,
+          { key: row.command, width },
+          h(Text, { color: 'cyan' }, pad(row.command, HELP_KEY_WIDTH)),
+          h(Text, { wrap: 'truncate' }, `${row.aliases ? `${row.aliases}  ` : ''}${row.description}`)
+        )
+    ))
+  ];
+}
+
 const HelpModal = React.memo(function HelpModal() {
   const columns = Number.isFinite(process.stdout.columns) && process.stdout.columns > 0
     ? process.stdout.columns
     : 80;
-  const width = Math.max(34, Math.min(76, columns - 6));
+  const width = Math.max(34, Math.min(90, columns - 6));
   const useColumns = width >= 68;
   const contentWidth = Math.max(26, width - 6);
   const columnWidth = useColumns ? Math.floor((contentWidth - HELP_COLUMN_GAP_WIDTH) / 2) : contentWidth;
@@ -3511,7 +3543,7 @@ const HelpModal = React.memo(function HelpModal() {
         width
       },
       h(Text, { bold: true, color: 'cyan' }, 'Help'),
-      h(Text, { color: 'gray' }, 'Daily keys'),
+      h(Text, { color: 'gray' }, 'Daily keys and commands'),
       h(Text, {}, ''),
       useColumns
         ? h(
@@ -3522,6 +3554,8 @@ const HelpModal = React.memo(function HelpModal() {
           h(Box, { flexDirection: 'column', width: columnWidth }, ...renderHelpSections(rightSections, columnWidth))
         )
         : h(Box, { flexDirection: 'column' }, ...renderHelpSections(HELP_SECTIONS, contentWidth)),
+      h(Text, {}, ''),
+      h(Box, { flexDirection: 'column', width: contentWidth }, ...renderCommandHelpRows(contentWidth)),
       h(Text, { color: 'gray' }, 'esc/h/q close')
     )
   );

@@ -31,6 +31,7 @@ import {
   formatTrafficRow,
   HELP_SECTIONS,
   getBoundaryLogId,
+  getCommandHelpRows,
   getCommandHintForKey,
   getCommandMatches,
   getCommandSuggestionRows,
@@ -987,14 +988,38 @@ test('footer text shows mode-aware essential keymaps', () => {
   assert.equal(formatFooterText({ isHelpOpen: true }), 'help | esc/h/q close');
 });
 
-test('help sections describe starting, pausing, and stopping recording', () => {
-  const captureSection = HELP_SECTIONS.find((section) => section.title === 'Capture / Session');
+test('command help rows are generated from command definitions', () => {
+  const rows = getCommandHelpRows();
 
-  assert.deepEqual(captureSection.rows.find(([keys]) => keys === ':pause'), [':pause', 'pause capture']);
-  assert.deepEqual(captureSection.rows.find(([keys]) => keys === ':record'), [':record', 'record on/off']);
-  assert.deepEqual(captureSection.rows.find(([keys]) => keys === ':stop'), [':stop', 'stop recording']);
-  assert.deepEqual(captureSection.rows.find(([keys]) => keys === ':clear'), [':clear', 'clear logs']);
-  assert.deepEqual(captureSection.rows.find(([keys]) => keys === ':quit'), [':quit', 'quit']);
+  assert.deepEqual(
+    rows.map((row) => row.command),
+    COMMAND_DEFINITIONS.map((command) => `:${command.name}`)
+  );
+  assert.deepEqual(
+    rows.find((row) => row.command === ':stop-recording'),
+    {
+      aliases: ':stop, :stop-rec',
+      command: ':stop-recording',
+      description: 'stop recording'
+    }
+  );
+  assert.equal(
+    rows.find((row) => row.command === ':clear-logs').aliases,
+    ':clear, :clear-traffic'
+  );
+});
+
+test('help sections keep colon commands in the dedicated command block', () => {
+  const composeSection = HELP_SECTIONS.find((section) => section.title === 'Compose');
+  const captureSection = HELP_SECTIONS.find((section) => section.title === 'Capture / Session');
+  const sectionCommandRows = HELP_SECTIONS
+    .flatMap((section) => section.rows)
+    .filter(([keys]) => keys.includes(':'));
+
+  assert.deepEqual(sectionCommandRows, []);
+  assert.equal(composeSection.rows.find(([keys]) => keys === ':resend'), undefined);
+  assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'f'), ['f', 'follow latest']);
+  assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'h'), ['h', 'help']);
 });
 
 test('help sections describe copy and download exports', () => {
@@ -1028,7 +1053,6 @@ test('help sections describe request composer keys', () => {
   const composeSection = HELP_SECTIONS.find((section) => section.title === 'Compose');
 
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'n'), ['n', 'new request']);
-  assert.deepEqual(composeSection.rows.find(([keys]) => keys === ':resend'), [':resend', 'exact resend']);
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'E'), ['E', 'edit and resend']);
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'e'), ['e', 'edit selected request']);
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'l'), ['l', 'saved requests']);
