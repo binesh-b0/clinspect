@@ -3680,6 +3680,10 @@ function joinFooterParts(parts) {
   return parts.filter(Boolean).join('  ');
 }
 
+function formatFooterBinding(keys, description) {
+  return `${keys}: ${description}`;
+}
+
 export function formatFooterText({
   commandStatus = '',
   exportStatus = '',
@@ -3709,7 +3713,7 @@ export function formatFooterText({
     return status ? `${value} | ${status}` : value;
   };
   const liveDetailActions = isLiveMode ? ['E edit'] : [];
-  const liveListActions = isLiveMode ? ['n new', ...liveDetailActions] : [];
+  const liveDetailModalActions = isLiveMode ? [formatFooterBinding('E', 'edit')] : [];
 
   if (!isRawModeSupported) {
     return 'keyboard input unavailable in this shell | Ctrl-C or SIGTERM quit';
@@ -3768,52 +3772,38 @@ export function formatFooterText({
 
   if (isDetailModalOpen) {
     return withStatus(joinFooterParts([
-      'j/k scroll',
-      '[/] page',
-      'r req/res',
-      'y copy',
-      'D download',
-      '/ find',
-      'n/N match',
-      ...liveDetailActions,
-      'enter collapse',
-      'esc/q close',
+      formatFooterBinding('j/k', 'scroll'),
+      formatFooterBinding('[ / ]', 'page'),
+      formatFooterBinding('r', 'req/res'),
+      formatFooterBinding('/', 'find'),
+      formatFooterBinding('n/N', 'match'),
+      ...liveDetailModalActions,
+      formatFooterBinding('enter', 'collapse'),
+      formatFooterBinding('esc/q', 'close'),
       ': command'
     ]));
   }
 
   if (isListFocused) {
     return withStatus(joinFooterParts([
-      'j/k move',
-      '[/] page',
-      'enter inspect',
-      't path',
-      'v density',
-      'L display',
-      'y copy',
-      'D download',
-      ...liveListActions,
-      'tab details',
+      formatFooterBinding('j/k', 'move'),
+      formatFooterBinding('[ / ]', 'page'),
+      formatFooterBinding('enter', 'inspect'),
+      formatFooterBinding('tab', 'details'),
       ': command',
-      'h help'
+      formatFooterBinding('h', 'help')
     ]));
   }
 
   return withStatus(joinFooterParts([
-    'j/k scroll',
-    '[/] page',
-    'r req/res',
-    't path',
-    'v density',
-    'L display',
-    'y copy',
-    'D download',
-    '/ find',
-    'n/N match',
-    ...liveDetailActions,
-    'tab traffic',
+    formatFooterBinding('j/k', 'scroll'),
+    formatFooterBinding('[ / ]', 'page'),
+    formatFooterBinding('r', 'req/res'),
+    formatFooterBinding('/', 'find'),
+    formatFooterBinding('n/N', 'match'),
+    formatFooterBinding('tab', 'traffic'),
     ': command',
-    'h help'
+    formatFooterBinding('h', 'help')
   ]));
 }
 

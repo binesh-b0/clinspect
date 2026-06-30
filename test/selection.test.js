@@ -909,37 +909,37 @@ test('getRenderHeight keeps one terminal row free for Ink updates', () => {
 test('footer text shows mode-aware essential keymaps', () => {
   assert.equal(
     formatFooterText({ isListFocused: true }),
-    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  E edit  tab details  : command  h help'
+    'j/k: move  [ / ]: page  enter: inspect  tab: details  : command  h: help'
   );
   assert.equal(
     formatFooterText({ isListFocused: false }),
-    'j/k scroll  [/] page  r req/res  t path  v density  L display  y copy  D download  / find  n/N match  E edit  tab traffic  : command  h help'
+    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  tab: traffic  : command  h: help'
   );
   assert.equal(
     formatFooterText({ hideFrameworkAssets: false, isListFocused: true }),
-    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  E edit  tab details  : command  h help'
+    'j/k: move  [ / ]: page  enter: inspect  tab: details  : command  h: help'
   );
   assert.equal(
     formatFooterText({ isDetailModalOpen: true }),
-    'j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  E edit  enter collapse  esc/q close  : command'
+    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  E: edit  enter: collapse  esc/q: close  : command'
   );
   assert.equal(
     formatFooterText({ isListFocused: true, isLiveMode: false, isReplayMode: true }),
-    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  tab details  : command  h help'
+    'j/k: move  [ / ]: page  enter: inspect  tab: details  : command  h: help'
   );
   assert.equal(
     formatFooterText({
       isListFocused: true,
       recordingStatus: { mode: 'full', path: './capture.ndjson', state: 'recording', error: null }
     }),
-    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  E edit  tab details  : command  h help'
+    'j/k: move  [ / ]: page  enter: inspect  tab: details  : command  h: help'
   );
   assert.equal(
     formatFooterText({
       isListFocused: false,
       recordingStatus: { mode: 'partial', path: './capture.ndjson', state: 'paused', error: null }
     }),
-    'j/k scroll  [/] page  r req/res  t path  v density  L display  y copy  D download  / find  n/N match  E edit  tab traffic  : command  h help'
+    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  tab: traffic  : command  h: help'
   );
   assert.equal(
     formatFooterText({ isComposerOpen: true }),
@@ -971,15 +971,15 @@ test('footer text shows mode-aware essential keymaps', () => {
   );
   assert.equal(
     formatFooterText({ exportStatus: 'copied response body', isListFocused: false }),
-    'j/k scroll  [/] page  r req/res  t path  v density  L display  y copy  D download  / find  n/N match  E edit  tab traffic  : command  h help | copied response body'
+    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  tab: traffic  : command  h: help | copied response body'
   );
   assert.equal(
     formatFooterText({ isListFocused: true, resendStatus: 'resent GET /food' }),
-    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  E edit  tab details  : command  h help | resent GET /food'
+    'j/k: move  [ / ]: page  enter: inspect  tab: details  : command  h: help | resent GET /food'
   );
   assert.equal(
     formatFooterText({ commandStatus: 'use :quit', isListFocused: true }),
-    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  E edit  tab details  : command  h help | use :quit'
+    'j/k: move  [ / ]: page  enter: inspect  tab: details  : command  h: help | use :quit'
   );
   assert.equal(
     formatFooterText({ isCommandOpen: true }),
