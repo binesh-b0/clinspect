@@ -579,6 +579,7 @@ export const Footer = React.memo(function Footer({
 });
 
 export const CommandModal = React.memo(function CommandModal({
+  commandContext = null,
   input = '',
   keyBindings = DEFAULT_KEY_BINDINGS,
   selectedIndex = -1,
@@ -593,10 +594,10 @@ export const CommandModal = React.memo(function CommandModal({
   const aliasColumnWidth = Math.min(9, Math.max(6, Math.floor(contentWidth * 0.14)));
   const descriptionColumnWidth = Math.max(8, contentWidth - commandColumnWidth - aliasColumnWidth - 2);
   const inputWidth = Math.max(24, contentWidth);
-  const matches = getCommandMatches(input);
-  const rows = getCommandSuggestionRows(input, selectedIndex);
+  const matches = getCommandMatches(input, commandContext);
+  const rows = getCommandSuggestionRows(input, selectedIndex, commandContext);
   const selectedRow = rows.find((row) => row.command && row.isSelected);
-  const statusColor = /^unknown|^ambiguous|^command required/.test(status) ? 'red' : 'gray';
+  const statusColor = /^unknown|^ambiguous|^command required|.* unavailable:/.test(status) ? 'red' : 'gray';
   const inputText = input ? `:${input}_` : ':_';
   const submitKey = getActionLabel(keyBindings, 'command.submit', { limit: 1 });
   const commandHelpText = `${submitKey} run  ${getCommandSuggestionLabel(keyBindings)} select  ${getActionLabel(keyBindings, 'command.close', { limit: 1 })} cancel`;

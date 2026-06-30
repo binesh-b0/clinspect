@@ -134,20 +134,37 @@ function cloneCommandAction(command) {
   return { ...command.action };
 }
 
-export function getCommandMatches(input = '') {
+function getCommandAvailability(command, commandContext = null) {
+  return commandContext?.availability?.[command.name] ?? { available: true, reason: '' };
+}
+
+function isCommandAvailable(command, commandContext = null) {
+  return getCommandAvailability(command, commandContext).available !== false;
+}
+
+function getCommandUnavailableError(command, commandContext = null) {
+  const reason = getCommandAvailability(command, commandContext).reason || 'not available';
+
+  return `${command.name} unavailable: ${reason}`;
+}
+
+export function getCommandMatches(input = '', commandContext = null) {
   const value = normalizeCommandInput(input);
+  const availableCommands = COMMAND_DEFINITIONS.filter((command) => (
+    isCommandAvailable(command, commandContext)
+  ));
 
   if (!value) {
-    return COMMAND_DEFINITIONS;
+    return availableCommands;
   }
 
-  return COMMAND_DEFINITIONS.filter((command) => (
+  return availableCommands.filter((command) => (
     getCommandLabels(command).some((label) => label.startsWith(value))
   ));
 }
 
-export function getCommandSuggestionIndex(input = '', currentIndex = -1, direction = 1) {
-  const matches = getCommandMatches(input);
+export function getCommandSuggestionIndex(input = '', currentIndex = -1, direction = 1, commandContext = null) {
+  const matches = getCommandMatches(input, commandContext);
 
   if (matches.length === 0) {
     return -1;
@@ -170,8 +187,10 @@ function getCompactCommandAlias(command) {
   return [...aliases].sort((first, second) => first.length - second.length)[0];
 }
 
-export function getCommandSuggestionRows(input = '', selectedIndex = -1, rowCount = COMMAND_MODAL_ROW_COUNT) {
-  const matches = getCommandMatches(input).slice(0, rowCount);
+export function getCommandSuggestionRows(input = '', selectedIndex = -1, rowCount = COMMAND_MODAL_ROW_COUNT, commandContext = null) {
+  const safeRowCount = typeof rowCount === 'number' ? rowCount : COMMAND_MODAL_ROW_COUNT;
+  const safeCommandContext = typeof rowCount === 'number' ? commandContext : rowCount;
+  const matches = getCommandMatches(input, safeCommandContext).slice(0, safeRowCount);
   const safeSelectedIndex = selectedIndex >= 0 && matches.length > 0
     ? selectedIndex % matches.length
     : -1;
@@ -184,7 +203,7 @@ export function getCommandSuggestionRows(input = '', selectedIndex = -1, rowCoun
     primaryAlias: getCompactCommandAlias(command)
   }));
 
-  while (rows.length < rowCount) {
+  while (rows.length < safeRowCount) {
     rows.push({
       aliases: '',
       command: null,
@@ -231,7 +250,7 @@ function getMatchedComposerTab(input, key, bindings, actions) {
   return matchedAction?.[1] ?? null;
 }
 
-export function resolveCommandInput(input = '', selectedIndex = -1) {
+export function resolveCommandInput(input = '', selectedIndex = -1, commandContext = null) {
   const value = normalizeCommandInput(input);
 
   if (!value) {
@@ -246,6 +265,13 @@ export function resolveCommandInput(input = '', selectedIndex = -1) {
   ));
 
   if (exactCommand) {
+    if (!isCommandAvailable(exactCommand, commandContext)) {
+      return {
+        ok: false,
+        error: getCommandUnavailableError(exactCommand, commandContext)
+      };
+    }
+
     return {
       ok: true,
       action: cloneCommandAction(exactCommand),
@@ -253,7 +279,7 @@ export function resolveCommandInput(input = '', selectedIndex = -1) {
     };
   }
 
-  const matches = getCommandMatches(value);
+  const matches = getCommandMatches(value, commandContext);
 
   if (matches.length === 0) {
     return {

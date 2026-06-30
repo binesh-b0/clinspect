@@ -598,6 +598,53 @@ test('keyboard action helper supports colon command mode for careful actions', (
     ok: false,
     error: 'unknown command: wat'
   });
+
+  const unavailableNextPageContext = {
+    availability: {
+      'next-page': { available: false, reason: 'no next page detected' },
+      'send-next-page': { available: false, reason: 'no next page detected' }
+    }
+  };
+  const nextPageOnlyContext = {
+    availability: {
+      'next-page': { available: true },
+      'send-next-page': { available: false, reason: 'edit required: request body is truncated' }
+    }
+  };
+  const sendNextPageContext = {
+    availability: {
+      'next-page': { available: true },
+      'send-next-page': { available: true }
+    }
+  };
+
+  assert.equal(getCommandMatches('np', unavailableNextPageContext).length, 0);
+  assert.equal(getCommandMatches('snp', unavailableNextPageContext).length, 0);
+  assert.deepEqual(
+    getCommandSuggestionRows('', -1, unavailableNextPageContext).map((row) => row.name),
+    ['quit', 'resend', 'requests', 'record', 'stop-recording', 'pause-capture', 'clear-logs']
+  );
+  assert.deepEqual(resolveCommandInput('np', -1, unavailableNextPageContext), {
+    ok: false,
+    error: 'next-page unavailable: no next page detected'
+  });
+  assert.deepEqual(resolveCommandInput('snp', -1, unavailableNextPageContext), {
+    ok: false,
+    error: 'send-next-page unavailable: no next page detected'
+  });
+
+  assert.deepEqual(getCommandMatches('np', nextPageOnlyContext).map((command) => command.name), ['next-page']);
+  assert.equal(getCommandMatches('snp', nextPageOnlyContext).length, 0);
+  assert.deepEqual(resolveCommandInput('next-page', -1, nextPageOnlyContext).action, { type: 'openNextPage' });
+  assert.deepEqual(resolveCommandInput('snp', -1, nextPageOnlyContext), {
+    ok: false,
+    error: 'send-next-page unavailable: edit required: request body is truncated'
+  });
+
+  assert.deepEqual(getCommandMatches('np', sendNextPageContext).map((command) => command.name), ['next-page']);
+  assert.deepEqual(getCommandMatches('snp', sendNextPageContext).map((command) => command.name), ['send-next-page']);
+  assert.equal(getCommandSuggestionIndex('np', -1, 1, sendNextPageContext), 0);
+  assert.equal(getCommandSuggestionIndex('snp', -1, 1, unavailableNextPageContext), -1);
 });
 
 test('keyboard action helper supports request composer input', () => {
@@ -1245,6 +1292,12 @@ test('command help rows are generated from command definitions', () => {
 test('command modal renders command suggestions without missing constants', () => {
   assert.doesNotThrow(() => {
     CommandModal.type({
+      commandContext: {
+        availability: {
+          'next-page': { available: false, reason: 'no next page detected' },
+          'send-next-page': { available: false, reason: 'no next page detected' }
+        }
+      },
       input: 'r',
       selectedIndex: 0,
       status: ''

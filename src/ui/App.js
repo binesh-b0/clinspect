@@ -210,6 +210,89 @@ export {
   normalizeKeyBindings
 } from './key-bindings.js';
 
+function getNextPageUnavailableStatusForLog(log) {
+  const pagination = analyzePagination(log);
+
+  if (!pagination.detected) {
+    return 'no pagination detected';
+  }
+
+  return pagination.unavailableReason || 'no next page detected';
+}
+
+function createCommandContext({
+  activeLog,
+  composerIsSending = false,
+  environment = [],
+  isLiveMode = false,
+  isResending = false,
+  manualRequestSender = null
+} = {}) {
+  const unavailable = (reason) => ({
+    available: false,
+    reason
+  });
+  const available = { available: true, reason: '' };
+
+  if (!isLiveMode) {
+    const reason = 'next page unavailable in replay mode';
+
+    return {
+      availability: {
+        'next-page': unavailable(reason),
+        'send-next-page': unavailable(reason)
+      }
+    };
+  }
+
+  if (typeof manualRequestSender !== 'function') {
+    const reason = 'manual sender unavailable';
+
+    return {
+      availability: {
+        'next-page': unavailable(reason),
+        'send-next-page': unavailable(reason)
+      }
+    };
+  }
+
+  if (!activeLog) {
+    const reason = 'no request selected';
+
+    return {
+      availability: {
+        'next-page': unavailable(reason),
+        'send-next-page': unavailable(reason)
+      }
+    };
+  }
+
+  const plan = createNextPageRequestDraftFromLog(activeLog, { environment });
+
+  if (!plan) {
+    const reason = getNextPageUnavailableStatusForLog(activeLog);
+
+    return {
+      availability: {
+        'next-page': unavailable(reason),
+        'send-next-page': unavailable(reason)
+      }
+    };
+  }
+
+  const blocker = plan.blockers?.[0] ?? '';
+  const sendReason = composerIsSending || isResending
+    ? 'request already sending'
+    : (blocker ? `edit required: ${blocker}` : '');
+
+  return {
+    availability: {
+      'next-page': available,
+      'send-next-page': sendReason ? unavailable(sendReason) : available
+    }
+  };
+}
+
 export function App({
   stateStore,
   context = {},
@@ -389,6 +472,22 @@ export function App({
   const inspectedLog = useMemo(() => {
     return hydrateLog(filteredLogs.find((log) => log.id === inspectedLogId) ?? selectedLog);
   }, [filteredLogs, inspectedLogId, selectedLog, stateStore]);
+  const commandActionLog = isListFocused && !isDetailModalOpen ? hydrateLog(selectedLog) : inspectedLog;
+  const commandContext = useMemo(() => createCommandContext({
+    activeLog: commandActionLog,
+    composerIsSending: composer.isSending,
+    environment: manualLibrary.environment,
+    isLiveMode,
+    isResending,
+    manualRequestSender
+  }), [
+    commandActionLog,
+    composer.isSending,
+    isLiveMode,
+    isResending,
+    manualLibrary.environment,
+    manualRequestSender
+  ]);
   const rawDetailRows = useMemo(
     () => getDetailRows(inspectedLog, detailTab, {
       collapsedPaths: collapsedDetailPaths,
@@ -525,7 +624,7 @@ export function App({
   const cycleCommandSuggestion = (direction) => {
     setCommandState((current) => ({
       ...current,
-      selectedIndex: getCommandSuggestionIndex(current.input, current.selectedIndex, direction),
+      selectedIndex: getCommandSuggestionIndex(current.input, current.selectedIndex, direction, commandContext),
       status: ''
     }));
   };
@@ -614,13 +713,7 @@ export function App({
   };
 
   const getNextPageUnavailableStatus = (log) => {
-    const pagination = analyzePagination(log);
-
-    if (!pagination.detected) {
-      return 'no pagination detected';
-    }
-
-    return pagination.unavailableReason || 'no next page detected';
+    return getNextPageUnavailableStatusForLog(log);
   };
 
   const openRequestActivity = () => {
@@ -768,7 +861,7 @@ export function App({
   };
 
   const submitCommand = () => {
-    const resolved = resolveCommandInput(commandState.input, commandState.selectedIndex);
+    const resolved = resolveCommandInput(commandState.input, commandState.selectedIndex, commandContext);
 
     if (!resolved.ok) {
       setCommandState((current) => ({
@@ -1776,6 +1869,7 @@ export function App({
       { flexDirection: 'row', flexGrow: 1 },
       commandState.isOpen
         ? h(CommandModal, {
+          commandContext,
           keyBindings,
           input: commandState.input,
           selectedIndex: commandState.selectedIndex,
