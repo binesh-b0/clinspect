@@ -7,6 +7,8 @@ import {
   clampScrollOffset,
   createBlankComposerState,
   createComposerStateFromLog,
+  cycleTrafficDensity,
+  cycleTrafficPathMode,
   cycleValue,
   ensureComposerActiveTabRows,
   extractPortFromHost,
@@ -14,8 +16,11 @@ import {
   filterLogs,
   formatFooterText,
   formatFilterLabel,
+  formatPathForMode,
   formatStructuredPayloadRows,
   formatRecordingLabel,
+  formatTrafficHeader,
+  formatTrafficRow,
   HELP_SECTIONS,
   getBoundaryLogId,
   getComposerFieldDescriptors,
@@ -30,13 +35,16 @@ import {
   getPageStep,
   getRenderHeight,
   getScrollOffsetForFocusedRow,
+  isFrameworkAssetRequest,
   parseDetailSearchQuery,
   getSelectedIndex,
   getSearchValues,
   getTrafficVisibleCount,
   moveSelectedLogId,
+  normalizeTrafficListDisplay,
   resolveSelectedLogId,
   selectComposerTab,
+  toggleTrafficColumn,
   toggleFilterValue
 } from '../src/ui/App.js';
 
@@ -93,6 +101,41 @@ test('navigation helpers resolve page sizes and boundaries', () => {
   assert.equal(getBoundaryLogId(logs, 'first'), 'one');
   assert.equal(getBoundaryLogId(logs, 'last'), 'three');
   assert.equal(getBoundaryLogId([], 'last'), null);
+});
+
+test('traffic list display helpers format path modes and density presets', () => {
+  const log = {
+    method: 'GET',
+    path: '/api/orders/123?include=lineItems',
+    responseTimeMs: 34,
+    statusCode: 200,
+    timestamp: Date.UTC(2026, 5, 30, 10, 15, 20)
+  };
+  const full = normalizeTrafficListDisplay();
+  const compact = normalizeTrafficListDisplay({ density: 'compact' });
+  const pathOnly = normalizeTrafficListDisplay({ density: 'path', pathMode: 'end' });
+  const toggled = toggleTrafficColumn(full, 'time');
+
+  assert.equal(formatPathForMode('/short', 12, 'smart'), '/short');
+  assert.equal(formatPathForMode('/api/orders/123?include=lineItems', 14, 'start').startsWith('/api/orders'), true);
+  assert.equal(formatPathForMode('/api/orders/123?include=lineItems', 14, 'end').endsWith('=lineItems'), true);
+  assert.equal(formatPathForMode('/api/orders/123?include=lineItems', 14, 'smart').includes('...'), true);
+  assert.equal(formatPathForMode('/abcdef', 3, 'smart'), '/ab');
+
+  assert.equal(full.density, 'full');
+  assert.equal(compact.columns.time, false);
+  assert.equal(compact.columns.duration, false);
+  assert.equal(pathOnly.columns.method, false);
+  assert.equal(toggled.density, 'custom');
+  assert.equal(cycleTrafficPathMode(full).pathMode, 'start');
+  assert.equal(cycleTrafficDensity(toggled).density, 'full');
+
+  assert.equal(formatTrafficHeader(pathOnly).trim(), 'path');
+  assert.equal(formatTrafficRow(log, true, full).length, 45);
+  assert.equal(formatTrafficRow(log, false, compact).includes('GET'), true);
+  assert.equal(formatTrafficRow(log, false, compact).includes('34ms'), false);
+  assert.equal(formatTrafficRow(log, false, pathOnly).includes('GET'), false);
+  assert.equal(formatTrafficRow(log, false, pathOnly).includes('200'), false);
 });
 
 test('detail scroll helper clamps page-wise scrolling', () => {
@@ -201,6 +244,18 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
   assert.deepEqual(
     getKeyboardAction('', { escape: true }, { isExportPromptOpen: true }),
     { type: 'cancelExport' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('t'),
+    { type: 'cycleTrafficPathMode', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('v'),
+    { type: 'cycleTrafficDensity', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('L'),
+    { type: 'openListDisplay' }
   );
   assert.deepEqual(
     getKeyboardAction('n', {}, { isListFocused: false }),
@@ -439,6 +494,37 @@ test('keyboard action helper gates help modal and preserves filter query input',
   );
 });
 
+test('keyboard action helper supports list display modal input', () => {
+  assert.deepEqual(
+    getKeyboardAction('j', {}, { isListDisplayOpen: true }),
+    { type: 'moveListDisplayFocus', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('k', {}, { isListDisplayOpen: true }),
+    { type: 'moveListDisplayFocus', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { rightArrow: true }, { isListDisplayOpen: true }),
+    { type: 'cycleListDisplayOption', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { leftArrow: true }, { isListDisplayOpen: true }),
+    { type: 'cycleListDisplayOption', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction(' ', {}, { isListDisplayOpen: true }),
+    { type: 'toggleListDisplayColumn' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('r', {}, { isListDisplayOpen: true }),
+    { type: 'resetListDisplay' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { return: true }, { isListDisplayOpen: true }),
+    { type: 'closeListDisplay' }
+  );
+});
+
 test('keyboard action helper supports detail modal and detail search input', () => {
   assert.deepEqual(
     getKeyboardAction('q', {}, { isDetailModalOpen: true }),
@@ -502,11 +588,33 @@ test('getRenderHeight keeps one terminal row free for Ink updates', () => {
 test('footer text shows mode-aware essential keymaps', () => {
   assert.equal(
     formatFooterText({ isListFocused: true }),
-    'j/k move  [/] page  enter inspect  y copy  D download  n new  R resend  E edit  tab details  P/S rec  h help  q quit'
+    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  R resend  E edit  tab details  P rec  h help  q quit'
   );
   assert.equal(
     formatFooterText({ isListFocused: false }),
-    'j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  R resend  E edit  tab traffic  P/S rec  h help'
+    'j/k scroll  [/] page  r req/res  t path  v density  L display  y copy  D download  / find  n/N match  R resend  E edit  tab traffic  P rec  h help  q quit'
+  );
+  assert.equal(
+    formatFooterText({ isDetailModalOpen: true }),
+    'j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  R resend  E edit  enter collapse  esc/q close'
+  );
+  assert.equal(
+    formatFooterText({ isListFocused: true, isLiveMode: false, isReplayMode: true }),
+    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  tab details  h help  q quit'
+  );
+  assert.equal(
+    formatFooterText({
+      isListFocused: true,
+      recordingStatus: { mode: 'full', path: './capture.ndjson', state: 'recording', error: null }
+    }),
+    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  R resend  E edit  tab details  P pause  S stop  h help  q quit'
+  );
+  assert.equal(
+    formatFooterText({
+      isListFocused: false,
+      recordingStatus: { mode: 'partial', path: './capture.ndjson', state: 'paused', error: null }
+    }),
+    'j/k scroll  [/] page  r req/res  t path  v density  L display  y copy  D download  / find  n/N match  R resend  E edit  tab traffic  P resume  S stop  h help  q quit'
   );
   assert.equal(
     formatFooterText({ isComposerOpen: true }),
@@ -533,12 +641,16 @@ test('footer text shows mode-aware essential keymaps', () => {
     'export  m masked  r raw  esc cancel'
   );
   assert.equal(
+    formatFooterText({ isListDisplayOpen: true }),
+    'list display  j/k select row  left/right change value  space show/hide  r reset  enter/esc close'
+  );
+  assert.equal(
     formatFooterText({ exportStatus: 'copied response body', isListFocused: false }),
-    'j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  R resend  E edit  tab traffic  P/S rec  h help | copied response body'
+    'j/k scroll  [/] page  r req/res  t path  v density  L display  y copy  D download  / find  n/N match  R resend  E edit  tab traffic  P rec  h help  q quit | copied response body'
   );
   assert.equal(
     formatFooterText({ isListFocused: true, resendStatus: 'resent GET /food' }),
-    'j/k move  [/] page  enter inspect  y copy  D download  n new  R resend  E edit  tab details  P/S rec  h help  q quit | resent GET /food'
+    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  R resend  E edit  tab details  P rec  h help  q quit | resent GET /food'
   );
   assert.equal(formatFooterText({ isHelpOpen: true }), 'help | esc/h/q close');
 });
@@ -556,6 +668,14 @@ test('help sections describe copy and download exports', () => {
   assert.deepEqual(exportSection.rows.find(([keys]) => keys === 'y'), ['y', 'copy focused item']);
   assert.deepEqual(exportSection.rows.find(([keys]) => keys === 'D'), ['D', 'download focused item']);
   assert.deepEqual(exportSection.rows.find(([keys]) => keys === 'm / r'), ['m / r', 'masked / raw export']);
+});
+
+test('help sections describe traffic list display controls', () => {
+  const displaySection = HELP_SECTIONS.find((section) => section.title === 'Display');
+
+  assert.deepEqual(displaySection.rows.find(([keys]) => keys === 't'), ['t', 'cycle path mode']);
+  assert.deepEqual(displaySection.rows.find(([keys]) => keys === 'v'), ['v', 'cycle list density']);
+  assert.deepEqual(displaySection.rows.find(([keys]) => keys === 'L'), ['L', 'list display modal']);
 });
 
 test('help sections describe bracket page movement', () => {
@@ -736,6 +856,81 @@ test('filterLogs narrows by method, status family, and search text', () => {
   assert.deepEqual(filterLogs(traffic, { statusFilters: ['2xx', '5xx'] }).map((log) => log.id), ['one', 'two']);
 });
 
+test('filterLogs auto-hides common frontend framework static traffic by default', () => {
+  const traffic = [
+    {
+      id: 'api',
+      method: 'GET',
+      path: '/api/users',
+      statusCode: 200,
+      timestamp: 1700000000000,
+      request: { headers: { host: 'localhost:3000' }, body: '' },
+      response: { headers: { 'content-type': 'application/json' }, body: '{"ok":true}' }
+    },
+    {
+      id: 'next',
+      method: 'GET',
+      path: '/_next/static/chunks/app/layout.js?v=1',
+      statusCode: 200,
+      timestamp: 1700000000000,
+      request: { headers: { host: 'localhost:3000' }, body: '' },
+      response: { headers: { 'content-type': 'application/javascript' }, body: '' }
+    },
+    {
+      id: 'vite',
+      method: 'GET',
+      path: '/@vite/client',
+      statusCode: 200,
+      timestamp: 1700000000000,
+      request: { headers: { host: 'localhost:5173' }, body: '' },
+      response: { headers: { 'content-type': 'text/javascript' }, body: '' }
+    },
+    {
+      id: 'module',
+      method: 'GET',
+      path: '/src/main.tsx?t=1700000000000',
+      statusCode: 200,
+      timestamp: 1700000000000,
+      request: { headers: { host: 'localhost:5173' }, body: '' },
+      response: { headers: {}, body: '' }
+    },
+    {
+      id: 'image',
+      method: 'GET',
+      path: '/asset-proxy?id=logo',
+      statusCode: 200,
+      timestamp: 1700000000000,
+      request: { headers: { host: 'localhost:5173' }, body: '' },
+      response: { headers: { 'content-type': 'image/svg+xml' }, body: '' }
+    },
+    {
+      id: 'post',
+      method: 'POST',
+      path: '/_next/static/upload.js',
+      statusCode: 201,
+      timestamp: 1700000000000,
+      request: { headers: { host: 'localhost:3000' }, body: 'payload' },
+      response: { headers: {}, body: '' }
+    }
+  ];
+
+  assert.equal(isFrameworkAssetRequest(traffic[0]), false);
+  assert.equal(isFrameworkAssetRequest(traffic[1]), true);
+  assert.equal(isFrameworkAssetRequest(traffic[2]), true);
+  assert.equal(isFrameworkAssetRequest(traffic[3]), true);
+  assert.equal(isFrameworkAssetRequest(traffic[4]), true);
+  assert.equal(isFrameworkAssetRequest(traffic[5]), false);
+  assert.deepEqual(filterLogs(traffic).map((log) => log.id), ['api', 'post']);
+  assert.deepEqual(filterLogs(traffic, { hideFrameworkAssets: false }).map((log) => log.id), [
+    'api',
+    'next',
+    'vite',
+    'module',
+    'image',
+    'post'
+  ]);
+});
+
 test('filter value helpers support multi-select and clearing', () => {
   const methods = ['GET', 'POST', 'PATCH'];
 
@@ -755,6 +950,7 @@ test('filter value helpers support multi-select and clearing', () => {
   }), 0);
   assert.equal(formatFilterLabel([], [], 'all', 'id'), 'search "id" in all fields');
   assert.equal(formatFilterLabel(['GET', 'POST'], ['2xx'], 'path', 'users'), 'method GET,POST | status 2xx | search "users" in path');
+  assert.equal(formatFilterLabel([], [], 'all', '', { hideFrameworkAssets: true }), 'static hidden');
   assert.equal(formatFilterLabel([], [], 'all', ''), 'none');
 });
 

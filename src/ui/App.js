@@ -28,6 +28,9 @@ const STATUS_OPTIONS = ['2xx', '3xx', '4xx', '5xx'];
 const DETAIL_TABS = ['request', 'response'];
 const SEARCH_FIELDS = ['all', 'path', 'status', 'method', 'time', 'host', 'port', 'headers', 'body'];
 const FILTER_FOCUS_ORDER = ['query', 'field', 'method', 'status'];
+const TRAFFIC_PATH_MODES = ['smart', 'start', 'end'];
+const TRAFFIC_DENSITY_PRESETS = ['full', 'compact', 'path'];
+const LIST_DISPLAY_FOCUS_ORDER = ['pathMode', 'density', 'time', 'method', 'status', 'duration'];
 const COMPOSER_TABS = ['params', 'headers', 'body', 'auth', 'cookies', 'env', 'save'];
 const COMPOSER_TAB_LABELS = {
   auth: 'Auth',
@@ -44,6 +47,7 @@ const API_KEY_PLACEMENTS = ['header', 'query'];
 const MULTIPART_FIELD_TYPES = ['text', 'file'];
 const ROOT_PADDING_X = 1;
 const TRAFFIC_LIST_WIDTH = 50;
+const TRAFFIC_ROW_WIDTH = 45;
 const BODY_LINE_MAX_LENGTH = 120;
 const DETAIL_SEARCH_BAR_HEIGHT = 5;
 const RESEND_CONFIRM_BAR_HEIGHT = 6;
@@ -55,6 +59,40 @@ const TEXTUAL_CONTENT_TYPE_PATTERNS = [
   /(?:^|[+/.-])typescript$/,
   /(?:^|[+/.-])x-www-form-urlencoded$/,
   /(?:^|[+/.-])graphql$/
+];
+const STATIC_ASSET_EXTENSION_PATTERN = /\.(?:avif|bmp|cjs|css|eot|gif|ico|jpeg|jpg|js|jsx|mjs|mp3|mp4|otf|png|svg|ttf|ts|tsx|vue|wasm|wav|webm|webmanifest|webp|woff2?)$/i;
+const STATIC_ASSET_FILE_PATTERN = /^\/(?:browserconfig\.xml|favicon\.ico|manifest\.json|robots\.txt|site\.webmanifest)$/i;
+const FRAMEWORK_SOURCE_MODULE_PATTERN = /^\/(?:app|components|node_modules|pages|src)\/.*\.(?:[cm]?[jt]sx?|css|svelte|vue)$/i;
+const FRAMEWORK_STATIC_PATH_PATTERNS = [
+  /^\/_next(?:\/|$)/i,
+  /^\/__nextjs(?:_|\/|$)/i,
+  /^\/_nuxt(?:\/|$)/i,
+  /^\/__nuxt(?:\/|$)/i,
+  /^\/_astro(?:\/|$)/i,
+  /^\/_app\/immutable(?:\/|$)/i,
+  /^\/@vite(?:\/|$)/i,
+  /^\/@react-refresh(?:\/|$)/i,
+  /^\/@id(?:\/|$)/i,
+  /^\/@fs(?:\/|$)/i,
+  /^\/__vite(?:_|\/|$)/i,
+  /^\/__webpack(?:_|\/|$)/i,
+  /^\/webpack-dev-server(?:\/|$)/i,
+  /^\/sockjs-node(?:\/|$)/i,
+  /^\/build\/(?:_assets|assets|_shared|routes)(?:\/|$)/i,
+  /^\/page-data(?:\/|$)/i,
+  /^\/___gatsby(?:\/|$)/i
+];
+const STATIC_ASSET_CONTENT_TYPE_PATTERNS = [
+  /^image\//,
+  /^font\//,
+  /^audio\//,
+  /^video\//,
+  /^text\/css$/,
+  /^(?:application|text)\/(?:x-)?javascript$/,
+  /^application\/wasm$/,
+  /^application\/font-woff2?$/,
+  /^application\/vnd\.ms-fontobject$/,
+  /^application\/manifest\+json$/
 ];
 const OFF_RECORDING_STATUS = {
   mode: 'off',
@@ -69,6 +107,40 @@ const METHOD_COLORS = {
   PUT: 'yellow',
   PATCH: 'magenta',
   DELETE: 'red'
+};
+
+const TRAFFIC_COLUMN_WIDTHS = {
+  duration: 6,
+  method: 6,
+  status: 3,
+  time: 8
+};
+
+export const DEFAULT_TRAFFIC_LIST_DISPLAY = {
+  columns: {
+    duration: true,
+    method: true,
+    status: true,
+    time: true
+  },
+  density: 'full',
+  pathMode: 'smart'
+};
+
+const TRAFFIC_DENSITY_COLUMNS = {
+  compact: {
+    duration: false,
+    method: true,
+    status: true,
+    time: false
+  },
+  full: DEFAULT_TRAFFIC_LIST_DISPLAY.columns,
+  path: {
+    duration: false,
+    method: false,
+    status: false,
+    time: false
+  }
 };
 
 function getTerminalRows(terminalRows = process.stdout.rows) {
@@ -140,14 +212,201 @@ function rowColor(log) {
   return METHOD_COLORS[log.method] ?? 'white';
 }
 
-function formatTrafficRow(log, selected = false) {
-  const marker = selected ? '>' : ' ';
-  const method = pad(log.method, 6);
-  const status = String(log.statusCode ?? '---').padEnd(3);
-  const path = pad(truncate(log.path, 15), 15);
-  const duration = padLeft(`${log.responseTimeMs}ms`, 6);
+function normalizeTrafficColumns(columns = {}) {
+  return {
+    duration: columns.duration !== false,
+    method: columns.method !== false,
+    status: columns.status !== false,
+    time: columns.time !== false
+  };
+}
 
-  return `${marker} ${formatTime(log.timestamp)} ${method} ${status} ${path} ${duration}`;
+function columnsEqual(left = {}, right = {}) {
+  const normalizedLeft = normalizeTrafficColumns(left);
+  const normalizedRight = normalizeTrafficColumns(right);
+
+  return ['duration', 'method', 'status', 'time'].every((column) => (
+    normalizedLeft[column] === normalizedRight[column]
+  ));
+}
+
+function getTrafficDensityForColumns(columns = {}) {
+  const normalizedColumns = normalizeTrafficColumns(columns);
+  const preset = TRAFFIC_DENSITY_PRESETS.find((density) => (
+    columnsEqual(normalizedColumns, TRAFFIC_DENSITY_COLUMNS[density])
+  ));
+
+  return preset ?? 'custom';
+}
+
+export function normalizeTrafficListDisplay(display = {}) {
+  const density = TRAFFIC_DENSITY_PRESETS.includes(display.density)
+    ? display.density
+    : (display.density === 'custom' ? 'custom' : DEFAULT_TRAFFIC_LIST_DISPLAY.density);
+  const pathMode = TRAFFIC_PATH_MODES.includes(display.pathMode)
+    ? display.pathMode
+    : DEFAULT_TRAFFIC_LIST_DISPLAY.pathMode;
+  const columns = display.columns
+    ? normalizeTrafficColumns(display.columns)
+    : { ...TRAFFIC_DENSITY_COLUMNS[density === 'custom' ? DEFAULT_TRAFFIC_LIST_DISPLAY.density : density] };
+
+  return {
+    columns,
+    density: getTrafficDensityForColumns(columns),
+    pathMode
+  };
+}
+
+export function applyTrafficDensity(display = {}, density = DEFAULT_TRAFFIC_LIST_DISPLAY.density) {
+  const nextDensity = TRAFFIC_DENSITY_PRESETS.includes(density)
+    ? density
+    : DEFAULT_TRAFFIC_LIST_DISPLAY.density;
+
+  return normalizeTrafficListDisplay({
+    ...display,
+    columns: { ...TRAFFIC_DENSITY_COLUMNS[nextDensity] },
+    density: nextDensity
+  });
+}
+
+export function cycleTrafficPathMode(display = {}, direction = 1) {
+  const normalized = normalizeTrafficListDisplay(display);
+
+  return {
+    ...normalized,
+    pathMode: cycleValue(TRAFFIC_PATH_MODES, normalized.pathMode, direction)
+  };
+}
+
+export function cycleTrafficDensity(display = {}, direction = 1) {
+  const normalized = normalizeTrafficListDisplay(display);
+  const currentIndex = TRAFFIC_DENSITY_PRESETS.includes(normalized.density)
+    ? TRAFFIC_DENSITY_PRESETS.indexOf(normalized.density)
+    : -1;
+  const nextIndex = currentIndex === -1
+    ? 0
+    : (currentIndex + direction + TRAFFIC_DENSITY_PRESETS.length) % TRAFFIC_DENSITY_PRESETS.length;
+
+  return applyTrafficDensity(normalized, TRAFFIC_DENSITY_PRESETS[nextIndex]);
+}
+
+export function toggleTrafficColumn(display = {}, column) {
+  if (!Object.prototype.hasOwnProperty.call(TRAFFIC_COLUMN_WIDTHS, column)) {
+    return normalizeTrafficListDisplay(display);
+  }
+
+  const normalized = normalizeTrafficListDisplay(display);
+  const columns = {
+    ...normalized.columns,
+    [column]: !normalized.columns[column]
+  };
+
+  return normalizeTrafficListDisplay({
+    ...normalized,
+    columns
+  });
+}
+
+export function formatPathForMode(value, maxLength, mode = 'smart') {
+  const text = String(value ?? '');
+  const width = Math.max(0, Math.floor(Number(maxLength) || 0));
+
+  if (text.length <= width) {
+    return text;
+  }
+
+  if (width <= 0) {
+    return '';
+  }
+
+  if (width <= 3) {
+    return text.slice(0, width);
+  }
+
+  if (mode === 'end') {
+    return `...${text.slice(-(width - 3))}`;
+  }
+
+  if (mode === 'start') {
+    return `${text.slice(0, width - 3)}...`;
+  }
+
+  const available = width - 3;
+  const startLength = Math.ceil(available / 2);
+  const endLength = Math.floor(available / 2);
+
+  return `${text.slice(0, startLength)}...${text.slice(-endLength)}`;
+}
+
+function getTrafficPathWidth(display = {}) {
+  const { columns } = normalizeTrafficListDisplay(display);
+  const nonPathWidth = 1 +
+    (columns.time ? TRAFFIC_COLUMN_WIDTHS.time : 0) +
+    (columns.method ? TRAFFIC_COLUMN_WIDTHS.method : 0) +
+    (columns.status ? TRAFFIC_COLUMN_WIDTHS.status : 0) +
+    (columns.duration ? TRAFFIC_COLUMN_WIDTHS.duration : 0);
+  const tokenCount = 2 +
+    (columns.time ? 1 : 0) +
+    (columns.method ? 1 : 0) +
+    (columns.status ? 1 : 0) +
+    (columns.duration ? 1 : 0);
+  const spaces = Math.max(0, tokenCount - 1);
+
+  return Math.max(4, TRAFFIC_ROW_WIDTH - nonPathWidth - spaces);
+}
+
+export function formatTrafficHeader(display = {}) {
+  const normalized = normalizeTrafficListDisplay(display);
+  const { columns } = normalized;
+  const pathWidth = getTrafficPathWidth(normalized);
+  const tokens = [' '];
+
+  if (columns.time) {
+    tokens.push(pad('time', TRAFFIC_COLUMN_WIDTHS.time));
+  }
+
+  if (columns.method) {
+    tokens.push(pad('meth', TRAFFIC_COLUMN_WIDTHS.method));
+  }
+
+  if (columns.status) {
+    tokens.push(pad('st', TRAFFIC_COLUMN_WIDTHS.status));
+  }
+
+  tokens.push(pad('path', pathWidth));
+
+  if (columns.duration) {
+    tokens.push(pad('dur', TRAFFIC_COLUMN_WIDTHS.duration));
+  }
+
+  return tokens.join(' ');
+}
+
+export function formatTrafficRow(log, selected = false, display = {}) {
+  const normalized = normalizeTrafficListDisplay(display);
+  const { columns } = normalized;
+  const pathWidth = getTrafficPathWidth(normalized);
+  const tokens = [selected ? '>' : ' '];
+
+  if (columns.time) {
+    tokens.push(formatTime(log.timestamp));
+  }
+
+  if (columns.method) {
+    tokens.push(pad(log.method, TRAFFIC_COLUMN_WIDTHS.method));
+  }
+
+  if (columns.status) {
+    tokens.push(String(log.statusCode ?? '---').padEnd(TRAFFIC_COLUMN_WIDTHS.status));
+  }
+
+  tokens.push(pad(formatPathForMode(log.path, pathWidth, normalized.pathMode), pathWidth));
+
+  if (columns.duration) {
+    tokens.push(padLeft(`${log.responseTimeMs}ms`, TRAFFIC_COLUMN_WIDTHS.duration));
+  }
+
+  return tokens.join(' ');
 }
 
 function getRecordingStatus(trafficRecorder) {
@@ -218,6 +477,45 @@ function getContentType(headers = {}) {
     .split(';')[0]
     .trim()
     .toLowerCase();
+}
+
+function getLogPathname(log = {}) {
+  const path = String(log.path ?? '');
+
+  try {
+    return new URL(path, 'http://clinspect.local').pathname;
+  } catch {
+    return path.split(/[?#]/)[0];
+  }
+}
+
+function isStaticAssetContentType(contentType = '') {
+  return STATIC_ASSET_CONTENT_TYPE_PATTERNS.some((pattern) => pattern.test(contentType));
+}
+
+export function isFrameworkAssetRequest(log = {}) {
+  const method = String(log.method ?? 'GET').toUpperCase();
+
+  if (method !== 'GET' && method !== 'HEAD') {
+    return false;
+  }
+
+  const pathname = getLogPathname(log);
+
+  if (!pathname) {
+    return false;
+  }
+
+  if (
+    STATIC_ASSET_FILE_PATTERN.test(pathname) ||
+    STATIC_ASSET_EXTENSION_PATTERN.test(pathname) ||
+    FRAMEWORK_SOURCE_MODULE_PATTERN.test(pathname) ||
+    FRAMEWORK_STATIC_PATH_PATTERNS.some((pattern) => pattern.test(pathname))
+  ) {
+    return true;
+  }
+
+  return isStaticAssetContentType(getContentType(log.response?.headers ?? {}));
 }
 
 function hasEncodedBody(headers = {}) {
@@ -1278,9 +1576,11 @@ export function filterLogs(logs, options = {}) {
   const searchQuery = options.searchQuery ?? '';
   const searchField = options.searchField ?? 'all';
   const showCookieValues = Boolean(options.showCookieValues);
+  const hideFrameworkAssets = options.hideFrameworkAssets !== false;
 
   return logs.filter((log) => {
-    return matchesMethodFilters(log, methodFilters) &&
+    return (!hideFrameworkAssets || !isFrameworkAssetRequest(log)) &&
+      matchesMethodFilters(log, methodFilters) &&
       matchesStatusFilters(log, statusFilters) &&
       matchesSearch(log, searchQuery, searchField, { showCookieValues });
   });
@@ -1543,7 +1843,7 @@ const Header = React.memo(function Header({
   );
 });
 
-export function formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery) {
+export function formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery, options = {}) {
   const parts = [];
 
   if (methodFilters.length > 0) {
@@ -1558,6 +1858,10 @@ export function formatFilterLabel(methodFilters, statusFilters, searchField, sea
     parts.push(`search "${truncate(searchQuery, 16)}" in ${formatSearchFieldLabel(searchField)}`);
   }
 
+  if (options.hideFrameworkAssets) {
+    parts.push('static hidden');
+  }
+
   return parts.length > 0 ? parts.join(' | ') : 'none';
 }
 
@@ -1569,18 +1873,24 @@ const TrafficList = React.memo(function TrafficList({
   selectedIndex,
   isFocused,
   isFollowingLatest,
+  hideFrameworkAssets,
+  listDisplay,
   methodFilters,
   statusFilters,
   searchField,
   searchQuery
 }) {
+  const normalizedDisplay = normalizeTrafficListDisplay(listDisplay);
   const visibleCount = getTrafficVisibleCount(bottomOffset);
   const startIndex = Math.max(0, Math.min(
     selectedIndex - Math.floor(visibleCount / 2),
     Math.max(0, logs.length - visibleCount)
   ));
   const visibleLogs = logs.slice(startIndex, startIndex + visibleCount);
-  const filterLabel = formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery);
+  const filterLabel = formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery, {
+    hideFrameworkAssets
+  });
+  const displayLabel = `${normalizedDisplay.density}/${normalizedDisplay.pathMode}`;
   const noRowsText = totalCount === 0 ? emptyText : 'No matching traffic';
 
   return h(
@@ -1595,14 +1905,14 @@ const TrafficList = React.memo(function TrafficList({
       marginRight: 1
     },
     h(Text, { bold: true }, `Traffic ${isFocused ? 'focused' : 'idle'} | ${isFollowingLatest ? 'follow' : 'hold'}`),
-    h(Text, { color: 'gray', wrap: 'truncate' }, `filters ${filterLabel}`),
-    h(Text, { color: 'gray' }, '  time     meth   st  path            dur'),
+    h(Text, { color: 'gray', wrap: 'truncate' }, `filters ${filterLabel} | view ${displayLabel}`),
+    h(Text, { color: 'gray' }, formatTrafficHeader(normalizedDisplay)),
     logs.length === 0
       ? h(Text, { color: 'gray', wrap: 'truncate' }, noRowsText)
       : visibleLogs.map((log, offset) => {
         const absoluteIndex = startIndex + offset;
         const selected = absoluteIndex === selectedIndex;
-        const row = formatTrafficRow(log, selected);
+        const row = formatTrafficRow(log, selected, normalizedDisplay);
 
         return h(
           Text,
@@ -2727,6 +3037,14 @@ export const HELP_SECTIONS = [
     ]
   },
   {
+    title: 'Display',
+    rows: [
+      ['t', 'cycle path mode'],
+      ['v', 'cycle list density'],
+      ['L', 'list display modal']
+    ]
+  },
+  {
     title: 'Capture',
     rows: [
       ['p', 'pause capture'],
@@ -2811,8 +3129,117 @@ const HelpModal = React.memo(function HelpModal() {
   );
 });
 
+function formatBooleanOption(value) {
+  return value ? '[x]' : '[ ]';
+}
+
+function formatListDisplayValue(display, key) {
+  const normalized = normalizeTrafficListDisplay(display);
+
+  if (key === 'pathMode') {
+    return normalized.pathMode;
+  }
+
+  if (key === 'density') {
+    return normalized.density;
+  }
+
+  return formatBooleanOption(normalized.columns[key]);
+}
+
+function getListDisplayLabel(key) {
+  if (key === 'pathMode') {
+    return 'path mode';
+  }
+
+  if (key === 'density') {
+    return 'density';
+  }
+
+  return `show ${key}`;
+}
+
+const ListDisplayModal = React.memo(function ListDisplayModal({
+  focusIndex = 0,
+  listDisplay
+}) {
+  const columns = Number.isFinite(process.stdout.columns) && process.stdout.columns > 0
+    ? process.stdout.columns
+    : 80;
+  const width = Math.max(40, Math.min(72, columns - 4));
+  const normalized = normalizeTrafficListDisplay(listDisplay);
+  const safeFocusIndex = Math.max(0, Math.min(LIST_DISPLAY_FOCUS_ORDER.length - 1, focusIndex));
+
+  return h(
+    Box,
+    {
+      flexGrow: 1,
+      justifyContent: 'center',
+      alignItems: 'center'
+    },
+    h(
+      Box,
+      {
+        flexDirection: 'column',
+        borderStyle: 'single',
+        borderColor: 'cyan',
+        paddingX: 2,
+        paddingY: 1,
+        width
+      },
+      h(Text, { bold: true, color: 'cyan' }, 'List display'),
+      h(Text, { color: 'gray' }, 'Traffic row layout'),
+      h(Text, { color: 'gray' }, 'Select a row, then use the action shown on the right.'),
+      h(Text, {}, ''),
+      ...LIST_DISPLAY_FOCUS_ORDER.map((key, index) => {
+        const selected = index === safeFocusIndex;
+        const value = formatListDisplayValue(normalized, key);
+        const label = getListDisplayLabel(key);
+        const hint = key === 'pathMode' || key === 'density'
+          ? 'change with left/right arrows'
+          : 'show/hide with space';
+        const text = `${selected ? '>' : ' '} ${pad(label, 14)} ${pad(value, 8)} ${hint}`;
+
+        return h(Text, {
+          key,
+          backgroundColor: selected ? 'cyan' : undefined,
+          color: selected ? 'black' : undefined,
+          wrap: 'truncate'
+        }, text);
+      }),
+      h(Text, {}, ''),
+      h(Text, { color: 'gray' }, 'j/k select row  r reset  enter/esc close')
+    )
+  );
+});
+
+function joinFooterParts(parts) {
+  return parts.filter(Boolean).join('  ');
+}
+
+function getRecordingFooterParts(recordingStatus = OFF_RECORDING_STATUS, isReplayMode = false) {
+  if (isReplayMode) {
+    return [];
+  }
+
+  if (recordingStatus.mode === 'off' || recordingStatus.state === 'off') {
+    return ['P rec'];
+  }
+
+  if (recordingStatus.state === 'paused') {
+    return ['P resume', 'S stop'];
+  }
+
+  if (recordingStatus.state === 'error') {
+    return ['S stop'];
+  }
+
+  return ['P pause', 'S stop'];
+}
+
 export function formatFooterText({
   exportStatus = '',
+  isListDisplayOpen = false,
   resendStatus = '',
   isComposerConfirmOpen = false,
   isComposerOpen = false,
@@ -2821,8 +3248,11 @@ export function formatFooterText({
   isDetailSearchActive = false,
   isExportPromptOpen = false,
   isHelpOpen = false,
+  isLiveMode = true,
   isListFocused = true,
-  isRawModeSupported = true
+  isRawModeSupported = true,
+  isReplayMode = false,
+  recordingStatus = OFF_RECORDING_STATUS
 } = {}) {
   const withStatus = (value) => {
     const status = [exportStatus, resendStatus]
@@ -2832,6 +3262,9 @@ export function formatFooterText({
 
     return status ? `${value} | ${status}` : value;
   };
+  const liveDetailActions = isLiveMode ? ['R resend', 'E edit'] : [];
+  const liveListActions = isLiveMode ? ['n new', ...liveDetailActions] : [];
+  const recordingActions = getRecordingFooterParts(recordingStatus, isReplayMode);
 
   if (!isRawModeSupported) {
     return 'keyboard input unavailable in this shell | Ctrl-C or SIGTERM quit';
@@ -2839,6 +3272,10 @@ export function formatFooterText({
 
   if (isExportPromptOpen) {
     return 'export  m masked  r raw  esc cancel';
+  }
+
+  if (isListDisplayOpen) {
+    return 'list display  j/k select row  left/right change value  space show/hide  r reset  enter/esc close';
   }
 
   if (isHelpOpen) {
@@ -2857,19 +3294,83 @@ export function formatFooterText({
 
   if (isDetailSearchActive && !isListFocused) {
     return isDetailModalOpen
-      ? withStatus('detail search active  / edit  n/N match  R resend  E edit  j/k scroll  enter collapse  esc/q close')
-      : withStatus('detail search active  / edit  n/N match  R resend  E edit  j/k scroll  enter collapse  o big  tab traffic  q quit');
+      ? withStatus(joinFooterParts([
+        'detail search active',
+        '/ edit',
+        'n/N match',
+        ...liveDetailActions,
+        'j/k scroll',
+        'enter collapse',
+        'esc/q close'
+      ]))
+      : withStatus(joinFooterParts([
+        'detail search active',
+        '/ edit',
+        'n/N match',
+        ...liveDetailActions,
+        'j/k scroll',
+        'enter collapse',
+        'o big',
+        'tab traffic',
+        'q quit'
+      ]));
+  }
+
+  if (isDetailModalOpen) {
+    return withStatus(joinFooterParts([
+      'j/k scroll',
+      '[/] page',
+      'r req/res',
+      'y copy',
+      'D download',
+      '/ find',
+      'n/N match',
+      ...liveDetailActions,
+      'enter collapse',
+      'esc/q close'
+    ]));
   }
 
   if (isListFocused) {
-    return withStatus('j/k move  [/] page  enter inspect  y copy  D download  n new  R resend  E edit  tab details  P/S rec  h help  q quit');
+    return withStatus(joinFooterParts([
+      'j/k move',
+      '[/] page',
+      'enter inspect',
+      't path',
+      'v density',
+      'L display',
+      'y copy',
+      'D download',
+      ...liveListActions,
+      'tab details',
+      ...recordingActions,
+      'h help',
+      'q quit'
+    ]));
   }
 
-  return withStatus('j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  R resend  E edit  tab traffic  P/S rec  h help');
+  return withStatus(joinFooterParts([
+    'j/k scroll',
+    '[/] page',
+    'r req/res',
+    't path',
+    'v density',
+    'L display',
+    'y copy',
+    'D download',
+    '/ find',
+    'n/N match',
+    ...liveDetailActions,
+    'tab traffic',
+    ...recordingActions,
+    'h help',
+    'q quit'
+  ]));
 }
 
 const Footer = React.memo(function Footer({
   exportStatus,
+  isListDisplayOpen,
   resendStatus,
   isComposerConfirmOpen,
   isComposerOpen,
@@ -2878,8 +3379,11 @@ const Footer = React.memo(function Footer({
   isDetailSearchActive,
   isExportPromptOpen,
   isHelpOpen,
+  isLiveMode,
   isListFocused,
-  isRawModeSupported
+  isRawModeSupported,
+  isReplayMode,
+  recordingStatus
 }) {
   return h(
     Box,
@@ -2889,6 +3393,7 @@ const Footer = React.memo(function Footer({
       { color: 'gray', wrap: 'truncate' },
       formatFooterText({
         exportStatus,
+        isListDisplayOpen,
         resendStatus,
         isComposerConfirmOpen,
         isComposerOpen,
@@ -2897,8 +3402,11 @@ const Footer = React.memo(function Footer({
         isDetailSearchActive,
         isExportPromptOpen,
         isHelpOpen,
+        isLiveMode,
         isListFocused,
-        isRawModeSupported
+        isRawModeSupported,
+        isReplayMode,
+        recordingStatus
       })
     )
   );
@@ -3009,6 +3517,7 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     filterFocus = 'query',
     isListFocused = true,
     isHelpOpen = false,
+    isListDisplayOpen = false,
     isFilterOpen = false,
     isDetailSearchOpen = false,
     isDetailModalOpen = false,
@@ -3052,6 +3561,38 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   if (isHelpOpen) {
     if (keyState.escape || value === 'h' || value === 'q') {
       return { type: 'closeHelp' };
+    }
+
+    return { type: 'none' };
+  }
+
+  if (isListDisplayOpen) {
+    if (keyState.escape || keyState.return) {
+      return { type: 'closeListDisplay' };
+    }
+
+    if (keyState.upArrow || value === 'k') {
+      return { type: 'moveListDisplayFocus', direction: -1 };
+    }
+
+    if (keyState.downArrow || value === 'j') {
+      return { type: 'moveListDisplayFocus', direction: 1 };
+    }
+
+    if (keyState.leftArrow) {
+      return { type: 'cycleListDisplayOption', direction: -1 };
+    }
+
+    if (keyState.rightArrow) {
+      return { type: 'cycleListDisplayOption', direction: 1 };
+    }
+
+    if (value === ' ') {
+      return { type: 'toggleListDisplayColumn' };
+    }
+
+    if (value === 'r') {
+      return { type: 'resetListDisplay' };
     }
 
     return { type: 'none' };
@@ -3383,6 +3924,18 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     return { type: 'openHelp' };
   }
 
+  if (value === 'L') {
+    return { type: 'openListDisplay' };
+  }
+
+  if (value === 't') {
+    return { type: 'cycleTrafficPathMode', direction: 1 };
+  }
+
+  if (value === 'v') {
+    return { type: 'cycleTrafficDensity', direction: 1 };
+  }
+
   if (value === 'y') {
     return { type: 'startExport', action: 'copy' };
   }
@@ -3528,6 +4081,7 @@ function KeyboardControls({
   filterFocus,
   isListFocused,
   isHelpOpen,
+  isListDisplayOpen,
   isFilterOpen,
   isDetailSearchOpen,
   isDetailModalOpen,
@@ -3560,11 +4114,15 @@ function KeyboardControls({
   onCloseDetailModal,
   onCloseComposer,
   onCloseHelp,
+  onCloseListDisplay,
   onCycleComposerFocus,
   onCycleComposerTab,
   onDeleteComposerRow,
   onDeleteComposerText,
   onCycleFilterFocus,
+  onCycleListDisplayOption,
+  onCycleTrafficDensity,
+  onCycleTrafficPathMode,
   onFinishExport,
   onFinishDetailSearch,
   onFinishSearch,
@@ -3577,6 +4135,7 @@ function KeyboardControls({
   onMoveSelectionTo,
   onMoveFilterOption,
   onMoveSelection,
+  onMoveListDisplayFocus,
   onMoveComposerCursor,
   onMoveComposerCursorTo,
   onMoveComposerHorizontal,
@@ -3588,8 +4147,10 @@ function KeyboardControls({
   onOpenComposerLibrary,
   onOpenFilter,
   onOpenHelp,
+  onOpenListDisplay,
   onPreviewComposerSend,
   onQuit,
+  onResetListDisplay,
   onSaveComposerRequest,
   onScrollDetails,
   onScrollDetailsTo,
@@ -3603,6 +4164,7 @@ function KeyboardControls({
   onToggleComposerReveal,
   onToggleDetailNode,
   onToggleFilterOption,
+  onToggleListDisplayColumn,
   onToggleDetailTab,
   onToggleFocus,
   onTogglePause,
@@ -3613,6 +4175,7 @@ function KeyboardControls({
       filterFocus,
       isListFocused,
       isHelpOpen,
+      isListDisplayOpen,
       isFilterOpen,
       isDetailSearchOpen,
       isDetailModalOpen,
@@ -3680,11 +4243,23 @@ function KeyboardControls({
       case 'closeHelp':
         onCloseHelp();
         break;
+      case 'closeListDisplay':
+        onCloseListDisplay();
+        break;
       case 'cycleComposerFocus':
         onCycleComposerFocus(action.direction);
         break;
       case 'cycleComposerTab':
         onCycleComposerTab(action.direction);
+        break;
+      case 'cycleListDisplayOption':
+        onCycleListDisplayOption(action.direction);
+        break;
+      case 'cycleTrafficDensity':
+        onCycleTrafficDensity(action.direction);
+        break;
+      case 'cycleTrafficPathMode':
+        onCycleTrafficPathMode(action.direction);
         break;
       case 'deleteComposerRow':
         onDeleteComposerRow();
@@ -3728,6 +4303,9 @@ function KeyboardControls({
       case 'moveSelection':
         onMoveSelection(action.direction);
         break;
+      case 'moveListDisplayFocus':
+        onMoveListDisplayFocus(action.direction);
+        break;
       case 'moveComposerCursor':
         onMoveComposerCursor(action.direction);
         break;
@@ -3764,6 +4342,9 @@ function KeyboardControls({
       case 'openHelp':
         onOpenHelp();
         break;
+      case 'openListDisplay':
+        onOpenListDisplay();
+        break;
       case 'previewComposerSend':
         onPreviewComposerSend();
         break;
@@ -3772,6 +4353,9 @@ function KeyboardControls({
         break;
       case 'saveComposerRequest':
         onSaveComposerRequest();
+        break;
+      case 'resetListDisplay':
+        onResetListDisplay();
         break;
       case 'scrollDetails':
         onScrollDetails(action.direction);
@@ -3811,6 +4395,9 @@ function KeyboardControls({
         break;
       case 'toggleFilterOption':
         onToggleFilterOption();
+        break;
+      case 'toggleListDisplayColumn':
+        onToggleListDisplayColumn();
         break;
       case 'toggleFocus':
         onToggleFocus();
@@ -4073,6 +4660,9 @@ export function App({
   const [detailMatchIndex, setDetailMatchIndex] = useState(0);
   const [collapsedDetailPaths, setCollapsedDetailPaths] = useState([]);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [isListDisplayOpen, setIsListDisplayOpen] = useState(false);
+  const [listDisplayFocusIndex, setListDisplayFocusIndex] = useState(0);
+  const [trafficListDisplay, setTrafficListDisplay] = useState(() => normalizeTrafficListDisplay(DEFAULT_TRAFFIC_LIST_DISPLAY));
   const [pendingExport, setPendingExport] = useState(null);
   const [exportStatus, setExportStatus] = useState('');
   const [pendingResend, setPendingResend] = useState(null);
@@ -4092,17 +4682,19 @@ export function App({
   }));
   const isReplayMode = context.mode === 'replay';
   const isLiveMode = context.mode === 'live';
+  const hideFrameworkAssets = context.hideFrameworkAssets !== false;
   const showCookieValues = Boolean(context.showCookieValues);
   const proxyOrigin = getProxyOrigin(context.port ?? 8080);
   const publicTargetUrl = context.mode === 'live' ? context.targetUrl : null;
 
   const filteredLogs = useMemo(() => filterLogs(logs, {
+    hideFrameworkAssets,
     methodFilters,
     searchField,
     searchQuery,
     showCookieValues,
     statusFilters
-  }), [logs, methodFilters, searchField, searchQuery, showCookieValues, statusFilters]);
+  }), [hideFrameworkAssets, logs, methodFilters, searchField, searchQuery, showCookieValues, statusFilters]);
 
   useEffect(() => {
     const handleUpdate = (updatedLogs) => setLogs(updatedLogs);
@@ -4253,6 +4845,44 @@ export function App({
     });
   };
 
+  const moveListDisplayFocus = (direction) => {
+    setListDisplayFocusIndex((current) => (
+      (current + direction + LIST_DISPLAY_FOCUS_ORDER.length) % LIST_DISPLAY_FOCUS_ORDER.length
+    ));
+  };
+
+  const cycleFocusedListDisplayOption = (direction) => {
+    const focusKey = LIST_DISPLAY_FOCUS_ORDER[listDisplayFocusIndex];
+
+    if (focusKey === 'pathMode') {
+      setTrafficListDisplay((current) => cycleTrafficPathMode(current, direction));
+    }
+
+    if (focusKey === 'density') {
+      setTrafficListDisplay((current) => cycleTrafficDensity(current, direction));
+    }
+  };
+
+  const toggleFocusedListDisplayColumn = () => {
+    const focusKey = LIST_DISPLAY_FOCUS_ORDER[listDisplayFocusIndex];
+
+    if (focusKey === 'pathMode' || focusKey === 'density') {
+      return;
+    }
+
+    setTrafficListDisplay((current) => toggleTrafficColumn(current, focusKey));
+  };
+
+  const openListDisplay = () => {
+    setIsListDisplayOpen(true);
+    setIsFilterOpen(false);
+    setIsDetailSearchOpen(false);
+    setIsDetailModalOpen(false);
+    setIsHelpOpen(false);
+    setPendingExport(null);
+    setPendingResend(null);
+  };
+
   const getExportLog = () => {
     return isListFocused && !isDetailModalOpen ? selectedLog : inspectedLog;
   };
@@ -4309,6 +4939,7 @@ export function App({
     setIsFilterOpen(false);
     setIsDetailSearchOpen(false);
     setIsHelpOpen(false);
+    setIsListDisplayOpen(false);
   };
 
   const formatSavedExportPath = (filePath) => {
@@ -4390,6 +5021,7 @@ export function App({
     setIsDetailSearchOpen(false);
     setIsDetailModalOpen(false);
     setIsHelpOpen(false);
+    setIsListDisplayOpen(false);
   };
 
   const openComposerLibrary = () => {
@@ -4410,6 +5042,7 @@ export function App({
     setIsDetailSearchOpen(false);
     setIsDetailModalOpen(false);
     setIsHelpOpen(false);
+    setIsListDisplayOpen(false);
   };
 
   const sendResendPlan = (plan) => {
@@ -4486,6 +5119,7 @@ export function App({
       setIsFilterOpen(false);
       setIsDetailSearchOpen(false);
       setIsHelpOpen(false);
+      setIsListDisplayOpen(false);
       return;
     }
 
@@ -4493,6 +5127,7 @@ export function App({
     setIsFilterOpen(false);
     setIsDetailSearchOpen(false);
     setIsHelpOpen(false);
+    setIsListDisplayOpen(false);
     sendResendPlan(plan);
   };
 
@@ -4520,6 +5155,7 @@ export function App({
     setIsDetailSearchOpen(false);
     setIsDetailModalOpen(false);
     setIsHelpOpen(false);
+    setIsListDisplayOpen(false);
   };
 
   const cancelResend = () => {
@@ -4648,6 +5284,7 @@ export function App({
         filterFocus,
         isListFocused,
         isHelpOpen,
+        isListDisplayOpen,
         isFilterOpen,
         isDetailSearchOpen,
         isDetailModalOpen,
@@ -4723,8 +5360,12 @@ export function App({
           }));
         },
         onCloseHelp: () => setIsHelpOpen(false),
+        onCloseListDisplay: () => setIsListDisplayOpen(false),
         onCycleComposerFocus: (direction) => setComposer((current) => moveComposerFocus(current, direction)),
         onCycleComposerTab: (direction) => setComposer((current) => cycleComposerTab(current, direction)),
+        onCycleListDisplayOption: cycleFocusedListDisplayOption,
+        onCycleTrafficDensity: (direction) => setTrafficListDisplay((current) => cycleTrafficDensity(current, direction)),
+        onCycleTrafficPathMode: (direction) => setTrafficListDisplay((current) => cycleTrafficPathMode(current, direction)),
         onDeleteComposerRow: () => setComposer(deleteComposerRow),
         onDeleteComposerText: () => setComposer(deleteComposerText),
         onCycleFilterFocus: (direction) => {
@@ -4754,6 +5395,7 @@ export function App({
 
           setIsFollowingLatest(false);
         },
+        onMoveListDisplayFocus: moveListDisplayFocus,
         onMoveComposerCursor: (direction) => setComposer((current) => moveComposerCursor(current, direction)),
         onMoveComposerCursorTo: (boundary) => setComposer((current) => moveComposerCursorTo(current, boundary)),
         onMoveComposerHorizontal: (direction) => setComposer((current) => cycleFocusedComposerOption(current, direction)),
@@ -4781,6 +5423,7 @@ export function App({
           setFilterFocus(focus);
           setIsFilterOpen(true);
           setIsDetailSearchOpen(false);
+          setIsListDisplayOpen(false);
           setIsFollowingLatest(false);
         },
         onOpenDetailModal: () => {
@@ -4788,11 +5431,13 @@ export function App({
             setIsDetailModalOpen(true);
             setIsListFocused(false);
             setIsFilterOpen(false);
+            setIsListDisplayOpen(false);
           }
         },
         onOpenDetailSearch: () => {
           setIsDetailSearchOpen(true);
           setIsFilterOpen(false);
+          setIsListDisplayOpen(false);
           setIsListFocused(false);
         },
         onOpenComposer: openComposer,
@@ -4813,6 +5458,7 @@ export function App({
         },
         onOpenComposerLibrary: openComposerLibrary,
         onOpenHelp: () => setIsHelpOpen(true),
+        onOpenListDisplay: openListDisplay,
         onPreviewComposerSend: () => {
           setComposer((current) => ({
             ...current,
@@ -4823,6 +5469,10 @@ export function App({
           }));
         },
         onSaveComposerRequest: saveComposerRequest,
+        onResetListDisplay: () => {
+          setTrafficListDisplay(normalizeTrafficListDisplay(DEFAULT_TRAFFIC_LIST_DISPLAY));
+          setListDisplayFocusIndex(0);
+        },
         onSelectComposerTab: (tab) => setComposer((current) => selectComposerTab(current, tab)),
         onStartExport: startTrafficExport,
         onStartResend: startResend,
@@ -4875,6 +5525,7 @@ export function App({
 
           setIsFollowingLatest(false);
         },
+        onToggleListDisplayColumn: toggleFocusedListDisplayColumn,
         onToggleDetailTab: () => {
           setDetailTab((current) => cycleValue(DETAIL_TABS, current));
         },
@@ -4911,6 +5562,11 @@ export function App({
       { flexDirection: 'row', flexGrow: 1 },
       isHelpOpen
         ? h(HelpModal)
+        : (isListDisplayOpen
+          ? h(ListDisplayModal, {
+            focusIndex: listDisplayFocusIndex,
+            listDisplay: trafficListDisplay
+          })
         : (composer.isOpen
           ? h(RequestComposerPanel, {
             composer,
@@ -4938,6 +5594,8 @@ export function App({
             selectedIndex,
             isFocused: isListFocused,
             isFollowingLatest,
+            hideFrameworkAssets,
+            listDisplay: trafficListDisplay,
             methodFilters,
             searchField,
             statusFilters,
@@ -4955,7 +5613,7 @@ export function App({
             matchCount: detailMatches.length,
             activeMatchIndex: detailMatchIndex
           })
-        ]))
+        ])))
     ),
     isFilterOpen
         ? h(FilterBar, {
@@ -4990,8 +5648,12 @@ export function App({
           isDetailSearchActive: detailSearchQuery.trim().length > 0,
           isExportPromptOpen: Boolean(pendingExport),
           isHelpOpen,
+          isLiveMode,
+          isListDisplayOpen,
           isListFocused: isDetailModalOpen ? false : isListFocused,
-          isRawModeSupported
+          isRawModeSupported,
+          isReplayMode,
+          recordingStatus
         })))
   );
 }
