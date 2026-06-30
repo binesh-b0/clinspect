@@ -81,6 +81,7 @@ export function createProgram() {
     .option('--preserve-encoding', 'preserve client Accept-Encoding when proxying live traffic')
     .option('--record <mode>', 'record traffic to disk (full|partial)', parseRecordMode)
     .option('--record-path <path>', 'exact NDJSON file path for --record output')
+    .option('--show-framework-assets', 'show framework/dev-server static asset requests in the traffic list')
     .option('--show-cookie-values', 'show raw Cookie and Set-Cookie values in the UI and search')
     .option('--record-cookie-values', 'write raw Cookie and Set-Cookie values to recordings (default with --record)');
 }
@@ -123,6 +124,7 @@ export function parseCliOptions(argv = process.argv) {
   const sessionPath = options.load ?? null;
   const targetUrl = options.target ?? null;
   const recordMode = options.record ?? 'off';
+  const hideFrameworkAssets = !Boolean(options.showFrameworkAssets);
   const showCookieValues = Boolean(options.showCookieValues);
   const recordCookieValues = Boolean(options.recordCookieValues);
   const responseEncodingPolicy = options.preserveEncoding ? 'preserve' : 'readable';
@@ -155,6 +157,7 @@ export function parseCliOptions(argv = process.argv) {
       },
       recordCookieValues: false,
       responseEncodingPolicy,
+      hideFrameworkAssets,
       sessionPath,
       showCookieValues,
       targetUrl: null
@@ -183,6 +186,7 @@ export function parseCliOptions(argv = process.argv) {
     },
     recordCookieValues: recordMode !== 'off',
     responseEncodingPolicy,
+    hideFrameworkAssets,
     showCookieValues,
     targetUrl
   };

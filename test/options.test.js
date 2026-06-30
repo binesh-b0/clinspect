@@ -57,6 +57,7 @@ test('recording option helpers validate modes and format default paths', () => {
 test('parseCliOptions defaults to demo mode without a target', () => {
   assert.deepEqual(parseCliOptions(['node', 'clinspect']), {
     bodyLimit: DEFAULT_BODY_LIMIT,
+    hideFrameworkAssets: true,
     mode: 'demo',
     openBrowser: false,
     port: DEFAULT_PORT,
@@ -82,6 +83,7 @@ test('parseCliOptions uses live mode when a target is provided', () => {
     '9090'
   ]), {
     bodyLimit: DEFAULT_BODY_LIMIT,
+    hideFrameworkAssets: true,
     mode: 'live',
     openBrowser: false,
     port: 9090,
@@ -125,6 +127,7 @@ test('parseCliOptions enables browser open flag', () => {
     '--open'
   ]), {
     bodyLimit: DEFAULT_BODY_LIMIT,
+    hideFrameworkAssets: true,
     mode: 'live',
     openBrowser: true,
     port: DEFAULT_PORT,
@@ -138,6 +141,11 @@ test('parseCliOptions enables browser open flag', () => {
     showCookieValues: false,
     targetUrl: 'https://example.com/'
   });
+});
+
+test('parseCliOptions hides framework assets by default and can show them', () => {
+  assert.equal(parseCliOptions(['node', 'clinspect']).hideFrameworkAssets, true);
+  assert.equal(parseCliOptions(['node', 'clinspect', '--show-framework-assets']).hideFrameworkAssets, false);
 });
 
 test('parseCliOptions supports full and partial recording', () => {
@@ -174,6 +182,7 @@ test('parseCliOptions supports cookie privacy flags', () => {
     '--show-cookie-values'
   ]), {
     bodyLimit: DEFAULT_BODY_LIMIT,
+    hideFrameworkAssets: true,
     mode: 'demo',
     openBrowser: false,
     port: DEFAULT_PORT,
@@ -214,6 +223,7 @@ test('parseCliOptions supports replay mode and rejects live or recording flags',
     './captures/session.ndjson'
   ]), {
     bodyLimit: DEFAULT_BODY_LIMIT,
+    hideFrameworkAssets: true,
     mode: 'replay',
     loadedSession: null,
     openBrowser: false,
@@ -284,6 +294,7 @@ test('help helpers detect help requests and expose command help', () => {
   assert.match(helpText, /--preserve-encoding/);
   assert.match(helpText, /--record <mode>/);
   assert.match(helpText, /--record-path <path>/);
+  assert.match(helpText, /--show-framework-assets/);
   assert.match(helpText, /--show-cookie-values/);
   assert.match(helpText, /--record-cookie-values/);
 });

@@ -132,11 +132,13 @@ Show raw cookie values in the UI and search:
 clinspect --target http://localhost:3000 --show-cookie-values
 ```
 
-Framework and dev-server static asset requests are hidden from the traffic list by default. To show them:
+Framework and dev-server static asset requests are hidden from the traffic list by default. When clinspect sees framework-specific asset paths, the target line shows a compact tentative framework name such as `Next.js?` and the hidden static count. To show those requests at startup:
 
 ```sh
 clinspect --target http://localhost:3000 --show-framework-assets
 ```
+
+Inside the TUI, press `F` to show or hide static asset requests for the current session. The same setting is available in the `L` list display modal.
 
 Preserve the client `Accept-Encoding` header exactly:
 
@@ -164,7 +166,8 @@ Main UI:
 - `/` searches traffic or details, depending on focus.
 - `t` cycles traffic-list path display between smart, start, and end truncation.
 - `v` cycles traffic-list density between full, compact, and path-only views.
-- `L` opens traffic-list display settings; `j`/`k` selects a row, left/right changes path mode or density, `space` shows/hides fields, `r` resets, `enter`/`esc` closes.
+- `F` shows or hides framework/static asset requests.
+- `L` opens traffic-list display settings; `j`/`k` selects a row, left/right changes path mode or density, `space` shows/hides fields or static assets, `r` resets, `enter`/`esc` closes.
 - `y` copies the focused traffic item or detail.
 - `D` downloads the focused traffic item or detail to `./.clinspect/exports/`.
 - `m`/`r` chooses masked or raw values after starting an export.

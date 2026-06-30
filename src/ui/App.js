@@ -30,7 +30,7 @@ const SEARCH_FIELDS = ['all', 'path', 'status', 'method', 'time', 'host', 'port'
 const FILTER_FOCUS_ORDER = ['query', 'field', 'method', 'status'];
 const TRAFFIC_PATH_MODES = ['smart', 'start', 'end'];
 const TRAFFIC_DENSITY_PRESETS = ['full', 'compact', 'path'];
-const LIST_DISPLAY_FOCUS_ORDER = ['pathMode', 'density', 'time', 'method', 'status', 'duration'];
+const LIST_DISPLAY_FOCUS_ORDER = ['pathMode', 'density', 'frameworkAssets', 'time', 'method', 'status', 'duration'];
 const COMPOSER_TABS = ['params', 'headers', 'body', 'auth', 'cookies', 'env', 'save'];
 const COMPOSER_TAB_LABELS = {
   auth: 'Auth',
@@ -63,24 +63,40 @@ const TEXTUAL_CONTENT_TYPE_PATTERNS = [
 const STATIC_ASSET_EXTENSION_PATTERN = /\.(?:avif|bmp|cjs|css|eot|gif|ico|jpeg|jpg|js|jsx|mjs|mp3|mp4|otf|png|svg|ttf|ts|tsx|vue|wasm|wav|webm|webmanifest|webp|woff2?)$/i;
 const STATIC_ASSET_FILE_PATTERN = /^\/(?:browserconfig\.xml|favicon\.ico|manifest\.json|robots\.txt|site\.webmanifest)$/i;
 const FRAMEWORK_SOURCE_MODULE_PATTERN = /^\/(?:app|components|node_modules|pages|src)\/.*\.(?:[cm]?[jt]sx?|css|svelte|vue)$/i;
-const FRAMEWORK_STATIC_PATH_PATTERNS = [
-  /^\/_next(?:\/|$)/i,
-  /^\/__nextjs(?:_|\/|$)/i,
-  /^\/_nuxt(?:\/|$)/i,
-  /^\/__nuxt(?:\/|$)/i,
-  /^\/_astro(?:\/|$)/i,
-  /^\/_app\/immutable(?:\/|$)/i,
-  /^\/@vite(?:\/|$)/i,
-  /^\/@react-refresh(?:\/|$)/i,
-  /^\/@id(?:\/|$)/i,
-  /^\/@fs(?:\/|$)/i,
-  /^\/__vite(?:_|\/|$)/i,
-  /^\/__webpack(?:_|\/|$)/i,
-  /^\/webpack-dev-server(?:\/|$)/i,
-  /^\/sockjs-node(?:\/|$)/i,
-  /^\/build\/(?:_assets|assets|_shared|routes)(?:\/|$)/i,
-  /^\/page-data(?:\/|$)/i,
-  /^\/___gatsby(?:\/|$)/i
+const FRAMEWORK_NAMES = ['Next.js', 'Vite', 'Nuxt', 'Astro', 'SvelteKit', 'Remix', 'Gatsby', 'Webpack'];
+const FRAMEWORK_ASSET_PATH_MATCHERS = [
+  {
+    framework: 'Next.js',
+    patterns: [/^\/_next(?:\/|$)/i, /^\/__nextjs(?:_|\/|$)/i]
+  },
+  {
+    framework: 'Vite',
+    patterns: [/^\/@vite(?:\/|$)/i, /^\/@react-refresh(?:\/|$)/i, /^\/@id(?:\/|$)/i, /^\/@fs(?:\/|$)/i, /^\/__vite(?:_|\/|$)/i]
+  },
+  {
+    framework: 'Nuxt',
+    patterns: [/^\/_nuxt(?:\/|$)/i, /^\/__nuxt(?:\/|$)/i]
+  },
+  {
+    framework: 'Astro',
+    patterns: [/^\/_astro(?:\/|$)/i]
+  },
+  {
+    framework: 'SvelteKit',
+    patterns: [/^\/_app\/immutable(?:\/|$)/i]
+  },
+  {
+    framework: 'Remix',
+    patterns: [/^\/build\/(?:_assets|assets|_shared|routes)(?:\/|$)/i]
+  },
+  {
+    framework: 'Gatsby',
+    patterns: [/^\/page-data(?:\/|$)/i, /^\/___gatsby(?:\/|$)/i]
+  },
+  {
+    framework: 'Webpack',
+    patterns: [/^\/__webpack(?:_|\/|$)/i, /^\/webpack-dev-server(?:\/|$)/i, /^\/sockjs-node(?:\/|$)/i]
+  }
 ];
 const STATIC_ASSET_CONTENT_TYPE_PATTERNS = [
   /^image\//,
@@ -493,29 +509,135 @@ function isStaticAssetContentType(contentType = '') {
   return STATIC_ASSET_CONTENT_TYPE_PATTERNS.some((pattern) => pattern.test(contentType));
 }
 
-export function isFrameworkAssetRequest(log = {}) {
+function getFrameworkPathMatch(pathname = '') {
+  return FRAMEWORK_ASSET_PATH_MATCHERS.find((matcher) => (
+    matcher.patterns.some((pattern) => pattern.test(pathname))
+  )) ?? null;
+}
+
+export function classifyFrameworkAssetRequest(log = {}) {
   const method = String(log.method ?? 'GET').toUpperCase();
 
   if (method !== 'GET' && method !== 'HEAD') {
-    return false;
+    return {
+      framework: null,
+      isAsset: false,
+      reason: null
+    };
   }
 
   const pathname = getLogPathname(log);
 
   if (!pathname) {
-    return false;
+    return {
+      framework: null,
+      isAsset: false,
+      reason: null
+    };
   }
 
-  if (
-    STATIC_ASSET_FILE_PATTERN.test(pathname) ||
-    STATIC_ASSET_EXTENSION_PATTERN.test(pathname) ||
-    FRAMEWORK_SOURCE_MODULE_PATTERN.test(pathname) ||
-    FRAMEWORK_STATIC_PATH_PATTERNS.some((pattern) => pattern.test(pathname))
-  ) {
-    return true;
+  const frameworkMatch = getFrameworkPathMatch(pathname);
+
+  if (frameworkMatch) {
+    return {
+      framework: frameworkMatch.framework,
+      isAsset: true,
+      reason: 'framework-path'
+    };
   }
 
-  return isStaticAssetContentType(getContentType(log.response?.headers ?? {}));
+  if (FRAMEWORK_SOURCE_MODULE_PATTERN.test(pathname)) {
+    return {
+      framework: null,
+      isAsset: true,
+      reason: 'source-module'
+    };
+  }
+
+  if (STATIC_ASSET_FILE_PATTERN.test(pathname)) {
+    return {
+      framework: null,
+      isAsset: true,
+      reason: 'static-file'
+    };
+  }
+
+  if (STATIC_ASSET_EXTENSION_PATTERN.test(pathname)) {
+    return {
+      framework: null,
+      isAsset: true,
+      reason: 'extension'
+    };
+  }
+
+  if (isStaticAssetContentType(getContentType(log.response?.headers ?? {}))) {
+    return {
+      framework: null,
+      isAsset: true,
+      reason: 'content-type'
+    };
+  }
+
+  return {
+    framework: null,
+    isAsset: false,
+    reason: null
+  };
+}
+
+export function isFrameworkAssetRequest(log = {}) {
+  return classifyFrameworkAssetRequest(log).isAsset;
+}
+
+export function summarizeFrameworkAssets(logs = []) {
+  const frameworkCounts = new Map();
+  let assetCount = 0;
+
+  logs.forEach((log) => {
+    const classification = classifyFrameworkAssetRequest(log);
+
+    if (!classification.isAsset) {
+      return;
+    }
+
+    assetCount += 1;
+
+    if (classification.framework) {
+      frameworkCounts.set(
+        classification.framework,
+        (frameworkCounts.get(classification.framework) ?? 0) + 1
+      );
+    }
+  });
+
+  const frameworks = FRAMEWORK_NAMES
+    .map((framework) => ({
+      count: frameworkCounts.get(framework) ?? 0,
+      framework
+    }))
+    .filter(({ count }) => count > 0)
+    .sort((left, right) => right.count - left.count || FRAMEWORK_NAMES.indexOf(left.framework) - FRAMEWORK_NAMES.indexOf(right.framework));
+  const topFramework = frameworks[0] ?? null;
+
+  return {
+    additionalFrameworkCount: Math.max(0, frameworks.length - 1),
+    assetCount,
+    framework: topFramework?.framework ?? null,
+    frameworkCount: topFramework?.count ?? 0,
+    frameworks
+  };
+}
+
+export function formatFrameworkDetectionLabel(summary = {}) {
+  const framework = summary.framework ?? null;
+
+  if (!framework) {
+    return '';
+  }
+
+  const additional = Number(summary.additionalFrameworkCount ?? 0);
+
+  return `${framework}?${additional > 0 ? `+${additional}` : ''}`;
 }
 
 function hasEncodedBody(headers = {}) {
@@ -1786,13 +1908,41 @@ export function getBoundaryLogId(logs, boundary) {
   return boundary === 'last' ? logs[logs.length - 1].id : logs[0].id;
 }
 
+function formatStaticAssetsListLabel(summary = {}, hideFrameworkAssets = true) {
+  const assetCount = Number(summary.assetCount ?? 0);
+  const state = hideFrameworkAssets ? 'hidden' : 'shown';
+
+  return assetCount > 0 ? `${assetCount} ${state}` : `static ${state}`;
+}
+
+function formatStaticAssetsHeaderLabel(summary = {}, hideFrameworkAssets = true) {
+  const assetCount = Number(summary.assetCount ?? 0);
+
+  if (assetCount <= 0) {
+    return '';
+  }
+
+  return hideFrameworkAssets ? `${assetCount} hidden` : 'shown';
+}
+
+function formatHeaderFrameworkSignals(summary = {}, hideFrameworkAssets = true) {
+  return [
+    formatFrameworkDetectionLabel(summary),
+    formatStaticAssetsHeaderLabel(summary, hideFrameworkAssets)
+  ].filter(Boolean);
+}
+
 const Header = React.memo(function Header({
   context = {},
+  frameworkSummary,
+  hideFrameworkAssets,
   logsCount,
   recordingStatus,
   visibleCount,
   isPaused
 }) {
+  const frameworkSignals = formatHeaderFrameworkSignals(frameworkSummary, hideFrameworkAssets);
+
   if (context.mode === 'replay') {
     const loadedSession = context.loadedSession ?? {};
     const metadata = loadedSession.metadata ?? {};
@@ -1805,6 +1955,7 @@ const Header = React.memo(function Header({
     const targetText = metadata.targetUrl
       ? `target ${metadata.targetUrl}`
       : 'target unknown';
+    const compactTargetText = [targetText, ...frameworkSignals].join(' | ');
 
     return h(
       Box,
@@ -1813,9 +1964,14 @@ const Header = React.memo(function Header({
       h(
         Text,
         { color: 'gray', wrap: 'truncate' },
-        `recorded session | ${basename(context.sessionPath)} | ${countText} | skipped ${loadedSession.skippedLines ?? 0}`
+        [
+          'recorded session',
+          basename(context.sessionPath),
+          countText,
+          `skipped ${loadedSession.skippedLines ?? 0}`,
+        ].join(' | ')
       ),
-      h(Text, { color: 'gray', wrap: 'truncate' }, `${sourceText} | ${targetText}`)
+      h(Text, { color: 'gray', wrap: 'truncate' }, `${sourceText} | ${compactTargetText}`)
     );
   }
 
@@ -1828,9 +1984,23 @@ const Header = React.memo(function Header({
     : `${visibleCount}/${logsCount} entries`;
   const targetKind = isPublicTargetUrl(context.targetUrl) ? 'public target' : 'local target';
   const proxyOrigin = getProxyOrigin(port);
+  const targetLine = [`target ${target}`, ...frameworkSignals].join(' | ');
   const subtitle = context.mode === 'live'
-    ? `${mode} | ${captureState} | ${targetKind} | proxy ${proxyOrigin} | ${countText} | ${formatRecordingLabel(recordingStatus)}`
-    : `${mode} | ${captureState} | ${target} | ${countText} | ${formatRecordingLabel(recordingStatus)}`;
+    ? [
+      mode,
+      captureState,
+      targetKind,
+      `proxy ${proxyOrigin}`,
+      countText,
+      formatRecordingLabel(recordingStatus)
+    ].join(' | ')
+    : [
+      mode,
+      captureState,
+      target,
+      countText,
+      formatRecordingLabel(recordingStatus)
+    ].join(' | ');
 
   return h(
     Box,
@@ -1838,7 +2008,7 @@ const Header = React.memo(function Header({
     h(Text, { color: 'cyan', bold: true }, 'clinspect'),
     h(Text, { color: 'gray', wrap: 'truncate' }, subtitle),
     context.mode === 'live'
-      ? h(Text, { color: 'gray', wrap: 'truncate' }, `target ${target}`)
+      ? h(Text, { color: 'gray', wrap: 'truncate' }, targetLine)
       : null
   );
 });
@@ -1858,8 +2028,8 @@ export function formatFilterLabel(methodFilters, statusFilters, searchField, sea
     parts.push(`search "${truncate(searchQuery, 16)}" in ${formatSearchFieldLabel(searchField)}`);
   }
 
-  if (options.hideFrameworkAssets) {
-    parts.push('static hidden');
+  if (options.hideFrameworkAssets !== undefined) {
+    parts.push(formatStaticAssetsListLabel(options.frameworkSummary, options.hideFrameworkAssets));
   }
 
   return parts.length > 0 ? parts.join(' | ') : 'none';
@@ -1873,6 +2043,7 @@ const TrafficList = React.memo(function TrafficList({
   selectedIndex,
   isFocused,
   isFollowingLatest,
+  frameworkSummary,
   hideFrameworkAssets,
   listDisplay,
   methodFilters,
@@ -1888,6 +2059,7 @@ const TrafficList = React.memo(function TrafficList({
   ));
   const visibleLogs = logs.slice(startIndex, startIndex + visibleCount);
   const filterLabel = formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery, {
+    frameworkSummary,
     hideFrameworkAssets
   });
   const displayLabel = `${normalizedDisplay.density}/${normalizedDisplay.pathMode}`;
@@ -3041,6 +3213,7 @@ export const HELP_SECTIONS = [
     rows: [
       ['t', 'cycle path mode'],
       ['v', 'cycle list density'],
+      ['F', 'show / hide static'],
       ['L', 'list display modal']
     ]
   },
@@ -3133,7 +3306,7 @@ function formatBooleanOption(value) {
   return value ? '[x]' : '[ ]';
 }
 
-function formatListDisplayValue(display, key) {
+function formatListDisplayValue(display, key, options = {}) {
   const normalized = normalizeTrafficListDisplay(display);
 
   if (key === 'pathMode') {
@@ -3142,6 +3315,10 @@ function formatListDisplayValue(display, key) {
 
   if (key === 'density') {
     return normalized.density;
+  }
+
+  if (key === 'frameworkAssets') {
+    return options.hideFrameworkAssets ? 'hidden' : 'shown';
   }
 
   return formatBooleanOption(normalized.columns[key]);
@@ -3156,11 +3333,16 @@ function getListDisplayLabel(key) {
     return 'density';
   }
 
+  if (key === 'frameworkAssets') {
+    return 'static assets';
+  }
+
   return `show ${key}`;
 }
 
 const ListDisplayModal = React.memo(function ListDisplayModal({
   focusIndex = 0,
+  hideFrameworkAssets,
   listDisplay
 }) {
   const columns = Number.isFinite(process.stdout.columns) && process.stdout.columns > 0
@@ -3193,7 +3375,7 @@ const ListDisplayModal = React.memo(function ListDisplayModal({
       h(Text, {}, ''),
       ...LIST_DISPLAY_FOCUS_ORDER.map((key, index) => {
         const selected = index === safeFocusIndex;
-        const value = formatListDisplayValue(normalized, key);
+        const value = formatListDisplayValue(normalized, key, { hideFrameworkAssets });
         const label = getListDisplayLabel(key);
         const hint = key === 'pathMode' || key === 'density'
           ? 'change with left/right arrows'
@@ -3248,6 +3430,7 @@ export function formatFooterText({
   isDetailSearchActive = false,
   isExportPromptOpen = false,
   isHelpOpen = false,
+  hideFrameworkAssets = true,
   isLiveMode = true,
   isListFocused = true,
   isRawModeSupported = true,
@@ -3379,6 +3562,7 @@ const Footer = React.memo(function Footer({
   isDetailSearchActive,
   isExportPromptOpen,
   isHelpOpen,
+  hideFrameworkAssets,
   isLiveMode,
   isListFocused,
   isRawModeSupported,
@@ -3402,6 +3586,7 @@ const Footer = React.memo(function Footer({
         isDetailSearchActive,
         isExportPromptOpen,
         isHelpOpen,
+        hideFrameworkAssets,
         isLiveMode,
         isListFocused,
         isRawModeSupported,
@@ -3802,6 +3987,10 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     return { type: 'none' };
   }
 
+  if (value === 'F' && !isFilterOpen) {
+    return { type: 'toggleFrameworkAssets' };
+  }
+
   if (isDetailModalOpen) {
     if (keyState.escape || value === 'q') {
       return { type: 'closeDetailModal' };
@@ -4164,6 +4353,7 @@ function KeyboardControls({
   onToggleComposerReveal,
   onToggleDetailNode,
   onToggleFilterOption,
+  onToggleFrameworkAssets,
   onToggleListDisplayColumn,
   onToggleDetailTab,
   onToggleFocus,
@@ -4395,6 +4585,9 @@ function KeyboardControls({
         break;
       case 'toggleFilterOption':
         onToggleFilterOption();
+        break;
+      case 'toggleFrameworkAssets':
+        onToggleFrameworkAssets();
         break;
       case 'toggleListDisplayColumn':
         onToggleListDisplayColumn();
@@ -4663,6 +4856,7 @@ export function App({
   const [isListDisplayOpen, setIsListDisplayOpen] = useState(false);
   const [listDisplayFocusIndex, setListDisplayFocusIndex] = useState(0);
   const [trafficListDisplay, setTrafficListDisplay] = useState(() => normalizeTrafficListDisplay(DEFAULT_TRAFFIC_LIST_DISPLAY));
+  const [hideFrameworkAssets, setHideFrameworkAssets] = useState(() => context.hideFrameworkAssets !== false);
   const [pendingExport, setPendingExport] = useState(null);
   const [exportStatus, setExportStatus] = useState('');
   const [pendingResend, setPendingResend] = useState(null);
@@ -4682,10 +4876,10 @@ export function App({
   }));
   const isReplayMode = context.mode === 'replay';
   const isLiveMode = context.mode === 'live';
-  const hideFrameworkAssets = context.hideFrameworkAssets !== false;
   const showCookieValues = Boolean(context.showCookieValues);
   const proxyOrigin = getProxyOrigin(context.port ?? 8080);
   const publicTargetUrl = context.mode === 'live' ? context.targetUrl : null;
+  const frameworkSummary = useMemo(() => summarizeFrameworkAssets(logs), [logs]);
 
   const filteredLogs = useMemo(() => filterLogs(logs, {
     hideFrameworkAssets,
@@ -4863,10 +5057,20 @@ export function App({
     }
   };
 
+  const toggleFrameworkAssets = () => {
+    setHideFrameworkAssets((current) => !current);
+    setIsFollowingLatest(false);
+  };
+
   const toggleFocusedListDisplayColumn = () => {
     const focusKey = LIST_DISPLAY_FOCUS_ORDER[listDisplayFocusIndex];
 
     if (focusKey === 'pathMode' || focusKey === 'density') {
+      return;
+    }
+
+    if (focusKey === 'frameworkAssets') {
+      toggleFrameworkAssets();
       return;
     }
 
@@ -5537,6 +5741,7 @@ export function App({
           }));
         },
         onToggleDetailNode: toggleFocusedDetailNode,
+        onToggleFrameworkAssets: toggleFrameworkAssets,
         onTogglePause: () => {
           setIsPaused((current) => {
             const next = !current;
@@ -5552,6 +5757,8 @@ export function App({
       : null,
     h(Header, {
       context,
+      frameworkSummary,
+      hideFrameworkAssets,
       logsCount: logs.length,
       recordingStatus,
       visibleCount: filteredLogs.length,
@@ -5565,6 +5772,7 @@ export function App({
         : (isListDisplayOpen
           ? h(ListDisplayModal, {
             focusIndex: listDisplayFocusIndex,
+            hideFrameworkAssets,
             listDisplay: trafficListDisplay
           })
         : (composer.isOpen
@@ -5594,6 +5802,7 @@ export function App({
             selectedIndex,
             isFocused: isListFocused,
             isFollowingLatest,
+            frameworkSummary,
             hideFrameworkAssets,
             listDisplay: trafficListDisplay,
             methodFilters,
@@ -5648,6 +5857,7 @@ export function App({
           isDetailSearchActive: detailSearchQuery.trim().length > 0,
           isExportPromptOpen: Boolean(pendingExport),
           isHelpOpen,
+          hideFrameworkAssets,
           isLiveMode,
           isListDisplayOpen,
           isListFocused: isDetailModalOpen ? false : isListFocused,

@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   countActiveFilters,
   applyDetailMatches,
+  classifyFrameworkAssetRequest,
   clampDetailRowIndex,
   clampScrollOffset,
   createBlankComposerState,
@@ -14,6 +15,7 @@ import {
   extractPortFromHost,
   findDetailMatches,
   filterLogs,
+  formatFrameworkDetectionLabel,
   formatFooterText,
   formatFilterLabel,
   formatPathForMode,
@@ -44,6 +46,7 @@ import {
   normalizeTrafficListDisplay,
   resolveSelectedLogId,
   selectComposerTab,
+  summarizeFrameworkAssets,
   toggleTrafficColumn,
   toggleFilterValue
 } from '../src/ui/App.js';
@@ -525,6 +528,26 @@ test('keyboard action helper supports list display modal input', () => {
   );
 });
 
+test('keyboard action helper toggles framework assets outside text inputs', () => {
+  assert.deepEqual(getKeyboardAction('F'), { type: 'toggleFrameworkAssets' });
+  assert.deepEqual(
+    getKeyboardAction('F', {}, { isDetailModalOpen: true }),
+    { type: 'toggleFrameworkAssets' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('F', {}, { isFilterOpen: true, filterFocus: 'query' }),
+    { type: 'appendSearch', value: 'F' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('F', {}, { isDetailSearchOpen: true }),
+    { type: 'appendDetailSearch', value: 'F' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('F', {}, { isComposerOpen: true, isComposerTextFocused: true }),
+    { type: 'insertComposerText', value: 'F' }
+  );
+});
+
 test('keyboard action helper supports detail modal and detail search input', () => {
   assert.deepEqual(
     getKeyboardAction('q', {}, { isDetailModalOpen: true }),
@@ -593,6 +616,10 @@ test('footer text shows mode-aware essential keymaps', () => {
   assert.equal(
     formatFooterText({ isListFocused: false }),
     'j/k scroll  [/] page  r req/res  t path  v density  L display  y copy  D download  / find  n/N match  R resend  E edit  tab traffic  P rec  h help  q quit'
+  );
+  assert.equal(
+    formatFooterText({ hideFrameworkAssets: false, isListFocused: true }),
+    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  R resend  E edit  tab details  P rec  h help  q quit'
   );
   assert.equal(
     formatFooterText({ isDetailModalOpen: true }),
@@ -675,6 +702,7 @@ test('help sections describe traffic list display controls', () => {
 
   assert.deepEqual(displaySection.rows.find(([keys]) => keys === 't'), ['t', 'cycle path mode']);
   assert.deepEqual(displaySection.rows.find(([keys]) => keys === 'v'), ['v', 'cycle list density']);
+  assert.deepEqual(displaySection.rows.find(([keys]) => keys === 'F'), ['F', 'show / hide static']);
   assert.deepEqual(displaySection.rows.find(([keys]) => keys === 'L'), ['L', 'list display modal']);
 });
 
@@ -857,61 +885,31 @@ test('filterLogs narrows by method, status family, and search text', () => {
 });
 
 test('filterLogs auto-hides common frontend framework static traffic by default', () => {
+  const createTraffic = (id, path, options = {}) => ({
+    id,
+    method: options.method ?? 'GET',
+    path,
+    statusCode: options.statusCode ?? 200,
+    timestamp: 1700000000000,
+    request: { headers: { host: 'localhost:3000' }, body: options.requestBody ?? '' },
+    response: { headers: options.responseHeaders ?? {}, body: options.responseBody ?? '' }
+  });
   const traffic = [
-    {
-      id: 'api',
-      method: 'GET',
-      path: '/api/users',
-      statusCode: 200,
-      timestamp: 1700000000000,
-      request: { headers: { host: 'localhost:3000' }, body: '' },
-      response: { headers: { 'content-type': 'application/json' }, body: '{"ok":true}' }
-    },
-    {
-      id: 'next',
-      method: 'GET',
-      path: '/_next/static/chunks/app/layout.js?v=1',
-      statusCode: 200,
-      timestamp: 1700000000000,
-      request: { headers: { host: 'localhost:3000' }, body: '' },
-      response: { headers: { 'content-type': 'application/javascript' }, body: '' }
-    },
-    {
-      id: 'vite',
-      method: 'GET',
-      path: '/@vite/client',
-      statusCode: 200,
-      timestamp: 1700000000000,
-      request: { headers: { host: 'localhost:5173' }, body: '' },
-      response: { headers: { 'content-type': 'text/javascript' }, body: '' }
-    },
-    {
-      id: 'module',
-      method: 'GET',
-      path: '/src/main.tsx?t=1700000000000',
-      statusCode: 200,
-      timestamp: 1700000000000,
-      request: { headers: { host: 'localhost:5173' }, body: '' },
-      response: { headers: {}, body: '' }
-    },
-    {
-      id: 'image',
-      method: 'GET',
-      path: '/asset-proxy?id=logo',
-      statusCode: 200,
-      timestamp: 1700000000000,
-      request: { headers: { host: 'localhost:5173' }, body: '' },
-      response: { headers: { 'content-type': 'image/svg+xml' }, body: '' }
-    },
-    {
-      id: 'post',
-      method: 'POST',
-      path: '/_next/static/upload.js',
-      statusCode: 201,
-      timestamp: 1700000000000,
-      request: { headers: { host: 'localhost:3000' }, body: 'payload' },
-      response: { headers: {}, body: '' }
-    }
+    createTraffic('api', '/api/users', {
+      responseBody: '{"ok":true}',
+      responseHeaders: { 'content-type': 'application/json' }
+    }),
+    createTraffic('next', '/_next/static/chunks/app/layout.js?v=1'),
+    createTraffic('vite', '/@vite/client', { responseHeaders: { 'content-type': 'text/javascript' } }),
+    createTraffic('nuxt', '/_nuxt/app.js'),
+    createTraffic('astro', '/_astro/page.css'),
+    createTraffic('sveltekit', '/_app/immutable/chunks/app.js'),
+    createTraffic('remix', '/build/_assets/root-BHY.js'),
+    createTraffic('gatsby', '/page-data/index/page-data.json'),
+    createTraffic('webpack', '/webpack-dev-server/sockjs.bundle.js'),
+    createTraffic('module', '/src/main.tsx?t=1700000000000'),
+    createTraffic('image', '/asset-proxy?id=logo', { responseHeaders: { 'content-type': 'image/svg+xml' } }),
+    createTraffic('post', '/_next/static/upload.js', { method: 'POST', requestBody: 'payload', statusCode: 201 })
   ];
 
   assert.equal(isFrameworkAssetRequest(traffic[0]), false);
@@ -919,16 +917,70 @@ test('filterLogs auto-hides common frontend framework static traffic by default'
   assert.equal(isFrameworkAssetRequest(traffic[2]), true);
   assert.equal(isFrameworkAssetRequest(traffic[3]), true);
   assert.equal(isFrameworkAssetRequest(traffic[4]), true);
-  assert.equal(isFrameworkAssetRequest(traffic[5]), false);
+  assert.equal(isFrameworkAssetRequest(traffic[5]), true);
+  assert.equal(isFrameworkAssetRequest(traffic[6]), true);
+  assert.equal(isFrameworkAssetRequest(traffic[7]), true);
+  assert.equal(isFrameworkAssetRequest(traffic[8]), true);
+  assert.equal(isFrameworkAssetRequest(traffic[9]), true);
+  assert.equal(isFrameworkAssetRequest(traffic[10]), true);
+  assert.equal(isFrameworkAssetRequest(traffic[11]), false);
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[1]), {
+    framework: 'Next.js',
+    isAsset: true,
+    reason: 'framework-path'
+  });
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[2]), {
+    framework: 'Vite',
+    isAsset: true,
+    reason: 'framework-path'
+  });
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[3]).framework, 'Nuxt');
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[4]).framework, 'Astro');
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[5]).framework, 'SvelteKit');
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[6]).framework, 'Remix');
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[7]).framework, 'Gatsby');
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[8]).framework, 'Webpack');
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[9]), {
+    framework: null,
+    isAsset: true,
+    reason: 'source-module'
+  });
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[10]), {
+    framework: null,
+    isAsset: true,
+    reason: 'content-type'
+  });
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[11]), {
+    framework: null,
+    isAsset: false,
+    reason: null
+  });
   assert.deepEqual(filterLogs(traffic).map((log) => log.id), ['api', 'post']);
-  assert.deepEqual(filterLogs(traffic, { hideFrameworkAssets: false }).map((log) => log.id), [
-    'api',
-    'next',
-    'vite',
-    'module',
-    'image',
-    'post'
-  ]);
+  assert.deepEqual(filterLogs(traffic, { hideFrameworkAssets: false }).map((log) => log.id), traffic.map((log) => log.id));
+  assert.deepEqual(summarizeFrameworkAssets(traffic), {
+    additionalFrameworkCount: 7,
+    assetCount: 10,
+    framework: 'Next.js',
+    frameworkCount: 1,
+    frameworks: [
+      { count: 1, framework: 'Next.js' },
+      { count: 1, framework: 'Vite' },
+      { count: 1, framework: 'Nuxt' },
+      { count: 1, framework: 'Astro' },
+      { count: 1, framework: 'SvelteKit' },
+      { count: 1, framework: 'Remix' },
+      { count: 1, framework: 'Gatsby' },
+      { count: 1, framework: 'Webpack' }
+    ]
+  });
+  assert.deepEqual(summarizeFrameworkAssets([traffic[0], traffic[11]]), {
+    additionalFrameworkCount: 0,
+    assetCount: 0,
+    framework: null,
+    frameworkCount: 0,
+    frameworks: []
+  });
+  assert.equal(formatFrameworkDetectionLabel(summarizeFrameworkAssets(traffic)), 'Next.js?+7');
 });
 
 test('filter value helpers support multi-select and clearing', () => {
@@ -951,6 +1003,26 @@ test('filter value helpers support multi-select and clearing', () => {
   assert.equal(formatFilterLabel([], [], 'all', 'id'), 'search "id" in all fields');
   assert.equal(formatFilterLabel(['GET', 'POST'], ['2xx'], 'path', 'users'), 'method GET,POST | status 2xx | search "users" in path');
   assert.equal(formatFilterLabel([], [], 'all', '', { hideFrameworkAssets: true }), 'static hidden');
+  assert.equal(formatFilterLabel([], [], 'all', '', {
+    frameworkSummary: {
+      additionalFrameworkCount: 1,
+      assetCount: 12,
+      framework: 'Next.js',
+      frameworkCount: 9,
+      frameworks: []
+    },
+    hideFrameworkAssets: true
+  }), '12 hidden');
+  assert.equal(formatFilterLabel([], [], 'all', '', {
+    frameworkSummary: {
+      additionalFrameworkCount: 0,
+      assetCount: 12,
+      framework: 'Vite',
+      frameworkCount: 12,
+      frameworks: []
+    },
+    hideFrameworkAssets: false
+  }), '12 shown');
   assert.equal(formatFilterLabel([], [], 'all', ''), 'none');
 });
 
