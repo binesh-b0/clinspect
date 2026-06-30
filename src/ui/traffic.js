@@ -647,7 +647,9 @@ export function classifyFrameworkAssetRequest(log = {}) {
     };
   }
 
-  if (isStaticAssetContentType(getContentType(log.response?.headers ?? {}))) {
+  const responseContentType = log.search?.responseContentType ?? getContentType(log.response?.headers ?? {});
+
+  if (isStaticAssetContentType(responseContentType)) {
     return {
       framework: null,
       isAsset: true,
@@ -722,6 +724,21 @@ function headersToSearchText(headers = {}, options = {}) {
   return Object.entries(headers)
     .flatMap(([key, value]) => headerValueLines(key, value, options))
     .join('\n');
+}
+
+function getIndexedHeaderSearchText(log = {}, side = 'request', options = {}) {
+  const search = log.search ?? null;
+
+  if (!search) {
+    return headersToSearchText(log[side]?.headers ?? {}, options);
+  }
+
+  const rawKey = side === 'request' ? 'requestHeaders' : 'responseHeaders';
+  const maskedKey = side === 'request' ? 'requestHeadersMasked' : 'responseHeadersMasked';
+
+  return options.showCookieValues
+    ? (search[rawKey] ?? '')
+    : (search[maskedKey] ?? search[rawKey] ?? '');
 }
 
 function normalizeFilterValues(values, allowedValues) {
@@ -809,8 +826,10 @@ function matchesStatusFilters(log, statusFilters) {
 
 export function getSearchValues(log, searchField = 'all', options = {}) {
   const requestHeaders = log.request?.headers ?? {};
-  const responseHeaders = log.response?.headers ?? {};
-  const host = requestHeaders.host ?? '';
+  const host = log.search?.host ?? requestHeaders.host ?? '';
+  const port = log.search?.port ?? extractPortFromHost(host);
+  const requestHeaderSearch = getIndexedHeaderSearchText(log, 'request', options);
+  const responseHeaderSearch = getIndexedHeaderSearchText(log, 'response', options);
   const values = {
     all: [
       log.method,
@@ -818,10 +837,10 @@ export function getSearchValues(log, searchField = 'all', options = {}) {
       String(log.statusCode ?? ''),
       formatTime(log.timestamp),
       host,
-      extractPortFromHost(host),
-      headersToSearchText(requestHeaders, options),
+      port,
+      requestHeaderSearch,
       log.request?.body,
-      headersToSearchText(responseHeaders, options),
+      responseHeaderSearch,
       log.response?.body
     ],
     body: [
@@ -829,13 +848,13 @@ export function getSearchValues(log, searchField = 'all', options = {}) {
       log.response?.body
     ],
     headers: [
-      headersToSearchText(requestHeaders, options),
-      headersToSearchText(responseHeaders, options)
+      requestHeaderSearch,
+      responseHeaderSearch
     ],
     host: [host],
     method: [log.method],
     path: [log.path],
-    port: [extractPortFromHost(host)],
+    port: [port],
     status: [String(log.statusCode ?? '')],
     time: [formatTime(log.timestamp)]
   };
@@ -1012,6 +1031,10 @@ export function formatFilterLabel(methodFilters, statusFilters, searchField, sea
     parts.push(formatStaticAssetsListLabel(options.frameworkSummary, options.hideFrameworkAssets));
   }
 
+  if (searchField === 'body' && searchQuery.trim() && Number(options.coldEntryCount ?? 0) > 0) {
+    parts.push('cold bodies load on inspect');
+  }
+
   return parts.length > 0 ? parts.join(' | ') : 'none';
 }
 
@@ -1024,6 +1047,7 @@ export const TrafficList = React.memo(function TrafficList({
   isFocused,
   isFollowingLatest,
   frameworkSummary,
+  historyStatus,
   hideFrameworkAssets,
   listDisplay,
   methodFilters,
@@ -1042,6 +1066,7 @@ export const TrafficList = React.memo(function TrafficList({
   ));
   const visibleLogs = logs.slice(startIndex, startIndex + visibleCount);
   const filterLabel = formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery, {
+    coldEntryCount: historyStatus?.coldEntries ?? 0,
     frameworkSummary,
     hideFrameworkAssets
   });
@@ -1112,6 +1137,7 @@ function focusedMarker(row, filterFocus) {
 
 export const FilterBar = React.memo(function FilterBar({
   filterFocus,
+  historyStatus,
   keyBindings = DEFAULT_KEY_BINDINGS,
   logsCount,
   methodFilters,
@@ -1128,6 +1154,11 @@ export const FilterBar = React.memo(function FilterBar({
     statusFilters,
     searchQuery
   });
+  const bodySearchColdHint = searchField === 'body' &&
+    searchQuery.trim() &&
+    Number(historyStatus?.coldEntries ?? 0) > 0
+    ? `${historyStatus.coldEntries} cold entries: body text loads when inspected`
+    : '';
 
   return h(
     Box,
@@ -1155,6 +1186,9 @@ export const FilterBar = React.memo(function FilterBar({
       { wrap: 'truncate' },
       `${focusedMarker('status', filterFocus)} status ${formatOptionsLine(STATUS_OPTIONS, statusFilters, statusOptionIndex, filterFocus === 'status')}`
     ),
+    bodySearchColdHint
+      ? h(Text, { color: 'yellow', wrap: 'truncate' }, bodySearchColdHint)
+      : null,
     h(Text, { color: 'gray', wrap: 'truncate' }, `${getBindingPairLabel(keyBindings, 'filter.previousField', 'filter.nextField')} row | ${getBindingPairLabel(keyBindings, 'filter.previousOption', 'filter.nextOption')} option | ${getBindingLabel(keyBindings, 'filter.toggleOption', { limit: 1 })} select | ${getBindingLabel(keyBindings, 'filter.clear', { limit: 1 })} clear filters | ${getBindingLabel(keyBindings, 'filter.close', { limit: 2 })} close`)
   );
 });

@@ -271,6 +271,12 @@ export function App({
 
     return normalizeKeyBindings(keyBindingInput ? { keyBindings: keyBindingInput } : undefined).bindings;
   }, [keyBindingInput]);
+  const historyStatus = stateStore.getHistoryStatus?.() ?? {
+    coldEntries: 0,
+    enabled: false,
+    hotEntries: logs.length,
+    totalEntries: logs.length
+  };
   const frameworkSummary = useMemo(() => summarizeFrameworkAssets(logs), [logs]);
   const paneLayout = getPaneLayout(trafficListDisplay);
   const trafficPaneWidth = paneLayout.trafficPaneWidth;
@@ -317,9 +323,16 @@ export function App({
 
   const selectedIndex = useMemo(() => getSelectedIndex(filteredLogs, selectedLogId), [filteredLogs, selectedLogId]);
   const selectedLog = useMemo(() => filteredLogs[selectedIndex] ?? null, [filteredLogs, selectedIndex]);
+  const hydrateLog = (log) => {
+    if (!log?.id) {
+      return log;
+    }
+
+    return stateStore.getLogById?.(log.id) ?? log;
+  };
   const inspectedLog = useMemo(() => {
-    return filteredLogs.find((log) => log.id === inspectedLogId) ?? selectedLog;
-  }, [filteredLogs, inspectedLogId, selectedLog]);
+    return hydrateLog(filteredLogs.find((log) => log.id === inspectedLogId) ?? selectedLog);
+  }, [filteredLogs, inspectedLogId, selectedLog, stateStore]);
   const rawDetailRows = useMemo(
     () => getDetailRows(inspectedLog, detailTab, {
       collapsedPaths: collapsedDetailPaths,
@@ -665,11 +678,11 @@ export function App({
   };
 
   const getExportLog = () => {
-    return isListFocused && !isDetailModalOpen ? selectedLog : inspectedLog;
+    return isListFocused && !isDetailModalOpen ? hydrateLog(selectedLog) : inspectedLog;
   };
 
   const getManualActionLog = () => {
-    return isListFocused && !isDetailModalOpen ? selectedLog : inspectedLog;
+    return isListFocused && !isDetailModalOpen ? hydrateLog(selectedLog) : inspectedLog;
   };
 
   const attachResendMetadata = (logEntry, metadata) => {
@@ -1111,6 +1124,7 @@ export function App({
     isFocused: isListFocused,
     isFollowingLatest,
     frameworkSummary,
+    historyStatus,
     hideFrameworkAssets,
     listDisplay: trafficListDisplay,
     marginRight: paneLayout.showTrafficPane && paneLayout.showDetailPane ? paneLayout.gapWidth : 0,
@@ -1380,7 +1394,10 @@ export function App({
           setDetailScrollOffset(0);
           setFocusedDetailRow(0);
           if (selectedLog) {
-            trafficRecorder?.recordInteraction?.(selectedLog, 'inspect');
+            const hydratedLog = hydrateLog(selectedLog);
+
+            setLogs(stateStore.getLogs());
+            trafficRecorder?.recordInteraction?.(hydratedLog, 'inspect');
           }
           setRecordingStatus(getRecordingStatus(trafficRecorder));
         },
@@ -1472,6 +1489,7 @@ export function App({
     isFilterOpen
         ? h(FilterBar, {
         filterFocus,
+        historyStatus,
         keyBindings,
         logsCount: logs.length,
         methodFilters,

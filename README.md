@@ -105,9 +105,37 @@ Load a recorded session without live or demo capture:
 clinspect --load ./.clinspect/recordings/clinspect-YYYYMMDD-HHmmss.ndjson
 ```
 
+## Temporary History
+
+During live and demo runs, every captured entry remains inspectable until you clear logs or exit. Recent and recently inspected full entries stay in memory; older full entries spill to a temporary per-session cache under:
+
+```text
+./.clinspect/tmp/sessions/
+```
+
+Control the hot in-memory window:
+
+```sh
+clinspect --target http://localhost:3000 --history-hot-entries 1000
+```
+
+Disable temporary disk spillover and keep only a bounded in-memory window:
+
+```sh
+clinspect --target http://localhost:3000 --no-history-cache
+```
+
+Restore the latest temporary session without starting live or demo capture:
+
+```sh
+clinspect --restore-last-session
+```
+
+Temporary history is separate from permanent `--record` / `--load` workflows. It is kept for the local project session cache, tolerates incomplete sessions after a crash, and older temp sessions are cleaned up automatically.
+
 ## Copy And Download
 
-Exports work from the in-memory traffic view and do not require recording to be enabled.
+Exports work from the current traffic view and do not require recording to be enabled.
 
 - `y` copies the current export target.
 - `D` writes the current export target under `./.clinspect/exports/`.
@@ -121,6 +149,7 @@ When the traffic list is focused, the export target is the selected full request
 - Captured traffic can include credentials, cookies, bearer tokens, API keys, and request or response bodies.
 - `.clinspect/` is ignored by git in this repository. Keep it that way unless you are intentionally sharing sanitized captures.
 - Cookie values are masked by default in the UI and search.
+- Temporary history stores raw captured full entries under `./.clinspect/tmp/sessions/` for the current project so older rows can be restored or inspected without permanent recording. Use `--no-history-cache` when you do not want this temporary disk cache.
 - Copy/download exports can include raw secrets when you choose raw export mode.
 - Recordings write raw cookie values by default when `--record` is enabled. Use recordings only for trusted local captures.
 - Request collections may store secret values in `./.clinspect/requests.json`; masking is a UI behavior, not encryption.
@@ -218,7 +247,7 @@ bin/cli.js             CLI executable entrypoint
 src/index.js           Application bootstrap and runtime wiring
 src/engine/            Proxy and manual request sending
 src/recording/         NDJSON disk recording
-src/store/state.js     In-memory traffic log store
+src/store/             Traffic state and temporary history storage
 src/ui/                Ink terminal UI modules and App entrypoint
 test/                  Node.js test suite
 ```
@@ -245,6 +274,7 @@ Implemented:
 - manual request composer with saved local requests
 - full and partial NDJSON recording
 - replay from recorded NDJSON sessions
+- disk-backed temporary history with latest-session restore
 - mouse wheel scrolling in supported terminals
 - cookie masking in the UI by default
 

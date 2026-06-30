@@ -1495,6 +1495,70 @@ test('filterLogs narrows by method, status family, and search text', () => {
   assert.deepEqual(filterLogs(traffic, { statusFilters: ['2xx', '5xx'] }).map((log) => log.id), ['one', 'two']);
 });
 
+test('filterLogs searches cold summary indexes without requiring full headers or bodies', () => {
+  const timestamp = 1700000000000;
+  const coldSummary = {
+    id: 'summary',
+    method: 'GET',
+    path: '/cold',
+    statusCode: 200,
+    timestamp,
+    request: { headers: {}, body: '' },
+    response: { headers: {}, body: '' },
+    search: {
+      host: 'api.local:9443',
+      port: '9443',
+      requestHeaders: 'host: api.local:9443\nx-token: raw-secret',
+      requestHeadersMasked: 'host: api.local:9443\nx-token: [hidden]',
+      responseContentType: 'application/json',
+      responseHeaders: 'content-type: application/json\nset-cookie: sid=raw',
+      responseHeadersMasked: 'content-type: application/json\nset-cookie: [hidden]'
+    },
+    history: {
+      cold: true,
+      summaryOnly: true
+    }
+  };
+  const coldAssetSummary = {
+    ...coldSummary,
+    id: 'asset',
+    path: '/asset-proxy?id=logo',
+    search: {
+      ...coldSummary.search,
+      responseContentType: 'image/png'
+    }
+  };
+
+  assert.deepEqual(getSearchValues(coldSummary, 'host'), ['api.local:9443']);
+  assert.deepEqual(getSearchValues(coldSummary, 'port'), ['9443']);
+  assert.deepEqual(filterLogs([coldSummary], {
+    hideFrameworkAssets: false,
+    searchField: 'headers',
+    searchQuery: 'content-type: application/json'
+  }).map((log) => log.id), ['summary']);
+  assert.deepEqual(filterLogs([coldSummary], {
+    hideFrameworkAssets: false,
+    searchField: 'headers',
+    searchQuery: 'raw-secret'
+  }).map((log) => log.id), []);
+  assert.deepEqual(filterLogs([coldSummary], {
+    hideFrameworkAssets: false,
+    searchField: 'headers',
+    searchQuery: 'raw-secret',
+    showCookieValues: true
+  }).map((log) => log.id), ['summary']);
+  assert.deepEqual(filterLogs([coldSummary], {
+    hideFrameworkAssets: false,
+    searchField: 'body',
+    searchQuery: 'raw-secret'
+  }).map((log) => log.id), []);
+  assert.deepEqual(classifyFrameworkAssetRequest(coldAssetSummary), {
+    framework: null,
+    isAsset: true,
+    reason: 'content-type'
+  });
+});
+
 test('filterLogs auto-hides common frontend framework static traffic by default', () => {
   const createTraffic = (id, path, options = {}) => ({
     id,
@@ -1634,6 +1698,9 @@ test('filter value helpers support multi-select and clearing', () => {
     },
     hideFrameworkAssets: false
   }), '12 shown');
+  assert.equal(formatFilterLabel([], [], 'body', 'secret', {
+    coldEntryCount: 3
+  }), 'search "secret" in body | cold bodies load on inspect');
   assert.equal(formatFilterLabel([], [], 'all', ''), 'none');
 });
 

@@ -8,11 +8,21 @@ import {
   isHelpRequested,
   parseBodyLimit,
   parseCliOptions,
+  parseHistoryHotEntries,
   parsePort,
   parseRecordMode,
   parseTargetUrl
 } from '../src/cli/options.js';
-import { DEFAULT_BODY_LIMIT } from '../src/store/state.js';
+import { DEFAULT_BODY_LIMIT, DEFAULT_HISTORY_HOT_ENTRIES } from '../src/store/state.js';
+
+function historyDefaults(overrides = {}) {
+  return {
+    historyCache: true,
+    historyHotEntries: DEFAULT_HISTORY_HOT_ENTRIES,
+    restoreLastSession: false,
+    ...overrides
+  };
+}
 
 test('parsePort accepts valid TCP ports', () => {
   assert.equal(parsePort('1'), 1);
@@ -31,6 +41,13 @@ test('parseBodyLimit accepts bounded byte counts', () => {
   assert.equal(parseBodyLimit('65536'), 65536);
   assert.throws(() => parseBodyLimit('-1'), /body-limit must be an integer/);
   assert.throws(() => parseBodyLimit('bad'), /body-limit must be an integer/);
+});
+
+test('parseHistoryHotEntries accepts bounded counts', () => {
+  assert.equal(parseHistoryHotEntries('1'), 1);
+  assert.equal(parseHistoryHotEntries('5000'), 5000);
+  assert.throws(() => parseHistoryHotEntries('0'), /history-hot-entries must be an integer/);
+  assert.throws(() => parseHistoryHotEntries('bad'), /history-hot-entries must be an integer/);
 });
 
 test('parseTargetUrl accepts http and https URLs', () => {
@@ -55,7 +72,7 @@ test('recording option helpers validate modes and format default paths', () => {
 });
 
 test('parseCliOptions defaults to demo mode without a target', () => {
-  assert.deepEqual(parseCliOptions(['node', 'clinspect']), {
+  assert.deepEqual(parseCliOptions(['node', 'clinspect']), historyDefaults({
     bodyLimit: DEFAULT_BODY_LIMIT,
     hideFrameworkAssets: true,
     mode: 'demo',
@@ -70,7 +87,7 @@ test('parseCliOptions defaults to demo mode without a target', () => {
     responseEncodingPolicy: 'readable',
     showCookieValues: false,
     targetUrl: null
-  });
+  }));
 });
 
 test('parseCliOptions uses live mode when a target is provided', () => {
@@ -81,7 +98,7 @@ test('parseCliOptions uses live mode when a target is provided', () => {
     'http://localhost:5173',
     '--port',
     '9090'
-  ]), {
+  ]), historyDefaults({
     bodyLimit: DEFAULT_BODY_LIMIT,
     hideFrameworkAssets: true,
     mode: 'live',
@@ -96,7 +113,7 @@ test('parseCliOptions uses live mode when a target is provided', () => {
     responseEncodingPolicy: 'readable',
     showCookieValues: false,
     targetUrl: 'http://localhost:5173/'
-  });
+  }));
 });
 
 test('parseCliOptions supports body capture limit overrides', () => {
@@ -106,6 +123,19 @@ test('parseCliOptions supports body capture limit overrides', () => {
     '--body-limit',
     '131072'
   ]).bodyLimit, 131072);
+});
+
+test('parseCliOptions supports temporary history options', () => {
+  const options = parseCliOptions([
+    'node',
+    'clinspect',
+    '--history-hot-entries',
+    '1200',
+    '--no-history-cache'
+  ]);
+
+  assert.equal(options.historyHotEntries, 1200);
+  assert.equal(options.historyCache, false);
 });
 
 test('parseCliOptions supports preserving upstream response encoding', () => {
@@ -125,7 +155,7 @@ test('parseCliOptions enables browser open flag', () => {
     '--target',
     'https://example.com',
     '--open'
-  ]), {
+  ]), historyDefaults({
     bodyLimit: DEFAULT_BODY_LIMIT,
     hideFrameworkAssets: true,
     mode: 'live',
@@ -140,7 +170,7 @@ test('parseCliOptions enables browser open flag', () => {
     responseEncodingPolicy: 'readable',
     showCookieValues: false,
     targetUrl: 'https://example.com/'
-  });
+  }));
 });
 
 test('parseCliOptions hides framework assets by default and can show them', () => {
@@ -180,7 +210,7 @@ test('parseCliOptions supports cookie privacy flags', () => {
     'node',
     'clinspect',
     '--show-cookie-values'
-  ]), {
+  ]), historyDefaults({
     bodyLimit: DEFAULT_BODY_LIMIT,
     hideFrameworkAssets: true,
     mode: 'demo',
@@ -195,7 +225,7 @@ test('parseCliOptions supports cookie privacy flags', () => {
     responseEncodingPolicy: 'readable',
     showCookieValues: true,
     targetUrl: null
-  });
+  }));
 
   const explicitRawRecording = parseCliOptions([
     'node',
@@ -221,7 +251,7 @@ test('parseCliOptions supports replay mode and rejects live or recording flags',
     'clinspect',
     '--load',
     './captures/session.ndjson'
-  ]), {
+  ]), historyDefaults({
     bodyLimit: DEFAULT_BODY_LIMIT,
     hideFrameworkAssets: true,
     mode: 'replay',
@@ -238,7 +268,7 @@ test('parseCliOptions supports replay mode and rejects live or recording flags',
     sessionPath: './captures/session.ndjson',
     showCookieValues: false,
     targetUrl: null
-  });
+  }));
 
   assert.equal(parseCliOptions([
     'node',
@@ -247,6 +277,30 @@ test('parseCliOptions supports replay mode and rejects live or recording flags',
     './captures/session.ndjson',
     '--show-cookie-values'
   ]).showCookieValues, true);
+
+  assert.deepEqual(parseCliOptions([
+    'node',
+    'clinspect',
+    '--restore-last-session'
+  ]), historyDefaults({
+    bodyLimit: DEFAULT_BODY_LIMIT,
+    hideFrameworkAssets: true,
+    mode: 'history-restore',
+    loadedSession: null,
+    openBrowser: false,
+    port: DEFAULT_PORT,
+    recording: {
+      cookieValuePolicy: 'masked',
+      mode: 'off',
+      path: null
+    },
+    recordCookieValues: false,
+    responseEncodingPolicy: 'readable',
+    sessionPath: null,
+    showCookieValues: false,
+    targetUrl: null,
+    restoreLastSession: true
+  }));
 
   assert.throws(
     () => parseCliOptions(['node', 'clinspect', '--load', './capture.ndjson', '--target', 'http://localhost:3000']),
@@ -276,6 +330,14 @@ test('parseCliOptions supports replay mode and rejects live or recording flags',
     () => parseCliOptions(['node', 'clinspect', '--load', './capture.ndjson', '--record-cookie-values']),
     /load cannot be combined/
   );
+  assert.throws(
+    () => parseCliOptions(['node', 'clinspect', '--restore-last-session', '--target', 'http://localhost:3000']),
+    /restore-last-session cannot be combined/
+  );
+  assert.throws(
+    () => parseCliOptions(['node', 'clinspect', '--restore-last-session', '--load', './capture.ndjson']),
+    /restore-last-session cannot be combined/
+  );
 });
 
 test('help helpers detect help requests and expose command help', () => {
@@ -287,13 +349,16 @@ test('help helpers detect help requests and expose command help', () => {
 
   assert.match(helpText, /Usage: clinspect/);
   assert.match(helpText, /--body-limit <bytes>/);
+  assert.match(helpText, /--history-hot-entries <count>/);
   assert.match(helpText, /--load <path>/);
+  assert.match(helpText, /--restore-last-session/);
   assert.match(helpText, /--target <url>/);
   assert.match(helpText, /--port <number>/);
   assert.match(helpText, /--open/);
   assert.match(helpText, /--preserve-encoding/);
   assert.match(helpText, /--record <mode>/);
   assert.match(helpText, /--record-path <path>/);
+  assert.match(helpText, /--no-history-cache/);
   assert.match(helpText, /--show-framework-assets/);
   assert.match(helpText, /--show-cookie-values/);
   assert.match(helpText, /--record-cookie-values/);

@@ -84,20 +84,33 @@ export function startInspector(options, runtime = {}) {
   const now = runtime.now ?? (() => new Date());
   const startedAt = now();
   const bodyLimit = options.bodyLimit ?? DEFAULT_BODY_LIMIT;
+  const isRecordedReplay = options.mode === 'replay';
+  const isHistoryRestore = options.mode === 'history-restore';
   const loadSession = runtime.loadRecordedSession ?? loadRecordedSession;
-  const loadedSession = options.mode === 'replay'
+  const loadedSession = isRecordedReplay
     ? loadSession(options.sessionPath, {
       bodyLimit,
       showCookieValues: options.showCookieValues
     })
     : null;
-  const maxEntries = options.mode === 'replay'
+  const maxEntries = isRecordedReplay
     ? Math.max(DEFAULT_MAX_ENTRIES, loadedSession.entries.length)
-    : DEFAULT_MAX_ENTRIES;
-  const stateStore = runtime.stateStore ?? new StateStore({
-    bodyLimit,
-    maxEntries
-  });
+    : (options.historyHotEntries ?? DEFAULT_MAX_ENTRIES);
+  const stateStore = runtime.stateStore ?? (isHistoryRestore
+    ? StateStore.restoreLatestTempSession({
+      bodyLimit,
+      historyRoot: options.historyRoot ?? runtime.historyRoot,
+      historyHotEntries: options.historyHotEntries
+    })
+    : new StateStore({
+      bodyLimit,
+      historyCache: !isRecordedReplay && options.historyCache !== false,
+      historyRoot: options.historyRoot ?? runtime.historyRoot,
+      historyHotEntries: options.historyHotEntries,
+      maxEntries,
+      sourceMode: options.mode,
+      targetUrl: options.targetUrl
+    }));
   const renderApp = runtime.renderApp ?? render;
   const startDemoFeed = runtime.startDemoFeed ?? runtime.startFeed ?? startMockTrafficFeed;
   const startProxy = runtime.startLiveProxy ?? startLiveProxy;
@@ -121,7 +134,7 @@ export function startInspector(options, runtime = {}) {
   const sessionStats = createSessionStats();
   const summaryOptions = runtime.summaryTheme ? { theme: runtime.summaryTheme } : {};
   const createRecorder = runtime.createTrafficRecorder ?? createTrafficRecorder;
-  const trafficRecorder = options.mode === 'replay'
+  const trafficRecorder = (isRecordedReplay || isHistoryRestore)
     ? (runtime.trafficRecorder ?? runtime.recorder ?? createNoopRecorder())
     : (runtime.trafficRecorder ?? runtime.recorder ?? createRuntimeRecorder({
       ...options.recording,
@@ -145,7 +158,8 @@ export function startInspector(options, runtime = {}) {
     }
   };
   const handleStatsAdd = (logEntry) => sessionStats.record(logEntry);
-  const appContext = options.mode === 'replay'
+  const restoredHistoryStatus = isHistoryRestore ? stateStore.getHistoryStatus() : null;
+  const appContext = isRecordedReplay
     ? {
       ...options,
       loadedSession: {
@@ -155,12 +169,32 @@ export function startInspector(options, runtime = {}) {
         totalEntries: loadedSession.totalEntries
       }
     }
-    : options;
+    : (isHistoryRestore
+      ? {
+        ...options,
+        mode: 'replay',
+        loadedSession: {
+          endedAt: restoredHistoryStatus.endedAt,
+          metadata: {
+            ...(restoredHistoryStatus.metadata ?? {}),
+            sourceFilename: restoredHistoryStatus.metadata?.sessionId ?? 'temporary-history',
+            sourcePath: restoredHistoryStatus.sessionPath
+          },
+          skippedLines: restoredHistoryStatus.skippedLines ?? 0,
+          totalEntries: restoredHistoryStatus.totalEntries ?? 0
+        },
+        sessionPath: restoredHistoryStatus.sessionPath
+      }
+      : options);
 
   if (loadedSession) {
     loadedSession.entries.forEach((entry) => {
       sessionStats.record(stateStore.addLog(entry));
     });
+  }
+
+  if (isHistoryRestore) {
+    stateStore.getLogs().forEach((entry) => sessionStats.record(entry));
   }
 
   stateStore.on('add', handleStatsAdd);
@@ -169,7 +203,7 @@ export function startInspector(options, runtime = {}) {
 
   let engine;
 
-  if (options.mode === 'replay') {
+  if (isRecordedReplay || isHistoryRestore) {
     engine = createNoopEngine();
   } else if (options.mode === 'live') {
     engine = startProxy(stateStore, {
@@ -210,6 +244,7 @@ export function startInspector(options, runtime = {}) {
       .then(() => {
         stateStore.off('add', handleRecordAdd);
         stateStore.off('add', handleStatsAdd);
+        stateStore.close?.();
 
         return Promise.resolve(trafficRecorder.stop?.())
           .catch((error) => {

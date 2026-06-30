@@ -1,8 +1,9 @@
 import { Command, InvalidArgumentError } from 'commander';
-import { DEFAULT_BODY_LIMIT } from '../store/state.js';
+import { DEFAULT_BODY_LIMIT, DEFAULT_HISTORY_HOT_ENTRIES } from '../store/state.js';
 
 export const DEFAULT_PORT = 8080;
 export const MAX_BODY_LIMIT = 10 * 1024 * 1024;
+export const MAX_HISTORY_HOT_ENTRIES = 100000;
 export const RECORDING_MODES = ['full', 'partial'];
 
 function padTimestampPart(value) {
@@ -45,6 +46,16 @@ export function parseBodyLimit(value) {
   return limit;
 }
 
+export function parseHistoryHotEntries(value) {
+  const count = Number(value);
+
+  if (!Number.isInteger(count) || count < 1 || count > MAX_HISTORY_HOT_ENTRIES) {
+    throw new InvalidArgumentError(`history-hot-entries must be an integer between 1 and ${MAX_HISTORY_HOT_ENTRIES}`);
+  }
+
+  return count;
+}
+
 export function parseTargetUrl(value) {
   try {
     const url = new URL(value);
@@ -74,13 +85,16 @@ export function createProgram() {
     .name('clinspect')
     .description('Terminal HTTP traffic inspector')
     .option('--body-limit <bytes>', 'maximum request/response body bytes to capture', parseBodyLimit, DEFAULT_BODY_LIMIT)
+    .option('--history-hot-entries <count>', 'full traffic entries to keep hot in memory before using temp history', parseHistoryHotEntries, DEFAULT_HISTORY_HOT_ENTRIES)
     .option('--load <path>', 'load a recorded NDJSON session without starting live or demo capture')
+    .option('--restore-last-session', 'restore the latest temporary history session without starting live or demo capture')
     .option('-p, --port <number>', 'local proxy port for live mode', parsePort, DEFAULT_PORT)
     .option('-t, --target <url>', 'upstream target URL for live proxy mode', parseTargetUrl)
     .option('--open', 'open the local proxy URL in a browser for public live targets')
     .option('--preserve-encoding', 'preserve client Accept-Encoding when proxying live traffic')
     .option('--record <mode>', 'record traffic to disk (full|partial)', parseRecordMode)
     .option('--record-path <path>', 'exact NDJSON file path for --record output')
+    .option('--no-history-cache', 'disable temporary disk-backed history and keep only the hot in-memory window')
     .option('--show-framework-assets', 'show framework/dev-server static asset requests in the traffic list')
     .option('--show-cookie-values', 'show raw Cookie and Set-Cookie values in the UI and search')
     .option('--record-cookie-values', 'write raw Cookie and Set-Cookie values to recordings (default with --record)');
@@ -121,7 +135,10 @@ export function parseCliOptions(argv = process.argv) {
 
   const options = program.opts();
   const bodyLimit = options.bodyLimit;
+  const historyHotEntries = options.historyHotEntries;
+  const historyCache = options.historyCache !== false;
   const sessionPath = options.load ?? null;
+  const restoreLastSession = Boolean(options.restoreLastSession);
   const targetUrl = options.target ?? null;
   const recordMode = options.record ?? 'off';
   const hideFrameworkAssets = !Boolean(options.showFrameworkAssets);
@@ -129,8 +146,9 @@ export function parseCliOptions(argv = process.argv) {
   const recordCookieValues = Boolean(options.recordCookieValues);
   const responseEncodingPolicy = options.preserveEncoding ? 'preserve' : 'readable';
 
-  if (sessionPath) {
+  if (sessionPath || restoreLastSession) {
     const hasReplayConflict = Boolean(
+      (sessionPath && restoreLastSession) ||
       targetUrl ||
       options.open ||
       options.record ||
@@ -141,12 +159,14 @@ export function parseCliOptions(argv = process.argv) {
     );
 
     if (hasReplayConflict) {
-      throw new InvalidArgumentError('load cannot be combined with --target, --port, --open, --preserve-encoding, --record, --record-path, or --record-cookie-values');
+      throw new InvalidArgumentError('load cannot be combined with --restore-last-session, --target, --port, --open, --preserve-encoding, --record, --record-path, or --record-cookie-values; restore-last-session cannot be combined with --load or live/recording flags');
     }
 
     return {
-      mode: 'replay',
+      mode: restoreLastSession ? 'history-restore' : 'replay',
       bodyLimit,
+      historyCache: restoreLastSession ? true : historyCache,
+      historyHotEntries,
       loadedSession: null,
       openBrowser: false,
       port: DEFAULT_PORT,
@@ -158,6 +178,7 @@ export function parseCliOptions(argv = process.argv) {
       recordCookieValues: false,
       responseEncodingPolicy,
       hideFrameworkAssets,
+      restoreLastSession,
       sessionPath,
       showCookieValues,
       targetUrl: null
@@ -175,6 +196,8 @@ export function parseCliOptions(argv = process.argv) {
   return {
     mode: targetUrl ? 'live' : 'demo',
     bodyLimit,
+    historyCache,
+    historyHotEntries,
     openBrowser: Boolean(options.open),
     port: options.port,
     recording: {
@@ -187,6 +210,7 @@ export function parseCliOptions(argv = process.argv) {
     recordCookieValues: recordMode !== 'off',
     responseEncodingPolicy,
     hideFrameworkAssets,
+    restoreLastSession: false,
     showCookieValues,
     targetUrl
   };

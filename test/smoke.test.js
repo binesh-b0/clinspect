@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -50,6 +51,31 @@ async function readRecords(filePath) {
   const text = await readFile(filePath, 'utf8');
 
   return text.trim().split('\n').map((line) => JSON.parse(line));
+}
+
+function createTrafficEntry(id, options = {}) {
+  return {
+    id,
+    method: options.method ?? 'GET',
+    path: options.path ?? `/${id}`,
+    statusCode: options.statusCode ?? 200,
+    responseTimeMs: options.responseTimeMs ?? 10,
+    request: {
+      headers: {
+        host: 'localhost:3000',
+        'x-trace': id,
+        ...(options.requestHeaders ?? {})
+      },
+      body: options.requestBody ?? `request-${id}`
+    },
+    response: {
+      headers: {
+        'content-type': 'application/json',
+        ...(options.responseHeaders ?? {})
+      },
+      body: options.responseBody ?? `response-${id}`
+    }
+  };
 }
 
 test('runtime modules import without syntax or ESM errors', async () => {
@@ -574,6 +600,151 @@ test('startInspector can start full recording in the middle of a session', async
   });
 });
 
+test('startInspector creates a disk-backed temporary history store for current-run traffic', async () => {
+  await withTempDir(async (directory) => {
+    const { startInspector } = await import('../src/index.js');
+    const calls = [];
+    let appProps = null;
+    const inspector = startInspector(
+      {
+        mode: 'demo',
+        historyHotEntries: 2,
+        openBrowser: false,
+        port: 8080,
+        recording: {
+          mode: 'off',
+          path: null
+        },
+        targetUrl: null
+      },
+      {
+        historyRoot: directory,
+        stdout: createSilentStdout(),
+        renderApp: (node) => {
+          appProps = node.props;
+          calls.push(['render', node.props.context.mode]);
+
+          return {
+            unmount() {
+              calls.push(['unmount']);
+            }
+          };
+        },
+        startDemoFeed: () => ({
+          stop() {
+            calls.push(['engine-stop']);
+          }
+        }),
+        exitProcess: (code) => {
+          calls.push(['exit', code]);
+        }
+      }
+    );
+
+    inspector.stateStore.addLog(createTrafficEntry('one'));
+    inspector.stateStore.addLog(createTrafficEntry('two'));
+    inspector.stateStore.addLog(createTrafficEntry('three'));
+
+    const status = inspector.stateStore.getHistoryStatus();
+    const logs = inspector.stateStore.getLogs();
+
+    assert.equal(appProps.stateStore, inspector.stateStore);
+    assert.equal(status.enabled, true);
+    assert.equal(status.totalEntries, 3);
+    assert.equal(status.hotEntries, 2);
+    assert.equal(status.coldEntries, 1);
+    assert.equal(status.sessionPath.startsWith(directory), true);
+    assert.equal(fs.existsSync(status.sessionPath), true);
+    assert.deepEqual(logs.map((log) => [log.id, log.history.cold]), [
+      ['one', true],
+      ['two', false],
+      ['three', false]
+    ]);
+    assert.equal(inspector.stateStore.getLogById('one').response.body, 'response-one');
+
+    await inspector.stop();
+
+    const manifest = JSON.parse(await readFile(path.join(status.sessionPath, 'manifest.json'), 'utf8'));
+
+    assert.equal(typeof manifest.endedAt, 'string');
+    assert.deepEqual(calls, [
+      ['render', 'demo'],
+      ['unmount'],
+      ['engine-stop'],
+      ['exit', 0]
+    ]);
+  });
+});
+
+test('temporary history still emits full add entries for permanent recording', async () => {
+  await withTempDir(async (directory) => {
+    const { startInspector } = await import('../src/index.js');
+    const calls = [];
+    const recorder = {
+      getStatus() {
+        return {
+          mode: 'full',
+          path: './capture.ndjson',
+          state: 'recording',
+          error: null
+        };
+      },
+      recordCapture(log) {
+        calls.push(['record', log.id, log.request.body, log.response.body, log.request.headers['x-trace']]);
+      },
+      recordInteraction() {},
+      stop() {
+        calls.push(['recorder-stop']);
+      }
+    };
+    const inspector = startInspector(
+      {
+        mode: 'demo',
+        historyHotEntries: 1,
+        openBrowser: false,
+        port: 8080,
+        recording: {
+          mode: 'full',
+          path: './capture.ndjson'
+        },
+        targetUrl: null
+      },
+      {
+        historyRoot: directory,
+        stdout: createSilentStdout(),
+        recorder,
+        renderApp: () => ({
+          unmount() {
+            calls.push(['unmount']);
+          }
+        }),
+        startDemoFeed: () => ({
+          stop() {
+            calls.push(['engine-stop']);
+          }
+        }),
+        exitProcess: (code) => {
+          calls.push(['exit', code]);
+        }
+      }
+    );
+
+    inspector.stateStore.addLog(createTrafficEntry('one'));
+    inspector.stateStore.addLog(createTrafficEntry('two'));
+
+    assert.deepEqual(calls, [
+      ['record', 'one', 'request-one', 'response-one', 'one'],
+      ['record', 'two', 'request-two', 'response-two', 'two']
+    ]);
+    assert.deepEqual(inspector.stateStore.getLogs().map((log) => [log.id, log.history.cold]), [
+      ['one', true],
+      ['two', false]
+    ]);
+
+    await inspector.stop();
+  });
+});
+
 test('startInspector loads replay sessions without starting capture engines', async () => {
   const { startInspector } = await import('../src/index.js');
   const calls = [];
@@ -654,6 +825,92 @@ test('startInspector loads replay sessions without starting capture engines', as
     ['write', '\nGood bye.\n\nSession summary\n  Runtime       1m 5s\n  Requests      105\n  Status        2xx 0  3xx 0  4xx 0  5xx 0  other 105\n  Avg response  0ms\n'],
     ['exit', 0]
   ]);
+});
+
+test('startInspector restores the latest temporary history session in replay-like mode', async () => {
+  await withTempDir(async (directory) => {
+    const { startInspector } = await import('../src/index.js');
+    const seedStore = new StateStore({
+      bodyLimit: 1000,
+      historyCache: true,
+      historyHotEntries: 1,
+      historyRoot: directory,
+      sourceMode: 'live',
+      targetUrl: 'http://localhost:3000/'
+    });
+
+    seedStore.addLog(createTrafficEntry('one'));
+    seedStore.addLog(createTrafficEntry('two'));
+    const sessionPath = seedStore.getHistoryStatus().sessionPath;
+    seedStore.close();
+
+    const calls = [];
+    const inspector = startInspector(
+      {
+        mode: 'history-restore',
+        historyHotEntries: 1,
+        openBrowser: false,
+        port: 8080,
+        recording: {
+          mode: 'off',
+          path: null
+        },
+        restoreLastSession: true,
+        targetUrl: null
+      },
+      {
+        historyRoot: directory,
+        stdout: createSilentStdout(),
+        loadRecordedSession: () => {
+          throw new Error('recorded replay loader should not run for temp history restore');
+        },
+        renderApp: (node) => {
+          calls.push([
+            'render',
+            node.props.context.mode,
+            node.props.context.loadedSession.totalEntries,
+            node.props.context.loadedSession.metadata.sourceMode,
+            node.props.context.sessionPath === sessionPath
+          ]);
+
+          return {
+            unmount() {
+              calls.push(['unmount']);
+            }
+          };
+        },
+        startDemoFeed: () => {
+          throw new Error('demo feed should not start in history restore mode');
+        },
+        startLiveProxy: () => {
+          throw new Error('live proxy should not start in history restore mode');
+        },
+        exitProcess: (code) => {
+          calls.push(['exit', code]);
+        }
+      }
+    );
+
+    const summaries = inspector.stateStore.getLogs();
+
+    assert.deepEqual(summaries.map((log) => [log.id, log.history.cold]), [
+      ['one', true],
+      ['two', true]
+    ]);
+    assert.equal(inspector.stateStore.getHistoryStatus().restored, true);
+    assert.equal(inspector.stateStore.getLogById('two').response.body, 'response-two');
+    assert.deepEqual(calls, [
+      ['render', 'replay', 2, 'live', true]
+    ]);
+
+    await inspector.stop();
+
+    assert.deepEqual(calls, [
+      ['render', 'replay', 2, 'live', true],
+      ['unmount'],
+      ['exit', 0]
+    ]);
+  });
 });
 
 test('shouldOpenProxyUrl only enables public live targets with --open', async () => {
