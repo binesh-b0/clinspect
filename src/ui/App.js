@@ -3157,12 +3157,10 @@ const RequestComposerPanel = React.memo(function RequestComposerPanel({
 
 export const HELP_SECTIONS = [
   {
-    title: 'Navigation',
+    title: 'Move',
     rows: [
       ['j/k', 'move line'],
-      ['up/down', 'move line'],
       ['[ / ]', 'move page'],
-      ['PgUp/PgDn', 'move page'],
       ['Ctrl-u/d', 'move half page'],
       ['g/G', 'top / bottom'],
       ['tab', 'switch pane']
@@ -3173,10 +3171,19 @@ export const HELP_SECTIONS = [
     rows: [
       ['enter', 'inspect row'],
       ['r', 'request / response'],
-      ['o', 'open details modal'],
-      ['/', 'find in details'],
+      ['o', 'details modal'],
+      ['/', 'find details'],
       ['n / N', 'next / previous match'],
-      ['wheel', 'scroll hovered pane']
+      ['wheel', 'scroll pane']
+    ]
+  },
+  {
+    title: 'Filter',
+    rows: [
+      ['/', 'text search'],
+      ['m / s', 'method / status'],
+      ['space', 'toggle option'],
+      ['x', 'clear filters']
     ]
   },
   {
@@ -3187,86 +3194,83 @@ export const HELP_SECTIONS = [
       ['E', 'edit and resend'],
       ['e', 'edit selected request'],
       ['l', 'saved requests'],
-      ['1 params', 'open params'],
-      ['3 body', 'open body'],
-      ['4 auth', 'open auth'],
-      ['[ / ]', 'previous / next section'],
+      ['1-7', 'jump sections'],
       ['a/d', 'add / delete row'],
       ['space', 'enable / disable row'],
-      ['R in editor', 'reveal / mask secrets'],
-      ['enter', 'preview request'],
-      ['enter/y', 'confirm send'],
+      ['enter/y', 'preview / send'],
       ['esc', 'close composer']
     ]
   },
   {
-    title: 'Filters',
-    rows: [
-      ['/', 'text search'],
-      ['m / s', 'method / status'],
-      ['space', 'toggle option'],
-      ['x', 'clear filters']
-    ]
-  },
-  {
-    title: 'Display',
+    title: 'Display / Export',
     rows: [
       ['t', 'cycle path mode'],
       ['v', 'cycle list density'],
       ['F', 'show / hide static'],
-      ['L', 'list display modal']
-    ]
-  },
-  {
-    title: 'Capture',
-    rows: [
-      ['p', 'pause capture'],
-      ['P', 'start / pause recording'],
-      ['S', 'stop recording']
-    ]
-  },
-  {
-    title: 'Export',
-    rows: [
-      ['y', 'copy focused item'],
-      ['D', 'download focused item'],
+      ['L', 'list display modal'],
+      ['y', 'copy item'],
+      ['D', 'download item'],
       ['m / r', 'masked / raw export']
     ]
   },
   {
-    title: 'Session',
+    title: 'Capture / Session',
     rows: [
+      ['p', 'pause capture'],
+      ['P', 'record on/off'],
+      ['S', 'stop recording'],
       ['f', 'follow latest'],
       ['c', 'clear logs'],
-      ['h', 'help'],
-      ['q', 'quit']
+      ['h/q', 'help / quit']
     ]
   }
 ];
 
+const HELP_KEY_WIDTH = 10;
+const HELP_COLUMN_GAP_WIDTH = 3;
+
+function getHelpSectionHeight(section) {
+  return section.rows.length + 2;
+}
+
+function getHelpColumns(sections) {
+  const columns = [[], []];
+  const heights = [0, 0];
+
+  sections.forEach((section) => {
+    const columnIndex = heights[0] <= heights[1] ? 0 : 1;
+
+    columns[columnIndex].push(section);
+    heights[columnIndex] += getHelpSectionHeight(section);
+  });
+
+  return columns;
+}
+
 function renderHelpSections(sections, width) {
-  return sections.flatMap((section) => [
+  return sections.flatMap((section, sectionIndex) => [
     h(Text, { key: `${section.title}-title`, bold: true, color: 'cyan' }, section.title),
     ...section.rows.map(([keys, description]) => h(
       Box,
       { key: `${section.title}-${keys}`, width },
-      h(Text, { color: 'cyan' }, pad(keys, 12)),
+      h(Text, { color: 'cyan' }, pad(keys, HELP_KEY_WIDTH)),
       h(Text, { wrap: 'truncate' }, description)
     )),
-    h(Text, { key: `${section.title}-space` }, '')
-  ]);
+    sectionIndex < sections.length - 1
+      ? h(Text, { key: `${section.title}-space` }, '')
+      : null
+  ].filter(Boolean));
 }
 
 const HelpModal = React.memo(function HelpModal() {
   const columns = Number.isFinite(process.stdout.columns) && process.stdout.columns > 0
     ? process.stdout.columns
     : 80;
-  const width = Math.max(34, Math.min(86, columns - 4));
-  const useColumns = width >= 72;
+  const width = Math.max(34, Math.min(76, columns - 6));
+  const useColumns = width >= 68;
   const contentWidth = Math.max(26, width - 6);
-  const columnWidth = useColumns ? Math.floor((contentWidth - 2) / 2) : contentWidth;
-  const leftSections = HELP_SECTIONS.filter((_, index) => index % 2 === 0);
-  const rightSections = HELP_SECTIONS.filter((_, index) => index % 2 === 1);
+  const columnWidth = useColumns ? Math.floor((contentWidth - HELP_COLUMN_GAP_WIDTH) / 2) : contentWidth;
+  const [leftSections, rightSections] = getHelpColumns(HELP_SECTIONS);
 
   return h(
     Box,
@@ -3286,14 +3290,14 @@ const HelpModal = React.memo(function HelpModal() {
         width
       },
       h(Text, { bold: true, color: 'cyan' }, 'Help'),
-      h(Text, { color: 'gray' }, 'Essential key bindings'),
+      h(Text, { color: 'gray' }, 'Daily keys'),
       h(Text, {}, ''),
       useColumns
         ? h(
           Box,
           { flexDirection: 'row' },
           h(Box, { flexDirection: 'column', width: columnWidth }, ...renderHelpSections(leftSections, columnWidth)),
-          h(Box, { width: 2 }, h(Text, {}, '')),
+          h(Box, { width: HELP_COLUMN_GAP_WIDTH }, h(Text, {}, '')),
           h(Box, { flexDirection: 'column', width: columnWidth }, ...renderHelpSections(rightSections, columnWidth))
         )
         : h(Box, { flexDirection: 'column' }, ...renderHelpSections(HELP_SECTIONS, contentWidth)),

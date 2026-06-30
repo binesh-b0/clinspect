@@ -683,22 +683,23 @@ test('footer text shows mode-aware essential keymaps', () => {
 });
 
 test('help sections describe starting, pausing, and stopping recording', () => {
-  const captureSection = HELP_SECTIONS.find((section) => section.title === 'Capture');
+  const captureSection = HELP_SECTIONS.find((section) => section.title === 'Capture / Session');
 
-  assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'P'), ['P', 'start / pause recording']);
+  assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'p'), ['p', 'pause capture']);
+  assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'P'), ['P', 'record on/off']);
   assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'S'), ['S', 'stop recording']);
 });
 
 test('help sections describe copy and download exports', () => {
-  const exportSection = HELP_SECTIONS.find((section) => section.title === 'Export');
+  const exportSection = HELP_SECTIONS.find((section) => section.title === 'Display / Export');
 
-  assert.deepEqual(exportSection.rows.find(([keys]) => keys === 'y'), ['y', 'copy focused item']);
-  assert.deepEqual(exportSection.rows.find(([keys]) => keys === 'D'), ['D', 'download focused item']);
+  assert.deepEqual(exportSection.rows.find(([keys]) => keys === 'y'), ['y', 'copy item']);
+  assert.deepEqual(exportSection.rows.find(([keys]) => keys === 'D'), ['D', 'download item']);
   assert.deepEqual(exportSection.rows.find(([keys]) => keys === 'm / r'), ['m / r', 'masked / raw export']);
 });
 
 test('help sections describe traffic list display controls', () => {
-  const displaySection = HELP_SECTIONS.find((section) => section.title === 'Display');
+  const displaySection = HELP_SECTIONS.find((section) => section.title === 'Display / Export');
 
   assert.deepEqual(displaySection.rows.find(([keys]) => keys === 't'), ['t', 'cycle path mode']);
   assert.deepEqual(displaySection.rows.find(([keys]) => keys === 'v'), ['v', 'cycle list density']);
@@ -707,9 +708,12 @@ test('help sections describe traffic list display controls', () => {
 });
 
 test('help sections describe bracket page movement', () => {
-  const navigationSection = HELP_SECTIONS.find((section) => section.title === 'Navigation');
+  const navigationSection = HELP_SECTIONS.find((section) => section.title === 'Move');
 
   assert.deepEqual(navigationSection.rows.find(([keys]) => keys === '[ / ]'), ['[ / ]', 'move page']);
+  assert.deepEqual(navigationSection.rows.find(([keys]) => keys === 'j/k'), ['j/k', 'move line']);
+  assert.deepEqual(navigationSection.rows.find(([keys]) => keys === 'g/G'), ['g/G', 'top / bottom']);
+  assert.deepEqual(navigationSection.rows.find(([keys]) => keys === 'tab'), ['tab', 'switch pane']);
 });
 
 test('help sections describe request composer keys', () => {
@@ -720,12 +724,10 @@ test('help sections describe request composer keys', () => {
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'E'), ['E', 'edit and resend']);
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'e'), ['e', 'edit selected request']);
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'l'), ['l', 'saved requests']);
-  assert.deepEqual(composeSection.rows.find(([keys]) => keys === '1 params'), ['1 params', 'open params']);
-  assert.deepEqual(composeSection.rows.find(([keys]) => keys === '3 body'), ['3 body', 'open body']);
-  assert.deepEqual(composeSection.rows.find(([keys]) => keys === '4 auth'), ['4 auth', 'open auth']);
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === '1-7'), ['1-7', 'jump sections']);
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'a/d'), ['a/d', 'add / delete row']);
-  assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'enter'), ['enter', 'preview request']);
-  assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'enter/y'), ['enter/y', 'confirm send']);
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'space'), ['space', 'enable / disable row']);
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'enter/y'), ['enter/y', 'preview / send']);
 });
 
 test('composer helpers create blank and cloned request state', () => {
