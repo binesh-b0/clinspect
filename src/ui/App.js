@@ -5,7 +5,11 @@ import {
   normalizeManualResendMetadata,
   normalizeManualRequestDraft
 } from '../engine/manual-request.js';
-import { createNextPageRequestDraftFromLog } from '../pagination.js';
+import {
+  analyzePagination,
+  createNextPageRequestDraftFromLog,
+  formatPaginationNextStatus
+} from '../pagination.js';
 import {
   copyTextToClipboard,
   createTrafficExport,
@@ -91,6 +95,15 @@ import {
   ResendConfirmBar
 } from './chrome.js';
 import {
+  RequestActivityPage,
+  ToastNotification,
+  createRequestActivity,
+  failRequestActivity,
+  finishRequestActivity,
+  formatRequestActivityRow,
+  formatRequestActivityToast
+} from './request-activity.js';
+import {
   KeyboardControls,
   getCommandSuggestionIndex,
   resolveCommandInput
@@ -99,7 +112,8 @@ import { normalizeKeyBindings } from './key-bindings.js';
 
 export {
   analyzePagination,
-  createNextPageRequestDraftFromLog
+  createNextPageRequestDraftFromLog,
+  formatPaginationNextStatus
 } from '../pagination.js';
 export {
   DEFAULT_TRAFFIC_LIST_DISPLAY,
@@ -181,6 +195,15 @@ export {
   getCommandHelpRows
 } from './chrome.js';
 export {
+  RequestActivityPage,
+  ToastNotification,
+  createRequestActivity,
+  failRequestActivity,
+  finishRequestActivity,
+  formatRequestActivityRow,
+  formatRequestActivityToast
+} from './request-activity.js';
+export {
   DEFAULT_KEY_BINDINGS,
   getBindingLabel,
   matchesKeyBinding,
@@ -259,6 +282,10 @@ export function App({
     }),
     isOpen: false
   }));
+  const [requestActivities, setRequestActivities] = useState([]);
+  const [selectedRequestActivityId, setSelectedRequestActivityId] = useState(null);
+  const [isRequestActivityOpen, setIsRequestActivityOpen] = useState(false);
+  const [toast, setToast] = useState(null);
   const isReplayMode = context.mode === 'replay';
   const isLiveMode = context.mode === 'live';
   const showCookieValues = Boolean(context.showCookieValues);
@@ -278,6 +305,11 @@ export function App({
     totalEntries: logs.length
   };
   const frameworkSummary = useMemo(() => summarizeFrameworkAssets(logs), [logs]);
+  const clinspectSentLogIds = useMemo(() => new Set(
+    requestActivities
+      .filter((activity) => activity.state === 'success' && activity.logId)
+      .map((activity) => String(activity.logId))
+  ), [requestActivities]);
   const paneLayout = getPaneLayout(trafficListDisplay);
   const trafficPaneWidth = paneLayout.trafficPaneWidth;
 
@@ -309,11 +341,35 @@ export function App({
   }, [trafficRecorder]);
 
   useEffect(() => {
+    if (!toast?.message) {
+      return undefined;
+    }
+
+    const timeout = setTimeout(() => {
+      setToast((current) => current?.id === toast.id ? null : current);
+    }, toast.timeoutMs ?? 3000);
+
+    return () => clearTimeout(timeout);
+  }, [toast]);
+
+  useEffect(() => {
     const resolveOptions = { followLatest: isFollowingLatest };
 
     setSelectedLogId((currentId) => resolveSelectedLogId(filteredLogs, currentId, resolveOptions));
     setInspectedLogId((currentId) => resolveSelectedLogId(filteredLogs, currentId, resolveOptions));
   }, [filteredLogs, isFollowingLatest]);
+
+  useEffect(() => {
+    setSelectedRequestActivityId((currentId) => {
+      if (requestActivities.length === 0) {
+        return null;
+      }
+
+      return requestActivities.some((activity) => activity.id === currentId)
+        ? currentId
+        : requestActivities[0].id;
+    });
+  }, [requestActivities]);
 
   useEffect(() => {
     setDetailScrollOffset(0);
@@ -513,6 +569,139 @@ export function App({
     });
   };
 
+  const showToast = (message, kind = 'info', options = {}) => {
+    setToast({
+      id: `toast-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind,
+      message,
+      timeoutMs: options.timeoutMs ?? 3000
+    });
+  };
+
+  const startRequestActivity = (source, draft) => {
+    const activity = createRequestActivity({ source, draft });
+
+    setRequestActivities((current) => [activity, ...current]);
+    setSelectedRequestActivityId(activity.id);
+    showToast(formatRequestActivityToast(activity, { state: 'sending' }), 'info');
+
+    return activity;
+  };
+
+  const updateRequestActivity = (activity) => {
+    setRequestActivities((current) => current.map((item) => (
+      item.id === activity.id ? activity : item
+    )));
+    setSelectedRequestActivityId(activity.id);
+  };
+
+  const finishTrackedRequest = (activity, logEntry) => {
+    const completed = finishRequestActivity(activity, logEntry);
+
+    updateRequestActivity(completed);
+    showToast(formatRequestActivityToast(completed), 'success');
+
+    return completed;
+  };
+
+  const failTrackedRequest = (activity, error) => {
+    const failed = failRequestActivity(activity, error);
+
+    updateRequestActivity(failed);
+    showToast(formatRequestActivityToast(failed), 'error', { timeoutMs: 5000 });
+
+    return failed;
+  };
+
+  const getNextPageUnavailableStatus = (log) => {
+    const pagination = analyzePagination(log);
+
+    if (!pagination.detected) {
+      return 'no pagination detected';
+    }
+
+    return pagination.unavailableReason || 'no next page detected';
+  };
+
+  const openRequestActivity = () => {
+    setIsRequestActivityOpen(true);
+    setSelectedRequestActivityId((currentId) => {
+      if (requestActivities.some((activity) => activity.id === currentId)) {
+        return currentId;
+      }
+
+      return requestActivities[0]?.id ?? null;
+    });
+    setIsFilterOpen(false);
+    setIsDetailSearchOpen(false);
+    setIsDetailModalOpen(false);
+    setIsHelpOpen(false);
+    setIsListDisplayOpen(false);
+    setPendingExport(null);
+    setPendingResend(null);
+  };
+
+  const moveRequestActivity = (direction) => {
+    if (requestActivities.length === 0) {
+      setSelectedRequestActivityId(null);
+      return;
+    }
+
+    const currentIndex = requestActivities.findIndex((activity) => activity.id === selectedRequestActivityId);
+    const safeIndex = currentIndex === -1 ? 0 : currentIndex;
+    const nextIndex = Math.max(0, Math.min(requestActivities.length - 1, safeIndex + direction));
+
+    setSelectedRequestActivityId(requestActivities[nextIndex].id);
+  };
+
+  const moveRequestActivityTo = (boundary) => {
+    if (requestActivities.length === 0) {
+      setSelectedRequestActivityId(null);
+      return;
+    }
+
+    setSelectedRequestActivityId(boundary === 'last'
+      ? requestActivities[requestActivities.length - 1].id
+      : requestActivities[0].id);
+  };
+
+  const inspectRequestActivity = () => {
+    const activity = requestActivities.find((item) => item.id === selectedRequestActivityId);
+
+    if (!activity) {
+      showToast('no sent request selected', 'error');
+      return;
+    }
+
+    if (activity.state === 'sending') {
+      showToast('request still sending', 'info');
+      return;
+    }
+
+    if (!activity.logId) {
+      showToast(activity.error ? `request failed: ${activity.error}` : 'no captured log for request', 'error');
+      return;
+    }
+
+    const log = stateStore.getLogById?.(activity.logId);
+
+    if (!log) {
+      showToast('captured log not found', 'error');
+      return;
+    }
+
+    clearFilters();
+    setLogs(stateStore.getLogs());
+    setSelectedLogId(log.id);
+    setInspectedLogId(log.id);
+    setIsRequestActivityOpen(false);
+    setIsListFocused(false);
+    setDetailTab('response');
+    setDetailScrollOffset(0);
+    setFocusedDetailRow(0);
+    showToast(`opened ${activity.method} ${activity.url}`, 'success');
+  };
+
   const runCommandAction = (resolvedCommand) => {
     const { action, command } = resolvedCommand;
     const completedStatus = `ran :${command.name}`;
@@ -537,6 +726,14 @@ export function App({
       case 'openNextPage':
         closeCompletedCommand('');
         openNextPageComposer();
+        break;
+      case 'sendNextPage':
+        closeCompletedCommand('');
+        sendNextPageNow();
+        break;
+      case 'openRequestActivity':
+        closeCompletedCommand('');
+        openRequestActivity();
         break;
       case 'stopRecording':
         if (isReplayMode) {
@@ -673,6 +870,7 @@ export function App({
     setIsDetailSearchOpen(false);
     setIsDetailModalOpen(false);
     setIsHelpOpen(false);
+    setIsRequestActivityOpen(false);
     setPendingExport(null);
     setPendingResend(null);
   };
@@ -724,6 +922,7 @@ export function App({
       return;
     }
 
+    setIsRequestActivityOpen(false);
     setPendingExport({
       action,
       log: exportLog,
@@ -816,6 +1015,7 @@ export function App({
     setIsDetailModalOpen(false);
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
+    setIsRequestActivityOpen(false);
   };
 
   const openComposerLibrary = () => {
@@ -837,23 +1037,33 @@ export function App({
     setIsDetailModalOpen(false);
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
+    setIsRequestActivityOpen(false);
   };
 
   const openNextPageComposer = () => {
     if (!isLiveMode) {
-      setResendStatus('next page unavailable in replay mode');
+      const status = 'next page unavailable in replay mode';
+
+      setResendStatus(status);
+      showToast(status, 'error');
       return;
     }
 
     if (typeof manualRequestSender !== 'function') {
-      setResendStatus('manual sender unavailable');
+      const status = 'manual sender unavailable';
+
+      setResendStatus(status);
+      showToast(status, 'error');
       return;
     }
 
     const sourceLog = getManualActionLog();
 
     if (!sourceLog) {
-      setResendStatus('no request selected');
+      const status = 'no request selected';
+
+      setResendStatus(status);
+      showToast(status, 'error');
       return;
     }
 
@@ -862,7 +1072,10 @@ export function App({
     });
 
     if (!plan) {
-      setResendStatus('no next page detected');
+      const status = getNextPageUnavailableStatus(sourceLog);
+
+      setResendStatus(status);
+      showToast(status, 'error');
       return;
     }
 
@@ -873,9 +1086,7 @@ export function App({
       error: plan.blockers?.[0] ?? '',
       resend: plan.resend,
       source: 'next-page',
-      status: plan.pagination?.nextRequest?.source === 'link'
-        ? 'next page from Link header'
-        : 'next page from query params',
+      status: formatPaginationNextStatus(plan.pagination),
       warnings: [...(plan.blockers ?? []), ...(plan.warnings ?? [])]
     }));
     setPendingResend(null);
@@ -885,6 +1096,91 @@ export function App({
     setIsDetailModalOpen(false);
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
+    setIsRequestActivityOpen(false);
+  };
+
+  const sendNextPageNow = () => {
+    if (!isLiveMode) {
+      const status = 'next page unavailable in replay mode';
+
+      setResendStatus(status);
+      showToast(status, 'error');
+      return;
+    }
+
+    if (composer.isSending || isResending) {
+      const status = 'request already sending';
+
+      setResendStatus(status);
+      showToast(status, 'info');
+      return;
+    }
+
+    if (typeof manualRequestSender !== 'function') {
+      const status = 'manual sender unavailable';
+
+      setResendStatus(status);
+      showToast(status, 'error');
+      return;
+    }
+
+    const sourceLog = getManualActionLog();
+
+    if (!sourceLog) {
+      const status = 'no request selected';
+
+      setResendStatus(status);
+      showToast(status, 'error');
+      return;
+    }
+
+    const plan = createNextPageRequestDraftFromLog(sourceLog, {
+      environment: manualLibrary.environment
+    });
+
+    if (!plan) {
+      const status = getNextPageUnavailableStatus(sourceLog);
+
+      setResendStatus(status);
+      showToast(status, 'error');
+      return;
+    }
+
+    if ((plan.blockers ?? []).length > 0) {
+      const status = `edit required: ${plan.blockers[0]}`;
+
+      setResendStatus(status);
+      showToast(status, 'error');
+      return;
+    }
+
+    const activity = startRequestActivity('send-next-page', plan.draft);
+    const status = `sending ${plan.summary?.method ?? plan.draft.method} ${plan.summary?.path ?? plan.draft.url}`;
+
+    setIsRequestActivityOpen(true);
+    setPendingResend(null);
+    setResendStatus(status);
+    setIsFilterOpen(false);
+    setIsDetailSearchOpen(false);
+    setIsDetailModalOpen(false);
+    setIsHelpOpen(false);
+    setIsListDisplayOpen(false);
+
+    Promise.resolve()
+      .then(() => manualRequestSender({
+        ...plan.draft,
+        resend: plan.resend
+      }))
+      .then((logEntry) => {
+        const addedLog = commitManualLog(logEntry, plan.resend);
+
+        finishTrackedRequest(activity, addedLog);
+        setResendStatus(`sent ${plan.summary?.method ?? plan.draft.method} ${plan.summary?.path ?? plan.draft.url}`);
+      })
+      .catch((error) => {
+        failTrackedRequest(activity, error);
+        setResendStatus(`send failed: ${error?.message ?? String(error)}`);
+      });
   };
 
   const sendResendPlan = (plan) => {
@@ -908,6 +1204,7 @@ export function App({
     }
 
     setIsResending(true);
+    const activity = startRequestActivity('resend', plan.draft);
     setResendStatus(`resending ${plan.summary?.method ?? plan.draft.method} ${plan.summary?.path ?? plan.draft.url}`);
 
     Promise.resolve()
@@ -916,11 +1213,14 @@ export function App({
         resend: plan.resend
       }))
       .then((logEntry) => {
-        commitManualLog(logEntry, plan.resend);
+        const addedLog = commitManualLog(logEntry, plan.resend);
+
+        finishTrackedRequest(activity, addedLog);
         setPendingResend(null);
         setResendStatus(`resent ${plan.summary?.method ?? plan.draft.method} ${plan.summary?.path ?? plan.draft.url}`);
       })
       .catch((error) => {
+        failTrackedRequest(activity, error);
         setResendStatus(`resend failed: ${error?.message ?? String(error)}`);
       })
       .finally(() => {
@@ -962,6 +1262,7 @@ export function App({
       setIsDetailSearchOpen(false);
       setIsHelpOpen(false);
       setIsListDisplayOpen(false);
+      setIsRequestActivityOpen(false);
       return;
     }
 
@@ -970,6 +1271,7 @@ export function App({
     setIsDetailSearchOpen(false);
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
+    setIsRequestActivityOpen(false);
     sendResendPlan(plan);
   };
 
@@ -998,6 +1300,7 @@ export function App({
     setIsDetailModalOpen(false);
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
+    setIsRequestActivityOpen(false);
   };
 
   const cancelResend = () => {
@@ -1082,6 +1385,10 @@ export function App({
         action: 'edit-resend'
       })
       : null;
+    const activitySource = composer.source === 'next-page'
+      ? 'next-page'
+      : (resend ? 'edit-resend' : (composer.source === 'library' ? 'library' : 'composer'));
+    const activity = startRequestActivity(activitySource, composer.draft);
 
     setComposer((current) => ({
       ...current,
@@ -1096,7 +1403,9 @@ export function App({
         resend
       } : composer.draft))
       .then((logEntry) => {
-        commitManualLog(logEntry, resend);
+        const addedLog = commitManualLog(logEntry, resend);
+
+        finishTrackedRequest(activity, addedLog);
         setComposer((current) => ({
           ...current,
           isConfirmOpen: false,
@@ -1105,6 +1414,7 @@ export function App({
         }));
       })
       .catch((error) => {
+        failTrackedRequest(activity, error);
         setComposer((current) => ({
           ...current,
           error: error?.message ?? String(error),
@@ -1126,6 +1436,7 @@ export function App({
     frameworkSummary,
     historyStatus,
     hideFrameworkAssets,
+    clinspectSentLogIds,
     listDisplay: trafficListDisplay,
     marginRight: paneLayout.showTrafficPane && paneLayout.showDetailPane ? paneLayout.gapWidth : 0,
     methodFilters,
@@ -1152,6 +1463,11 @@ export function App({
     paneLayout.showTrafficPane ? trafficListNode : null,
     paneLayout.showDetailPane ? detailPaneNode : null
   ].filter(Boolean);
+  const requestActivityNode = h(RequestActivityPage, {
+    activities: requestActivities,
+    keyBindings,
+    selectedId: selectedRequestActivityId
+  });
 
   return h(
     Box,
@@ -1166,6 +1482,7 @@ export function App({
         isListFocused,
         isHelpOpen,
         isListDisplayOpen,
+        isRequestActivityOpen,
         isFilterOpen,
         isDetailSearchOpen,
         isDetailModalOpen,
@@ -1211,6 +1528,7 @@ export function App({
         onClearFilters: clearFilters,
         onClearLogs: clearLogs,
         onCloseDetailModal: () => setIsDetailModalOpen(false),
+        onCloseRequestActivity: () => setIsRequestActivityOpen(false),
         onCloseComposer: () => {
           setComposer((current) => ({
             ...current,
@@ -1289,6 +1607,8 @@ export function App({
           setIsFollowingLatest(false);
         },
         onMoveListDisplayFocus: moveListDisplayFocus,
+        onMoveRequestActivity: moveRequestActivity,
+        onMoveRequestActivityTo: moveRequestActivityTo,
         onMoveComposerCursor: (direction) => setComposer((current) => moveComposerCursor(current, direction)),
         onMoveComposerCursorTo: (boundary) => setComposer((current) => moveComposerCursorTo(current, boundary)),
         onMoveComposerHorizontal: (direction) => setComposer((current) => cycleFocusedComposerOption(current, direction)),
@@ -1317,6 +1637,7 @@ export function App({
           setIsFilterOpen(true);
           setIsDetailSearchOpen(false);
           setIsListDisplayOpen(false);
+          setIsRequestActivityOpen(false);
           setIsFollowingLatest(false);
         },
         onOpenDetailModal: () => {
@@ -1325,12 +1646,14 @@ export function App({
             setIsListFocused(false);
             setIsFilterOpen(false);
             setIsListDisplayOpen(false);
+            setIsRequestActivityOpen(false);
           }
         },
         onOpenDetailSearch: () => {
           setIsDetailSearchOpen(true);
           setIsFilterOpen(false);
           setIsListDisplayOpen(false);
+          setIsRequestActivityOpen(false);
           setIsListFocused(false);
         },
         onOpenComposer: openComposer,
@@ -1351,8 +1674,12 @@ export function App({
         },
         onOpenComposerLibrary: openComposerLibrary,
         onOpenCommandPrompt: openCommandPrompt,
-        onOpenHelp: () => setIsHelpOpen(true),
+        onOpenHelp: () => {
+          setIsRequestActivityOpen(false);
+          setIsHelpOpen(true);
+        },
         onOpenListDisplay: openListDisplay,
+        onInspectRequestActivity: inspectRequestActivity,
         onPreviewComposerSend: () => {
           setComposer((current) => ({
             ...current,
@@ -1465,6 +1792,8 @@ export function App({
             keyBindings,
             listDisplay: trafficListDisplay
           })
+        : (isRequestActivityOpen
+          ? requestActivityNode
         : (composer.isOpen
           ? h(RequestComposerPanel, {
             composer,
@@ -1484,8 +1813,9 @@ export function App({
             scrollOffset: detailScrollOffset,
             visibleCount: detailModalVisibleCount
           })
-          : paneNodes))))
+          : paneNodes)))))
     ),
+    h(ToastNotification, { toast }),
     isFilterOpen
         ? h(FilterBar, {
         filterFocus,
@@ -1529,6 +1859,7 @@ export function App({
           hideFrameworkAssets,
           isLiveMode,
           isListDisplayOpen,
+          isRequestActivityOpen,
           isListFocused: isDetailModalOpen ? false : isListFocused,
           isRawModeSupported,
           isReplayMode,

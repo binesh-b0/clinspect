@@ -12,6 +12,38 @@ const PAGINATION_PARAM_ALIASES = Object.freeze({
 
 const CURSOR_FIELDS = Object.freeze(['cursor', 'after', 'before']);
 const LOCAL_ORIGIN = 'http://clinspect.local';
+const MAX_BODY_PAGINATION_PARSE_LENGTH = 1024 * 1024;
+const BODY_NEXT_URL_PATHS = Object.freeze([
+  Object.freeze(['next']),
+  Object.freeze(['nextUrl']),
+  Object.freeze(['next_url']),
+  Object.freeze(['links', 'next']),
+  Object.freeze(['pagination', 'next']),
+  Object.freeze(['paging', 'next']),
+  Object.freeze(['page', 'next'])
+]);
+const BODY_NEXT_CURSOR_PATHS = Object.freeze([
+  Object.freeze({ path: ['nextCursor'], field: 'cursor' }),
+  Object.freeze({ path: ['next_cursor'], field: 'cursor' }),
+  Object.freeze({ path: ['nextPageCursor'], field: 'cursor' }),
+  Object.freeze({ path: ['next_page_cursor'], field: 'cursor' }),
+  Object.freeze({ path: ['nextToken'], field: 'cursor' }),
+  Object.freeze({ path: ['next_token'], field: 'cursor' }),
+  Object.freeze({ path: ['pagination', 'nextCursor'], field: 'cursor' }),
+  Object.freeze({ path: ['pagination', 'next_cursor'], field: 'cursor' }),
+  Object.freeze({ path: ['pagination', 'nextToken'], field: 'cursor' }),
+  Object.freeze({ path: ['pagination', 'next_token'], field: 'cursor' }),
+  Object.freeze({ path: ['meta', 'nextCursor'], field: 'cursor' }),
+  Object.freeze({ path: ['meta', 'next_cursor'], field: 'cursor' }),
+  Object.freeze({ path: ['meta', 'nextToken'], field: 'cursor' }),
+  Object.freeze({ path: ['meta', 'next_token'], field: 'cursor' }),
+  Object.freeze({ path: ['paging', 'nextCursor'], field: 'cursor' }),
+  Object.freeze({ path: ['paging', 'next_cursor'], field: 'cursor' }),
+  Object.freeze({ path: ['pageInfo', 'endCursor'], field: 'after', hasNextPath: ['pageInfo', 'hasNextPage'] }),
+  Object.freeze({ path: ['page_info', 'end_cursor'], field: 'after', hasNextPath: ['page_info', 'has_next_page'] }),
+  Object.freeze({ path: ['pagination', 'endCursor'], field: 'after', hasNextPath: ['pagination', 'hasNextPage'] }),
+  Object.freeze({ path: ['pagination', 'end_cursor'], field: 'after', hasNextPath: ['pagination', 'has_next_page'] })
+]);
 
 function parseUrl(value = '/') {
   try {
@@ -29,6 +61,10 @@ function toDraftUrl(url) {
   url.hash = '';
 
   return isLocalUrl(url) ? `${url.pathname}${url.search}` : url.href;
+}
+
+function resolveDraftUrl(value, basePath = '/') {
+  return toDraftUrl(new URL(String(value), parseUrl(basePath)));
 }
 
 function getHeaderValues(headers = {}, name) {
@@ -200,14 +236,114 @@ function parseInteger(value) {
   return Number.parseInt(text, 10);
 }
 
+function hasField(fields = {}, field) {
+  return Object.prototype.hasOwnProperty.call(fields, field);
+}
+
+function getPathValue(value, path = []) {
+  return path.reduce((current, key) => {
+    if (!current || typeof current !== 'object') {
+      return undefined;
+    }
+
+    return current[key];
+  }, value);
+}
+
+function isNonEmptyScalar(value) {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    return false;
+  }
+
+  const text = String(value).trim();
+
+  return text.length > 0 && text.toLowerCase() !== 'null' && text.toLowerCase() !== 'undefined';
+}
+
+function isUrlLikeNextValue(value) {
+  const text = String(value ?? '').trim();
+
+  return text.startsWith('/')
+    || text.startsWith('?')
+    || /^https?:\/\//i.test(text);
+}
+
+function tryParseResponseJson(log = {}) {
+  if (log?.response?.truncated) {
+    return null;
+  }
+
+  const body = String(log?.response?.body ?? '').trim();
+
+  if (!body || body.length > MAX_BODY_PAGINATION_PARSE_LENGTH || !/^[{[]/.test(body)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(body);
+  } catch {
+    return null;
+  }
+}
+
+function getPreferredCursorParam(fields, fieldNames, suggestedField = 'cursor') {
+  const knownFields = [suggestedField, 'after', 'cursor', 'before']
+    .filter((field, index, fieldsList) => field && fieldsList.indexOf(field) === index);
+
+  for (const field of knownFields) {
+    if (fieldNames[field]) {
+      return {
+        field,
+        name: fieldNames[field]
+      };
+    }
+  }
+
+  return {
+    field: suggestedField,
+    name: PAGINATION_PARAM_ALIASES[suggestedField]?.[0] ?? suggestedField
+  };
+}
+
 function createPatchedRequest(pathValue, paramName, nextValue) {
   const url = parseUrl(pathValue);
 
   url.searchParams.set(paramName, String(nextValue));
 
   return {
+    strategy: paramName.toLowerCase() === 'offset' ? 'offset-limit' : 'page-increment',
     source: 'computed',
     url: toDraftUrl(url)
+  };
+}
+
+function createBodyCursorRequest(pathValue, fields, fieldNames, cursorValue, options = {}) {
+  const cursor = getPreferredCursorParam(fields, fieldNames, options.field);
+  const url = parseUrl(pathValue);
+
+  url.searchParams.set(cursor.name, String(cursorValue));
+
+  return {
+    bodyPath: options.bodyPath ?? '',
+    cursor: {
+      field: cursor.field,
+      name: cursor.name,
+      value: String(cursorValue)
+    },
+    strategy: 'body-cursor',
+    source: 'body',
+    url: toDraftUrl(url)
+  };
+}
+
+function createBodyNextUrlRequest(pathValue, nextUrl) {
+  const url = resolveDraftUrl(nextUrl, pathValue);
+
+  return {
+    cursor: findCursorParam(url),
+    strategy: 'body-next-url',
+    source: 'body',
+    url
   };
 }
 
@@ -229,13 +365,64 @@ function findCursorParam(pathValue) {
   return null;
 }
 
-function resolveNextRequest(pathValue, fields, fieldNames, rels) {
+function findBodyNextRequest(pathValue, fields, fieldNames, log) {
+  const body = tryParseResponseJson(log);
+
+  if (!body) {
+    return null;
+  }
+
+  for (const path of BODY_NEXT_URL_PATHS) {
+    const value = getPathValue(body, path);
+
+    if (!isNonEmptyScalar(value)) {
+      continue;
+    }
+
+    if (isUrlLikeNextValue(value)) {
+      return createBodyNextUrlRequest(pathValue, value);
+    }
+
+    if (CURSOR_FIELDS.some((field) => hasField(fields, field))) {
+      return createBodyCursorRequest(pathValue, fields, fieldNames, value, {
+        bodyPath: path.join('.'),
+        field: 'cursor'
+      });
+    }
+  }
+
+  for (const candidate of BODY_NEXT_CURSOR_PATHS) {
+    if (candidate.hasNextPath && getPathValue(body, candidate.hasNextPath) !== true) {
+      continue;
+    }
+
+    const value = getPathValue(body, candidate.path);
+
+    if (!isNonEmptyScalar(value)) {
+      continue;
+    }
+
+    return createBodyCursorRequest(pathValue, fields, fieldNames, value, {
+      bodyPath: candidate.path.join('.'),
+      field: candidate.field
+    });
+  }
+
+  return null;
+}
+
+function resolveNextRequest(pathValue, fields, fieldNames, rels, bodyNextRequest) {
   if (rels.next) {
     return {
       cursor: findCursorParam(rels.next.resolvedUrl),
+      strategy: 'link-rel-next',
       source: 'link',
       url: rels.next.resolvedUrl
     };
+  }
+
+  if (bodyNextRequest) {
+    return bodyNextRequest;
   }
 
   const page = parseInteger(fields.page);
@@ -252,6 +439,45 @@ function resolveNextRequest(pathValue, fields, fieldNames, rels) {
   }
 
   return null;
+}
+
+function getUnavailableReason(fields, rels = {}, nextRequest = null) {
+  if (nextRequest) {
+    return '';
+  }
+
+  if (CURSOR_FIELDS.some((field) => hasField(fields, field))) {
+    return 'next cursor not found in Link header or response body';
+  }
+
+  if (hasField(fields, 'page') && parseInteger(fields.page) === null) {
+    return 'page is not numeric';
+  }
+
+  const hasOffset = hasField(fields, 'offset');
+  const hasLimit = hasField(fields, 'limit');
+
+  if (hasOffset && parseInteger(fields.offset) === null) {
+    return 'offset is not numeric';
+  }
+
+  if (hasOffset && !hasLimit) {
+    return 'offset pagination needs a limit';
+  }
+
+  if (hasOffset && parseInteger(fields.limit) === null) {
+    return 'limit is not numeric for offset pagination';
+  }
+
+  if (!hasOffset && hasLimit && parseInteger(fields.limit) === null) {
+    return 'limit is not numeric';
+  }
+
+  if (Object.keys(rels).length > 0 && !rels.next) {
+    return 'Link header has no rel=next';
+  }
+
+  return '';
 }
 
 function formatPaginationSummary(fields, nextRequest, rels = {}) {
@@ -302,23 +528,57 @@ function formatPaginationSummary(fields, nextRequest, rels = {}) {
   return parts.join(', ');
 }
 
+export function formatPaginationNextStatus(pagination = {}) {
+  if (!pagination.nextRequest) {
+    return pagination.unavailableReason || 'no next page detected';
+  }
+
+  if (pagination.nextRequest.strategy === 'link-rel-next') {
+    return 'next page from Link rel=next';
+  }
+
+  if (pagination.nextRequest.strategy === 'page-increment') {
+    return 'next page computed from page + 1';
+  }
+
+  if (pagination.nextRequest.strategy === 'offset-limit') {
+    return 'next page computed from offset + limit';
+  }
+
+  if (pagination.nextRequest.strategy === 'body-next-url') {
+    return 'next page from response body next URL';
+  }
+
+  if (pagination.nextRequest.strategy === 'body-cursor') {
+    return 'next page from response body cursor';
+  }
+
+  return pagination.nextRequest.source === 'link'
+    ? 'next page from Link header'
+    : 'next page from query params';
+}
+
 export function analyzePagination(log = {}) {
   const pathValue = String(log?.path ?? '/');
   const { fieldNames, fields } = detectPaginationFields(pathValue);
   const links = parseLinkHeaders(log?.response?.headers, pathValue);
   const rels = mapLinkRels(links);
-  const nextRequest = resolveNextRequest(pathValue, fields, fieldNames, rels);
+  const bodyNextRequest = findBodyNextRequest(pathValue, fields, fieldNames, log);
+  const nextRequest = resolveNextRequest(pathValue, fields, fieldNames, rels, bodyNextRequest);
   const summary = formatPaginationSummary(fields, nextRequest, rels);
-  const detected = Object.keys(fields).length > 0 || links.length > 0 || Boolean(nextRequest);
+  const unavailableReason = getUnavailableReason(fields, rels, nextRequest);
+  const detected = Object.keys(fields).length > 0 || links.length > 0 || Boolean(nextRequest) || Boolean(bodyNextRequest);
 
   return {
+    bodyNextRequest,
     detected,
     fieldNames,
     fields,
     links,
     nextRequest,
     rels,
-    summary
+    summary,
+    unavailableReason
   };
 }
 

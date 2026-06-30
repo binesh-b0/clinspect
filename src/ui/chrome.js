@@ -121,7 +121,7 @@ export function getHelpSections(keyBindings = DEFAULT_KEY_BINDINGS) {
         [getActionLabel(keyBindings, 'main.cyclePathDisplay'), 'cycle path mode'],
         [getActionLabel(keyBindings, 'main.cycleDensity'), 'cycle list density'],
         [getActionLabel(keyBindings, 'main.cyclePaneWidth'), 'cycle pane width'],
-        [getActionLabel(keyBindings, 'main.toggleFrameworkAssets'), 'show / hide static'],
+        [getActionLabel(keyBindings, 'main.toggleFrameworkAssets'), 'show / hide framework'],
         [getActionLabel(keyBindings, 'main.openListDisplay'), 'list display modal'],
         [getActionLabel(keyBindings, 'main.copy'), 'copy item'],
         [getActionLabel(keyBindings, 'main.download'), 'download item'],
@@ -393,6 +393,7 @@ export function formatFooterText({
   commandStatus = '',
   exportStatus = '',
   isListDisplayOpen = false,
+  isRequestActivityOpen = false,
   resendStatus = '',
   isComposerConfirmOpen = false,
   isComposerOpen = false,
@@ -441,6 +442,10 @@ export function formatFooterText({
 
   if (isListDisplayOpen) {
     return `list display  ${getActionPairLabel(keyBindings, 'listDisplay.moveDown', 'listDisplay.moveUp')} select row  ${getActionPairLabel(keyBindings, 'listDisplay.previousOption', 'listDisplay.nextOption')} change value  ${getActionLabel(keyBindings, 'listDisplay.toggleOption', { limit: 1 })} show/hide  ${getActionLabel(keyBindings, 'listDisplay.reset', { limit: 1 })} reset  ${getNthActionLabel(keyBindings, 'listDisplay.close', 1)}/${getNthActionLabel(keyBindings, 'listDisplay.close', 0)} close`;
+  }
+
+  if (isRequestActivityOpen) {
+    return `sent requests  ${getActionPairLabel(keyBindings, 'main.moveDown', 'main.moveUp')} move  ${getActionLabel(keyBindings, 'main.inspect', { limit: 1 })} inspect log  ${getActionLabel(keyBindings, 'help.close', { limit: 2 })} close`;
   }
 
   if (isHelpOpen) {
@@ -523,6 +528,7 @@ export const Footer = React.memo(function Footer({
   commandStatus,
   exportStatus,
   isListDisplayOpen,
+  isRequestActivityOpen,
   resendStatus,
   isComposerConfirmOpen,
   isComposerOpen,
@@ -550,6 +556,7 @@ export const Footer = React.memo(function Footer({
         commandStatus,
         exportStatus,
         isListDisplayOpen,
+        isRequestActivityOpen,
         resendStatus,
         isComposerConfirmOpen,
         isComposerOpen,

@@ -70,9 +70,13 @@ function statusColor(statusCode) {
   return 'gray';
 }
 
-function rowColor(log) {
+function rowColor(log, isClinspectSent = false) {
   if (log.statusCode >= 400) {
     return statusColor(log.statusCode);
+  }
+
+  if (isClinspectSent) {
+    return 'magenta';
   }
 
   return METHOD_COLORS[log.method] ?? 'white';
@@ -391,11 +395,12 @@ export function formatTrafficHeader(display = {}, rowWidth = TRAFFIC_ROW_WIDTH) 
   return tokens.join(' ');
 }
 
-export function formatTrafficRow(log, selected = false, display = {}, rowWidth = TRAFFIC_ROW_WIDTH) {
+export function formatTrafficRow(log, selected = false, display = {}, rowWidth = TRAFFIC_ROW_WIDTH, options = {}) {
   const normalized = normalizeTrafficListDisplay(display);
   const { columns } = normalized;
   const pathWidth = getTrafficPathWidth(normalized, rowWidth);
-  const tokens = [selected ? '>' : ' '];
+  const marker = selected ? '>' : (options.isClinspectSent ? '*' : ' ');
+  const tokens = [marker];
 
   if (columns.time) {
     tokens.push(formatTime(log.timestamp));
@@ -1131,6 +1136,10 @@ export function formatFilterLabel(methodFilters, statusFilters, searchField, sea
     parts.push(formatStaticAssetsListLabel(options.frameworkSummary, options.hideFrameworkAssets));
   }
 
+  if (Number(options.clinspectSentCount ?? 0) > 0) {
+    parts.push('cli sent marked *');
+  }
+
   if (searchField === 'body' && searchQuery.trim() && Number(options.coldEntryCount ?? 0) > 0) {
     parts.push('cold bodies load on inspect');
   }
@@ -1153,6 +1162,7 @@ export const TrafficList = React.memo(function TrafficList({
   methodFilters,
   marginRight = TRAFFIC_PANE_GAP,
   paneWidth = TRAFFIC_LIST_WIDTH,
+  clinspectSentLogIds,
   statusFilters,
   searchField,
   searchQuery
@@ -1165,8 +1175,15 @@ export const TrafficList = React.memo(function TrafficList({
     Math.max(0, logs.length - visibleCount)
   ));
   const visibleLogs = logs.slice(startIndex, startIndex + visibleCount);
+  const clinspectSentIds = clinspectSentLogIds instanceof Set
+    ? clinspectSentLogIds
+    : new Set(clinspectSentLogIds ?? []);
+  const clinspectSentCount = logs.reduce((count, log) => (
+    clinspectSentIds.has(log.id) ? count + 1 : count
+  ), 0);
   const filterLabel = formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery, {
     coldEntryCount: historyStatus?.coldEntries ?? 0,
+    clinspectSentCount,
     frameworkSummary,
     hideFrameworkAssets
   });
@@ -1192,7 +1209,10 @@ export const TrafficList = React.memo(function TrafficList({
       : visibleLogs.map((log, offset) => {
         const absoluteIndex = startIndex + offset;
         const selected = absoluteIndex === selectedIndex;
-        const row = formatTrafficRow(log, selected, normalizedDisplay, rowWidth);
+        const isClinspectSent = clinspectSentIds.has(log.id);
+        const row = formatTrafficRow(log, selected, normalizedDisplay, rowWidth, {
+          isClinspectSent
+        });
 
         return h(
           Text,
@@ -1200,7 +1220,7 @@ export const TrafficList = React.memo(function TrafficList({
             key: log.id,
             bold: selected,
             backgroundColor: selected ? 'cyan' : undefined,
-            color: selected ? 'black' : rowColor(log),
+            color: selected ? 'black' : rowColor(log, isClinspectSent),
             wrap: 'truncate'
           },
           row

@@ -141,6 +141,16 @@ function formatPaginationDetailRows(log, detailTab) {
       ],
       type: 'pagination'
     }));
+  } else if (pagination.unavailableReason) {
+    rows.push(createDetailRow({
+      id: `${detailTab}-pagination-unavailable`,
+      searchText: `pagination ${pagination.unavailableReason}`,
+      segments: [
+        { text: 'next unavailable: ', color: 'gray' },
+        { text: pagination.unavailableReason, color: 'yellow' }
+      ],
+      type: 'pagination'
+    }));
   }
 
   return rows;

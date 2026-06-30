@@ -24,6 +24,7 @@ import {
   filterLogs,
   formatCommandSelectionStatus,
   formatFrameworkDetectionLabel,
+  formatPaginationNextStatus,
   formatPaneWidthLabel,
   formatFooterText,
   formatFilterLabel,
@@ -63,6 +64,11 @@ import {
   moveSelectedLogId,
   normalizeKeyBindings,
   normalizeTrafficListDisplay,
+  createRequestActivity,
+  failRequestActivity,
+  finishRequestActivity,
+  formatRequestActivityRow,
+  formatRequestActivityToast,
   resolveCommandInput,
   resolveSelectedLogId,
   selectComposerTab,
@@ -290,12 +296,16 @@ test('traffic list display helpers format path modes and density presets', () =>
 
   assert.equal(formatTrafficHeader(pathOnly).trim(), 'path');
   assert.equal(formatTrafficRow(log, true, full).length, 45);
+  assert.equal(formatTrafficRow(log, false, full, undefined, { isClinspectSent: true }).startsWith('* '), true);
+  assert.equal(formatTrafficRow(log, false, full, undefined, { isClinspectSent: true }).length, 45);
+  assert.equal(formatTrafficRow(log, true, full, undefined, { isClinspectSent: true }).startsWith('> '), true);
   assert.equal(formatTrafficHeader(full, wideRowWidth).length, wideRowWidth);
   assert.equal(formatTrafficRow(log, true, full, wideRowWidth).length, wideRowWidth);
   assert.equal(formatTrafficRow(log, false, compact).includes('GET'), true);
   assert.equal(formatTrafficRow(log, false, compact).includes('34ms'), false);
   assert.equal(formatTrafficRow(log, false, pathOnly).includes('GET'), false);
   assert.equal(formatTrafficRow(log, false, pathOnly).includes('200'), false);
+  assert.equal(formatFilterLabel([], [], 'all', '', { clinspectSentCount: 2 }), 'cli sent marked *');
 });
 
 test('detail scroll helper clamps page-wise scrolling', () => {
@@ -505,12 +515,30 @@ test('keyboard action helper supports colon command mode for careful actions', (
     getKeyboardAction('', { upArrow: true }, { isCommandOpen: true }),
     { type: 'cycleCommandSuggestion', direction: -1 }
   );
+  assert.deepEqual(
+    getKeyboardAction('', { escape: true }, { isRequestActivityOpen: true }),
+    { type: 'closeRequestActivity' }
+  );
+  assert.deepEqual(
+    getKeyboardAction(':', {}, { isRequestActivityOpen: true }),
+    { type: 'openCommandPrompt' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('j', {}, { isRequestActivityOpen: true }),
+    { type: 'moveRequestActivity', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { return: true }, { isRequestActivityOpen: true }),
+    { type: 'inspectRequestActivity' }
+  );
 
   assert.deepEqual(getCommandHintForKey('R'), 'use :resend');
   assert.deepEqual(COMMAND_DEFINITIONS.map((command) => command.name), [
     'quit',
     'resend',
     'next-page',
+    'send-next-page',
+    'requests',
     'record',
     'stop-recording',
     'pause-capture',
@@ -519,12 +547,18 @@ test('keyboard action helper supports colon command mode for careful actions', (
   ]);
   assert.deepEqual(getCommandMatches('res').map((command) => command.name), ['resend']);
   assert.deepEqual(getCommandMatches('np').map((command) => command.name), ['next-page']);
-  assert.deepEqual(getCommandMatches('r').map((command) => command.name), ['resend', 'record']);
+  assert.deepEqual(getCommandMatches('snp').map((command) => command.name), ['send-next-page']);
+  assert.deepEqual(getCommandMatches('rq').map((command) => command.name), ['requests']);
+  assert.deepEqual(getCommandMatches('r').map((command) => command.name), ['resend', 'requests', 'record']);
   assert.deepEqual(resolveCommandInput('next-page').action, { type: 'openNextPage' });
   assert.deepEqual(resolveCommandInput('np').action, { type: 'openNextPage' });
+  assert.deepEqual(resolveCommandInput('send-next-page').action, { type: 'sendNextPage' });
+  assert.deepEqual(resolveCommandInput('snp').action, { type: 'sendNextPage' });
+  assert.deepEqual(resolveCommandInput('requests').action, { type: 'openRequestActivity' });
+  assert.deepEqual(resolveCommandInput('sent').action, { type: 'openRequestActivity' });
   assert.equal(getCommandSuggestionIndex('r', -1, 1), 0);
   assert.equal(getCommandSuggestionIndex('r', 0, 1), 1);
-  assert.equal(getCommandSuggestionIndex('r', 0, -1), 1);
+  assert.equal(getCommandSuggestionIndex('r', 0, -1), 2);
   assert.equal(getCommandSuggestionRows('res').length, 7);
   assert.deepEqual(
     getCommandSuggestionRows('res').map((row) => row.name),
@@ -540,10 +574,10 @@ test('keyboard action helper supports colon command mode for careful actions', (
   );
   assert.deepEqual(
     getCommandSuggestionRows('').map((row) => row.primaryAlias),
-    ['q', 'rs', 'np', 'rec', 'stop', 'pause', 'clear']
+    ['q', 'rs', 'np', 'snp', 'rq', 'rec', 'stop']
   );
   assert.equal(
-    formatCommandSelectionStatus(getCommandSuggestionRows('r', 1)[1]),
+    formatCommandSelectionStatus(getCommandSuggestionRows('r', 2)[2]),
     'selected :record (rec)'
   );
   assert.equal(formatCommandSelectionStatus(getCommandSuggestionRows('wat')[0]), '');
@@ -556,9 +590,10 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(resolveCommandInput('res').action, { type: 'startResend', mode: 'exact' });
   assert.deepEqual(resolveCommandInput('r'), {
     ok: false,
-    error: 'ambiguous command: resend, record'
+    error: 'ambiguous command: resend, requests, record'
   });
-  assert.deepEqual(resolveCommandInput('r', 1).action, { type: 'toggleRecordingPause' });
+  assert.deepEqual(resolveCommandInput('r', 1).action, { type: 'openRequestActivity' });
+  assert.deepEqual(resolveCommandInput('r', 2).action, { type: 'toggleRecordingPause' });
   assert.deepEqual(resolveCommandInput('wat'), {
     ok: false,
     error: 'unknown command: wat'
@@ -1057,6 +1092,10 @@ test('footer text shows mode-aware essential keymaps', () => {
     'list display  j/k select row  left/right change value  space show/hide  r reset  enter/esc close'
   );
   assert.equal(
+    formatFooterText({ isRequestActivityOpen: true }),
+    'sent requests  j/k move  enter inspect log  esc/h close'
+  );
+  assert.equal(
     formatFooterText({ exportStatus: 'copied response body', isListFocused: false }),
     'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  tab: traffic  : command  h: help | copied response body'
   );
@@ -1106,6 +1145,58 @@ test('footer and help labels reflect custom key bindings', () => {
   assert.equal(DEFAULT_KEY_BINDINGS['main.moveDown'][0], 'j');
 });
 
+test('request activity helpers track sent request progress', () => {
+  const sending = createRequestActivity({
+    draft: {
+      method: 'get',
+      url: '/api/items?page=3'
+    },
+    id: 'req-1',
+    source: 'next-page',
+    startedAt: Date.UTC(2024, 0, 2, 3, 4, 5)
+  });
+
+  assert.deepEqual(sending, {
+    error: '',
+    finishedAt: null,
+    id: 'req-1',
+    logId: null,
+    method: 'GET',
+    responseTimeMs: null,
+    source: 'next-page',
+    startedAt: Date.UTC(2024, 0, 2, 3, 4, 5),
+    state: 'sending',
+    statusCode: null,
+    url: '/api/items?page=3'
+  });
+  assert.equal(formatRequestActivityToast(sending), 'sending GET /api/items?page=3');
+  assert.match(formatRequestActivityRow(sending, { selected: true, width: 88 }), /^> .* sending GET/);
+  assert.match(formatRequestActivityRow(sending, { selected: true, width: 88 }), /next page\s*$/);
+
+  const success = finishRequestActivity(sending, {
+    id: 'log-1',
+    responseTimeMs: 42,
+    statusCode: 200
+  }, {
+    finishedAt: Date.UTC(2024, 0, 2, 3, 4, 6)
+  });
+
+  assert.equal(success.state, 'success');
+  assert.equal(success.logId, 'log-1');
+  assert.equal(success.statusCode, 200);
+  assert.equal(success.responseTimeMs, 42);
+  assert.equal(formatRequestActivityToast(success), 'sent GET /api/items?page=3 -> 200 in 42ms');
+  assert.match(formatRequestActivityRow(success, { width: 88 }), / 200\s+GET\s+\/api\/items\?page=3/);
+
+  const failure = failRequestActivity(sending, new Error('network down'), {
+    finishedAt: Date.UTC(2024, 0, 2, 3, 4, 7)
+  });
+
+  assert.equal(failure.state, 'error');
+  assert.equal(failure.error, 'network down');
+  assert.equal(formatRequestActivityToast(failure), 'send failed GET /api/items?page=3: network down');
+});
+
 test('command help rows are generated from command definitions', () => {
   const rows = getCommandHelpRows();
 
@@ -1127,6 +1218,22 @@ test('command help rows are generated from command definitions', () => {
       aliases: ':np',
       command: ':next-page',
       description: 'open next-page request'
+    }
+  );
+  assert.deepEqual(
+    rows.find((row) => row.command === ':send-next-page'),
+    {
+      aliases: ':snp',
+      command: ':send-next-page',
+      description: 'send next-page request'
+    }
+  );
+  assert.deepEqual(
+    rows.find((row) => row.command === ':requests'),
+    {
+      aliases: ':sent, :rq',
+      command: ':requests',
+      description: 'open sent requests'
     }
   );
   assert.equal(
@@ -1172,7 +1279,7 @@ test('help sections describe traffic list display controls', () => {
   assert.deepEqual(displaySection.rows.find(([keys]) => keys === 't'), ['t', 'cycle path mode']);
   assert.deepEqual(displaySection.rows.find(([keys]) => keys === 'v'), ['v', 'cycle list density']);
   assert.deepEqual(displaySection.rows.find(([keys]) => keys === 'w'), ['w', 'cycle pane width']);
-  assert.deepEqual(displaySection.rows.find(([keys]) => keys === 'F'), ['F', 'show / hide static']);
+  assert.deepEqual(displaySection.rows.find(([keys]) => keys === 'F'), ['F', 'show / hide framework']);
   assert.deepEqual(displaySection.rows.find(([keys]) => keys === 'L'), ['L', 'list display modal']);
 });
 
@@ -1272,10 +1379,12 @@ test('pagination analyzer detects query params and Link header next cursors', ()
       name: 'cursor',
       value: 'abc123'
     },
+    strategy: 'link-rel-next',
     source: 'link',
     url: '/api/items?cursor=abc123&limit=50'
   });
   assert.equal(result.summary, 'page 2, limit 50, likely next cursor: abc123');
+  assert.equal(formatPaginationNextStatus(result), 'next page from Link rel=next');
 });
 
 test('pagination analyzer computes page and offset fallbacks without inventing cursors', () => {
@@ -1285,6 +1394,7 @@ test('pagination analyzer computes page and offset fallbacks without inventing c
       response: { headers: {} }
     }).nextRequest,
     {
+      strategy: 'page-increment',
       source: 'computed',
       url: '/api/items?page=3&page_size=25'
     }
@@ -1296,7 +1406,9 @@ test('pagination analyzer computes page and offset fallbacks without inventing c
   });
 
   assert.equal(offsetResult.nextRequest.url, '/api/items?offset=150&limit=50');
+  assert.equal(offsetResult.nextRequest.strategy, 'offset-limit');
   assert.equal(offsetResult.summary, 'limit 50, offset 100, next offset 150');
+  assert.equal(formatPaginationNextStatus(offsetResult), 'next page computed from offset + limit');
 
   const cursorOnly = analyzePagination({
     path: '/api/items?cursor=current',
@@ -1306,6 +1418,143 @@ test('pagination analyzer computes page and offset fallbacks without inventing c
   assert.equal(cursorOnly.detected, true);
   assert.equal(cursorOnly.nextRequest, null);
   assert.equal(cursorOnly.summary, 'cursor current');
+  assert.equal(cursorOnly.unavailableReason, 'next cursor not found in Link header or response body');
+  assert.equal(formatPaginationNextStatus(cursorOnly), 'next cursor not found in Link header or response body');
+
+  const limitOnly = analyzePagination({
+    path: '/api/items?limit=50',
+    response: { headers: {} }
+  });
+
+  assert.equal(limitOnly.detected, true);
+  assert.equal(limitOnly.nextRequest, null);
+  assert.equal(limitOnly.summary, 'limit 50');
+  assert.equal(limitOnly.unavailableReason, '');
+  assert.equal(formatPaginationNextStatus(limitOnly), 'no next page detected');
+});
+
+test('pagination analyzer detects response body cursor hints', () => {
+  const bodyCursor = analyzePagination({
+    path: '/api/items?cursor=current&limit=50',
+    response: {
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        data: [],
+        nextCursor: 'abc123'
+      })
+    }
+  });
+
+  assert.equal(bodyCursor.nextRequest.strategy, 'body-cursor');
+  assert.deepEqual(bodyCursor.nextRequest.cursor, {
+    field: 'cursor',
+    name: 'cursor',
+    value: 'abc123'
+  });
+  assert.equal(bodyCursor.nextRequest.url, '/api/items?cursor=abc123&limit=50');
+  assert.equal(bodyCursor.summary, 'limit 50, cursor current, likely next cursor: abc123');
+  assert.equal(bodyCursor.unavailableReason, '');
+  assert.equal(formatPaginationNextStatus(bodyCursor), 'next page from response body cursor');
+
+  const pageInfo = analyzePagination({
+    path: '/api/items?after=current',
+    response: {
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pageInfo: {
+          endCursor: 'end-456',
+          hasNextPage: true
+        }
+      })
+    }
+  });
+
+  assert.equal(pageInfo.nextRequest.strategy, 'body-cursor');
+  assert.deepEqual(pageInfo.nextRequest.cursor, {
+    field: 'after',
+    name: 'after',
+    value: 'end-456'
+  });
+  assert.equal(pageInfo.nextRequest.url, '/api/items?after=end-456');
+  assert.equal(formatPaginationNextStatus(pageInfo), 'next page from response body cursor');
+
+  const pageInfoDone = analyzePagination({
+    path: '/api/items?after=current',
+    response: {
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pageInfo: {
+          endCursor: 'end-456',
+          hasNextPage: false
+        }
+      })
+    }
+  });
+
+  assert.equal(pageInfoDone.nextRequest, null);
+  assert.equal(pageInfoDone.unavailableReason, 'next cursor not found in Link header or response body');
+});
+
+test('pagination analyzer detects response body next URLs', () => {
+  const result = analyzePagination({
+    path: '/api/items?cursor=current&limit=50',
+    response: {
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        pagination: {
+          next: '?cursor=abc123&limit=50'
+        }
+      })
+    }
+  });
+
+  assert.equal(result.nextRequest.strategy, 'body-next-url');
+  assert.deepEqual(result.nextRequest.cursor, {
+    field: 'cursor',
+    name: 'cursor',
+    value: 'abc123'
+  });
+  assert.equal(result.nextRequest.url, '/api/items?cursor=abc123&limit=50');
+  assert.equal(result.summary, 'limit 50, cursor current, likely next cursor: abc123');
+  assert.equal(formatPaginationNextStatus(result), 'next page from response body next URL');
+});
+
+test('pagination analyzer reports specific invalid numeric params', () => {
+  assert.equal(
+    analyzePagination({
+      path: '/api/items?page=two',
+      response: { headers: {} }
+    }).unavailableReason,
+    'page is not numeric'
+  );
+  assert.equal(
+    analyzePagination({
+      path: '/api/items?offset=&limit=50',
+      response: { headers: {} }
+    }).unavailableReason,
+    'offset is not numeric'
+  );
+  assert.equal(
+    analyzePagination({
+      path: '/api/items?offset=100',
+      response: { headers: {} }
+    }).unavailableReason,
+    'offset pagination needs a limit'
+  );
+  assert.equal(
+    analyzePagination({
+      path: '/api/items?offset=100&limit=many',
+      response: { headers: {} }
+    }).unavailableReason,
+    'limit is not numeric for offset pagination'
+  );
+  assert.equal(
+    analyzePagination({
+      path: '/api/items?limit=many',
+      response: { headers: {} }
+    }).unavailableReason,
+    'limit is not numeric'
+  );
 });
 
 test('pagination analyzer tolerates malformed Link headers and resolves relative links', () => {
@@ -1323,7 +1572,9 @@ test('pagination analyzer tolerates malformed Link headers and resolves relative
   });
 
   assert.equal(relative.nextRequest.url, '/api/items?page=3');
+  assert.equal(relative.nextRequest.strategy, 'link-rel-next');
   assert.equal(relative.summary, 'page 2, next page 3');
+  assert.equal(formatPaginationNextStatus(relative), 'next page from Link rel=next');
 
   const prevOnly = analyzePagination({
     path: '/api/items',
@@ -1332,6 +1583,8 @@ test('pagination analyzer tolerates malformed Link headers and resolves relative
 
   assert.equal(prevOnly.detected, true);
   assert.equal(prevOnly.summary, 'link rels: prev');
+  assert.equal(prevOnly.unavailableReason, 'Link header has no rel=next');
+  assert.equal(formatPaginationNextStatus(prevOnly), 'Link header has no rel=next');
 });
 
 test('next-page draft preserves captured request fields and replaces only the URL', () => {
@@ -1389,6 +1642,17 @@ test('detail rows include pagination summaries without body path metadata', () =
   assert.equal(summaryRow.path, null);
   assert.equal(nextRow.text, 'next request: /api/items?cursor=abc123&limit=50');
   assert.equal(nextRow.path, null);
+
+  const unavailableRows = getDetailRows({
+    method: 'GET',
+    path: '/api/items?cursor=current',
+    request: { headers: {}, body: '' },
+    response: { headers: {}, body: '' }
+  }, 'response');
+  const unavailableRow = unavailableRows.find((row) => row.id === 'response-pagination-unavailable');
+
+  assert.equal(unavailableRow.text, 'next unavailable: next cursor not found in Link header or response body');
+  assert.equal(unavailableRow.path, null);
 });
 
 test('composer section helpers jump sections and seed editable rows', () => {

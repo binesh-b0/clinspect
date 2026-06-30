@@ -32,6 +32,18 @@ export const COMMAND_DEFINITIONS = [
     action: { type: 'openNextPage' }
   },
   {
+    name: 'send-next-page',
+    aliases: ['snp'],
+    description: 'send next-page request',
+    action: { type: 'sendNextPage' }
+  },
+  {
+    name: 'requests',
+    aliases: ['sent', 'rq'],
+    description: 'open sent requests',
+    action: { type: 'openRequestActivity' }
+  },
+  {
     name: 'record',
     aliases: ['rec'],
     description: 'start, pause, or resume recording',
@@ -281,6 +293,7 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     isListFocused = true,
     isHelpOpen = false,
     isListDisplayOpen = false,
+    isRequestActivityOpen = false,
     isFilterOpen = false,
     isDetailSearchOpen = false,
     isDetailModalOpen = false,
@@ -390,6 +403,46 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
 
     if (matches('listDisplay.reset')) {
       return { type: 'resetListDisplay' };
+    }
+
+    return { type: 'none' };
+  }
+
+  if (isRequestActivityOpen) {
+    if (matches('global.openCommandPrompt')) {
+      return { type: 'openCommandPrompt' };
+    }
+
+    if (matches('help.close')) {
+      return { type: 'closeRequestActivity' };
+    }
+
+    if (matches('main.inspect')) {
+      return { type: 'inspectRequestActivity' };
+    }
+
+    if (matches('main.moveUp')) {
+      return { type: 'moveRequestActivity', direction: -1 };
+    }
+
+    if (matches('main.moveDown')) {
+      return { type: 'moveRequestActivity', direction: 1 };
+    }
+
+    if (matches('main.pageUp')) {
+      return { type: 'moveRequestActivity', direction: -getPageStep(trafficPageSize) };
+    }
+
+    if (matches('main.pageDown')) {
+      return { type: 'moveRequestActivity', direction: getPageStep(trafficPageSize) };
+    }
+
+    if (matches('main.top')) {
+      return { type: 'moveRequestActivityTo', boundary: 'first' };
+    }
+
+    if (matches('main.bottom')) {
+      return { type: 'moveRequestActivityTo', boundary: 'last' };
     }
 
     return { type: 'none' };
@@ -915,6 +968,7 @@ export function KeyboardControls({
   isListFocused,
   isHelpOpen,
   isListDisplayOpen,
+  isRequestActivityOpen,
   isFilterOpen,
   isDetailSearchOpen,
   isDetailModalOpen,
@@ -951,6 +1005,7 @@ export function KeyboardControls({
   onClearFilters,
   onClearLogs,
   onCloseDetailModal,
+  onCloseRequestActivity,
   onCloseComposer,
   onCloseCommandPrompt,
   onCloseHelp,
@@ -978,6 +1033,8 @@ export function KeyboardControls({
   onMoveFilterOption,
   onMoveSelection,
   onMoveListDisplayFocus,
+  onMoveRequestActivity,
+  onMoveRequestActivityTo,
   onMoveComposerCursor,
   onMoveComposerCursorTo,
   onMoveComposerHorizontal,
@@ -991,6 +1048,7 @@ export function KeyboardControls({
   onOpenFilter,
   onOpenHelp,
   onOpenListDisplay,
+  onInspectRequestActivity,
   onPreviewComposerSend,
   onQuit,
   onResetListDisplay,
@@ -1022,6 +1080,7 @@ export function KeyboardControls({
       isListFocused,
       isHelpOpen,
       isListDisplayOpen,
+      isRequestActivityOpen,
       isFilterOpen,
       isDetailSearchOpen,
       isDetailModalOpen,
@@ -1105,6 +1164,9 @@ export function KeyboardControls({
       case 'closeListDisplay':
         onCloseListDisplay();
         break;
+      case 'closeRequestActivity':
+        onCloseRequestActivity();
+        break;
       case 'cycleComposerFocus':
         onCycleComposerFocus(action.direction);
         break;
@@ -1171,6 +1233,12 @@ export function KeyboardControls({
       case 'moveListDisplayFocus':
         onMoveListDisplayFocus(action.direction);
         break;
+      case 'moveRequestActivity':
+        onMoveRequestActivity(action.direction);
+        break;
+      case 'moveRequestActivityTo':
+        onMoveRequestActivityTo(action.boundary);
+        break;
       case 'moveComposerCursor':
         onMoveComposerCursor(action.direction);
         break;
@@ -1212,6 +1280,9 @@ export function KeyboardControls({
         break;
       case 'openListDisplay':
         onOpenListDisplay();
+        break;
+      case 'inspectRequestActivity':
+        onInspectRequestActivity();
         break;
       case 'previewComposerSend':
         onPreviewComposerSend();
