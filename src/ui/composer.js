@@ -771,7 +771,9 @@ export const RequestComposerPanel = React.memo(function RequestComposerPanel({
   const width = Math.max(72, columns - 4);
   const title = composer.source === 'edit-resend'
     ? 'Edit and resend'
-    : (composer.source === 'library' ? 'Saved request' : 'New request');
+    : (composer.source === 'next-page'
+      ? 'Next page'
+      : (composer.source === 'library' ? 'Saved request' : 'New request'));
   const statusText = composer.isSending
     ? 'sending...'
     : (composer.error || composer.status || composer.warnings?.[0] || 'ready');

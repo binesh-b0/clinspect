@@ -2,6 +2,7 @@ import React from 'react';
 import { XMLParser } from 'fast-xml-parser';
 import { parseDocument } from 'htmlparser2';
 import { Box, Text } from 'ink';
+import { analyzePagination } from '../pagination.js';
 import {
   BODY_LINE_MAX_LENGTH,
   TEXTUAL_CONTENT_TYPE_PATTERNS,
@@ -106,6 +107,43 @@ function formatHeaderDetailRows(headers, options = {}, idPrefix = 'headers') {
       });
     });
   });
+}
+
+function formatPaginationDetailRows(log, detailTab) {
+  const pagination = analyzePagination(log);
+
+  if (!pagination.detected || !pagination.summary) {
+    return [];
+  }
+
+  const rows = [
+    createDetailRow({ id: `${detailTab}-pagination-spacer`, text: '', type: 'blank' }),
+    createDetailRow({
+      id: `${detailTab}-pagination-title`,
+      segments: [{ text: 'Pagination', color: 'cyan', bold: true }],
+      type: 'section'
+    }),
+    createDetailRow({
+      id: `${detailTab}-pagination-summary`,
+      searchText: `pagination ${pagination.summary}`,
+      segments: [{ text: pagination.summary, color: 'yellow' }],
+      type: 'pagination'
+    })
+  ];
+
+  if (pagination.nextRequest?.url) {
+    rows.push(createDetailRow({
+      id: `${detailTab}-pagination-next`,
+      searchText: `pagination next request ${pagination.nextRequest.url}`,
+      segments: [
+        { text: 'next request: ', color: 'gray' },
+        { text: pagination.nextRequest.url }
+      ],
+      type: 'pagination'
+    }));
+  }
+
+  return rows;
 }
 
 function createDetailRow(options = {}) {
@@ -886,6 +924,7 @@ export function getDetailRows(log, detailTab = 'request', options = {}) {
       type: 'section'
     }),
     ...formatHeaderDetailRows(payload.headers, headerOptions, detailTab),
+    ...formatPaginationDetailRows(log, detailTab),
     createDetailRow({ id: `${detailTab}-spacer`, text: '', type: 'blank' }),
     createDetailRow({
       id: `${detailTab}-body-title`,

@@ -26,6 +26,12 @@ export const COMMAND_DEFINITIONS = [
     action: { type: 'startResend', mode: 'exact' }
   },
   {
+    name: 'next-page',
+    aliases: ['np'],
+    description: 'open next-page request',
+    action: { type: 'openNextPage' }
+  },
+  {
     name: 'record',
     aliases: ['rec'],
     description: 'start, pause, or resume recording',

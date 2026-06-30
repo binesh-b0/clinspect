@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   countActiveFilters,
+  analyzePagination,
   applyDetailMatches,
   classifyFrameworkAssetRequest,
   clampDetailRowIndex,
@@ -9,6 +10,7 @@ import {
   COMMAND_DEFINITIONS,
   createBlankComposerState,
   createComposerStateFromLog,
+  createNextPageRequestDraftFromLog,
   DEFAULT_KEY_BINDINGS,
   cycleDetailWidthMode,
   cyclePaneWidthMode,
@@ -508,6 +510,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(COMMAND_DEFINITIONS.map((command) => command.name), [
     'quit',
     'resend',
+    'next-page',
     'record',
     'stop-recording',
     'pause-capture',
@@ -515,7 +518,10 @@ test('keyboard action helper supports colon command mode for careful actions', (
     'help'
   ]);
   assert.deepEqual(getCommandMatches('res').map((command) => command.name), ['resend']);
+  assert.deepEqual(getCommandMatches('np').map((command) => command.name), ['next-page']);
   assert.deepEqual(getCommandMatches('r').map((command) => command.name), ['resend', 'record']);
+  assert.deepEqual(resolveCommandInput('next-page').action, { type: 'openNextPage' });
+  assert.deepEqual(resolveCommandInput('np').action, { type: 'openNextPage' });
   assert.equal(getCommandSuggestionIndex('r', -1, 1), 0);
   assert.equal(getCommandSuggestionIndex('r', 0, 1), 1);
   assert.equal(getCommandSuggestionIndex('r', 0, -1), 1);
@@ -534,7 +540,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
   );
   assert.deepEqual(
     getCommandSuggestionRows('').map((row) => row.primaryAlias),
-    ['q', 'rs', 'rec', 'stop', 'pause', 'clear', 'h']
+    ['q', 'rs', 'np', 'rec', 'stop', 'pause', 'clear']
   );
   assert.equal(
     formatCommandSelectionStatus(getCommandSuggestionRows('r', 1)[1]),
@@ -1115,6 +1121,14 @@ test('command help rows are generated from command definitions', () => {
       description: 'stop recording'
     }
   );
+  assert.deepEqual(
+    rows.find((row) => row.command === ':next-page'),
+    {
+      aliases: ':np',
+      command: ':next-page',
+      description: 'open next-page request'
+    }
+  );
   assert.equal(
     rows.find((row) => row.command === ':clear-logs').aliases,
     ':clear, :clear-traffic'
@@ -1234,6 +1248,147 @@ test('composer helpers create blank and cloned request state', () => {
       }
     }
   }, { includeCookieHeaders: true }).draft.cookies[0].value, 'secret');
+});
+
+test('pagination analyzer detects query params and Link header next cursors', () => {
+  const result = analyzePagination({
+    path: '/api/items?page=2&limit=50',
+    response: {
+      headers: {
+        link: '</api/items?cursor=abc123&limit=50>; rel="next", </api/items?page=1&limit=50>; rel="prev"'
+      }
+    }
+  });
+
+  assert.equal(result.detected, true);
+  assert.deepEqual(result.fields, {
+    limit: '50',
+    page: '2'
+  });
+  assert.equal(result.rels.next.resolvedUrl, '/api/items?cursor=abc123&limit=50');
+  assert.deepEqual(result.nextRequest, {
+    cursor: {
+      field: 'cursor',
+      name: 'cursor',
+      value: 'abc123'
+    },
+    source: 'link',
+    url: '/api/items?cursor=abc123&limit=50'
+  });
+  assert.equal(result.summary, 'page 2, limit 50, likely next cursor: abc123');
+});
+
+test('pagination analyzer computes page and offset fallbacks without inventing cursors', () => {
+  assert.deepEqual(
+    analyzePagination({
+      path: '/api/items?page=2&page_size=25',
+      response: { headers: {} }
+    }).nextRequest,
+    {
+      source: 'computed',
+      url: '/api/items?page=3&page_size=25'
+    }
+  );
+
+  const offsetResult = analyzePagination({
+    path: '/api/items?offset=100&limit=50',
+    response: { headers: {} }
+  });
+
+  assert.equal(offsetResult.nextRequest.url, '/api/items?offset=150&limit=50');
+  assert.equal(offsetResult.summary, 'limit 50, offset 100, next offset 150');
+
+  const cursorOnly = analyzePagination({
+    path: '/api/items?cursor=current',
+    response: { headers: {} }
+  });
+
+  assert.equal(cursorOnly.detected, true);
+  assert.equal(cursorOnly.nextRequest, null);
+  assert.equal(cursorOnly.summary, 'cursor current');
+});
+
+test('pagination analyzer tolerates malformed Link headers and resolves relative links', () => {
+  const malformed = analyzePagination({
+    path: '/api/items',
+    response: { headers: { link: 'not a link' } }
+  });
+
+  assert.equal(malformed.detected, false);
+  assert.deepEqual(malformed.links, []);
+
+  const relative = analyzePagination({
+    path: '/api/items?page=2',
+    response: { headers: { link: '<?page=3>; rel=next' } }
+  });
+
+  assert.equal(relative.nextRequest.url, '/api/items?page=3');
+  assert.equal(relative.summary, 'page 2, next page 3');
+
+  const prevOnly = analyzePagination({
+    path: '/api/items',
+    response: { headers: { link: '</api/items?page=1>; rel="prev"' } }
+  });
+
+  assert.equal(prevOnly.detected, true);
+  assert.equal(prevOnly.summary, 'link rels: prev');
+});
+
+test('next-page draft preserves captured request fields and replaces only the URL', () => {
+  const plan = createNextPageRequestDraftFromLog({
+    id: 'source-1',
+    method: 'GET',
+    path: '/api/items?page=2&limit=50',
+    request: {
+      headers: {
+        accept: 'application/json',
+        cookie: 'session=secret',
+        host: 'example.test',
+        'x-trace': 'abc'
+      },
+      body: ''
+    },
+    response: {
+      headers: {
+        link: '</api/items?page=3&limit=50>; rel="next"'
+      },
+      body: ''
+    }
+  });
+
+  assert.equal(plan.draft.method, 'GET');
+  assert.equal(plan.draft.url, '/api/items?page=3&limit=50');
+  assert.deepEqual(plan.draft.headers.map((row) => [row.key, row.value]), [
+    ['accept', 'application/json'],
+    ['x-trace', 'abc']
+  ]);
+  assert.deepEqual(plan.draft.cookies.map((row) => [row.key, row.value, row.secret]), [
+    ['session', 'secret', true]
+  ]);
+  assert.equal(plan.resend.action, 'edit-resend');
+  assert.equal(plan.resend.sourcePath, '/api/items?page=2&limit=50');
+});
+
+test('detail rows include pagination summaries without body path metadata', () => {
+  const rows = getDetailRows({
+    method: 'GET',
+    path: '/api/items?page=2&limit=50',
+    request: { headers: {}, body: '' },
+    response: {
+      headers: {
+        link: '</api/items?cursor=abc123&limit=50>; rel="next"'
+      },
+      body: ''
+    }
+  }, 'response');
+  const summaryRow = rows.find((row) => row.id === 'response-pagination-summary');
+  const nextRow = rows.find((row) => row.id === 'response-pagination-next');
+
+  assert.equal(rows.some((row) => row.id === 'response-pagination-title'), true);
+  assert.equal(summaryRow.text, 'page 2, limit 50, likely next cursor: abc123');
+  assert.equal(summaryRow.path, null);
+  assert.equal(nextRow.text, 'next request: /api/items?cursor=abc123&limit=50');
+  assert.equal(nextRow.path, null);
 });
 
 test('composer section helpers jump sections and seed editable rows', () => {

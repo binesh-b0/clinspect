@@ -5,6 +5,7 @@ import {
   normalizeManualResendMetadata,
   normalizeManualRequestDraft
 } from '../engine/manual-request.js';
+import { createNextPageRequestDraftFromLog } from '../pagination.js';
 import {
   copyTextToClipboard,
   createTrafficExport,
@@ -96,6 +97,10 @@ import {
 } from './commands.js';
 import { normalizeKeyBindings } from './key-bindings.js';
 
+export {
+  analyzePagination,
+  createNextPageRequestDraftFromLog
+} from '../pagination.js';
 export {
   DEFAULT_TRAFFIC_LIST_DISPLAY,
   getRenderHeight
@@ -516,6 +521,10 @@ export function App({
         closeCompletedCommand('');
         startResend(action.mode);
         break;
+      case 'openNextPage':
+        closeCompletedCommand('');
+        openNextPageComposer();
+        break;
       case 'stopRecording':
         if (isReplayMode) {
           closeCompletedCommand('recording unavailable in replay mode');
@@ -810,6 +819,54 @@ export function App({
       isSending: false,
       libraryIndex: 0
     }));
+    setIsFilterOpen(false);
+    setIsDetailSearchOpen(false);
+    setIsDetailModalOpen(false);
+    setIsHelpOpen(false);
+    setIsListDisplayOpen(false);
+  };
+
+  const openNextPageComposer = () => {
+    if (!isLiveMode) {
+      setResendStatus('next page unavailable in replay mode');
+      return;
+    }
+
+    if (typeof manualRequestSender !== 'function') {
+      setResendStatus('manual sender unavailable');
+      return;
+    }
+
+    const sourceLog = getManualActionLog();
+
+    if (!sourceLog) {
+      setResendStatus('no request selected');
+      return;
+    }
+
+    const plan = createNextPageRequestDraftFromLog(sourceLog, {
+      environment: manualLibrary.environment
+    });
+
+    if (!plan) {
+      setResendStatus('no next page detected');
+      return;
+    }
+
+    setComposer(ensureComposerActiveTabRows({
+      ...createBlankComposerState({ environment: manualLibrary.environment }),
+      cursor: plan.draft.url.length,
+      draft: plan.draft,
+      error: plan.blockers?.[0] ?? '',
+      resend: plan.resend,
+      source: 'next-page',
+      status: plan.pagination?.nextRequest?.source === 'link'
+        ? 'next page from Link header'
+        : 'next page from query params',
+      warnings: [...(plan.blockers ?? []), ...(plan.warnings ?? [])]
+    }));
+    setPendingResend(null);
+    setResendStatus('');
     setIsFilterOpen(false);
     setIsDetailSearchOpen(false);
     setIsDetailModalOpen(false);

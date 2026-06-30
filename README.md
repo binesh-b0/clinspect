@@ -173,7 +173,7 @@ Main UI:
 - `D` downloads the focused traffic item or detail to `./.clinspect/exports/`.
 - `m`/`r` chooses masked or raw values after starting an export.
 - `m` opens method filters; `s` opens status filters; `x` clears filters.
-- `:` opens command mode for careful actions: `:resend`, `:record`, `:stop`, `:pause`, `:clear`, `:quit`, and `:help`.
+- `:` opens command mode for careful actions: `:resend`, `:next-page`, `:record`, `:stop`, `:pause`, `:clear`, `:quit`, and `:help`.
 - `h` opens help.
 
 Composer:
@@ -240,6 +240,7 @@ Implemented:
 - terminal traffic list and detail panes
 - request/response headers, status, timing, and capped text body capture
 - structured response previews with collapsible nodes for JSON, NDJSON, React Flight, SSE, forms, XML, and HTML
+- pagination summaries from request query params and response `Link` headers, with `:next-page` composer support
 - traffic filtering and detail search
 - manual request composer with saved local requests
 - full and partial NDJSON recording
