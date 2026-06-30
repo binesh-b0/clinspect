@@ -194,7 +194,7 @@ src/index.js           Application bootstrap and runtime wiring
 src/engine/            Proxy and manual request sending
 src/recording/         NDJSON disk recording
 src/store/state.js     In-memory traffic log store
-src/ui/App.js          Ink terminal UI
+src/ui/                Ink terminal UI modules and App entrypoint
 test/                  Node.js test suite
 ```
 
