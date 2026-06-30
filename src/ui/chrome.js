@@ -317,7 +317,7 @@ function getListDisplayLabel(key) {
   }
 
   if (key === 'frameworkAssets') {
-    return 'static assets';
+    return 'framework traffic';
   }
 
   return `show ${key}`;

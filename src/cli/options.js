@@ -95,7 +95,7 @@ export function createProgram() {
     .option('--record <mode>', 'record traffic to disk (full|partial)', parseRecordMode)
     .option('--record-path <path>', 'exact NDJSON file path for --record output')
     .option('--no-history-cache', 'disable temporary disk-backed history and keep only the hot in-memory window')
-    .option('--show-framework-assets', 'show framework/dev-server static asset requests in the traffic list')
+    .option('--show-framework-assets', 'show framework/dev-server traffic in the traffic list')
     .option('--show-cookie-values', 'show raw Cookie and Set-Cookie values in the UI and search')
     .option('--record-cookie-values', 'write raw Cookie and Set-Cookie values to recordings (default with --record)');
 }

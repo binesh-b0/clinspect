@@ -559,7 +559,11 @@ export function getHeaderTokens(headers, key) {
 }
 
 export function getContentType(headers = {}) {
-  return getHeaderValue(headers, 'content-type')
+  return normalizeContentType(getHeaderValue(headers, 'content-type'));
+}
+
+function normalizeContentType(value = '') {
+  return String(value ?? '')
     .split(';')[0]
     .trim()
     .toLowerCase();
@@ -582,6 +586,16 @@ function getLogPathname(log = {}) {
   }
 }
 
+function hasQueryParam(log = {}, key = '') {
+  const path = String(log.path ?? '');
+
+  try {
+    return new URL(path, 'http://clinspect.local').searchParams.has(key);
+  } catch {
+    return new RegExp(`(?:^|[?&])${key}(?:=|&|$)`, 'i').test(path);
+  }
+}
+
 function isStaticAssetContentType(contentType = '') {
   return STATIC_ASSET_CONTENT_TYPE_PATTERNS.some((pattern) => pattern.test(contentType));
 }
@@ -590,6 +604,82 @@ function getFrameworkPathMatch(pathname = '') {
   return FRAMEWORK_ASSET_PATH_MATCHERS.find((matcher) => (
     matcher.patterns.some((pattern) => pattern.test(pathname))
   )) ?? null;
+}
+
+function getSearchHeaderText(log = {}, side = 'request') {
+  const key = side === 'request' ? 'requestHeaders' : 'responseHeaders';
+
+  return String(log.search?.[key] ?? '');
+}
+
+function headerLineMatches(line = '', key = '') {
+  const colonIndex = line.indexOf(':');
+
+  if (colonIndex === -1) {
+    return false;
+  }
+
+  return line.slice(0, colonIndex).trim().toLowerCase() === String(key).toLowerCase();
+}
+
+function getHeaderValueFromSearchText(text = '', key = '') {
+  const line = String(text)
+    .split(/\r?\n/)
+    .find((item) => headerLineMatches(item, key));
+
+  if (!line) {
+    return '';
+  }
+
+  return line.slice(line.indexOf(':') + 1).trim();
+}
+
+function hasHeaderInSearchText(text = '', key = '') {
+  return String(text)
+    .split(/\r?\n/)
+    .some((line) => headerLineMatches(line, key));
+}
+
+function getIndexedHeaderValue(log = {}, side = 'request', key = '') {
+  const directValue = getHeaderValue(log[side]?.headers ?? {}, key);
+
+  return directValue || getHeaderValueFromSearchText(getSearchHeaderText(log, side), key);
+}
+
+function hasIndexedHeader(log = {}, side = 'request', key = '') {
+  const normalizedKey = String(key).toLowerCase();
+  const headers = log[side]?.headers ?? {};
+  const hasDirectHeader = Object.keys(headers)
+    .some((headerKey) => headerKey.toLowerCase() === normalizedKey);
+
+  return hasDirectHeader || hasHeaderInSearchText(getSearchHeaderText(log, side), key);
+}
+
+function isNextRscRequest(log = {}) {
+  if (hasQueryParam(log, '_rsc')) {
+    return true;
+  }
+
+  const responseContentType = normalizeContentType(
+    log.search?.responseContentType ?? getHeaderValue(log.response?.headers ?? {}, 'content-type')
+  );
+
+  if (responseContentType === 'text/x-component') {
+    return true;
+  }
+
+  const matchedPath = getIndexedHeaderValue(log, 'response', 'x-matched-path');
+
+  if (String(matchedPath).trim().toLowerCase().endsWith('.rsc')) {
+    return true;
+  }
+
+  return [
+    'rsc',
+    'next-router-prefetch',
+    'next-router-state-tree',
+    'next-router-segment-prefetch'
+  ].some((header) => hasIndexedHeader(log, 'request', header));
 }
 
 export function classifyFrameworkAssetRequest(log = {}) {
@@ -623,6 +713,14 @@ export function classifyFrameworkAssetRequest(log = {}) {
     };
   }
 
+  if (isNextRscRequest(log)) {
+    return {
+      framework: 'Next.js',
+      isAsset: true,
+      reason: 'next-rsc'
+    };
+  }
+
   if (FRAMEWORK_SOURCE_MODULE_PATTERN.test(pathname)) {
     return {
       framework: null,
@@ -647,7 +745,9 @@ export function classifyFrameworkAssetRequest(log = {}) {
     };
   }
 
-  const responseContentType = log.search?.responseContentType ?? getContentType(log.response?.headers ?? {});
+  const responseContentType = normalizeContentType(
+    log.search?.responseContentType ?? getHeaderValue(log.response?.headers ?? {}, 'content-type')
+  );
 
   if (isStaticAssetContentType(responseContentType)) {
     return {
@@ -911,7 +1011,7 @@ function formatStaticAssetsListLabel(summary = {}, hideFrameworkAssets = true) {
   const assetCount = Number(summary.assetCount ?? 0);
   const state = hideFrameworkAssets ? 'hidden' : 'shown';
 
-  return assetCount > 0 ? `${assetCount} ${state}` : `static ${state}`;
+  return assetCount > 0 ? `${assetCount} ${state}` : `framework ${state}`;
 }
 
 function formatStaticAssetsHeaderLabel(summary = {}, hideFrameworkAssets = true) {

@@ -1528,6 +1528,17 @@ test('filterLogs searches cold summary indexes without requiring full headers or
       responseContentType: 'image/png'
     }
   };
+  const coldRscSummary = {
+    ...coldSummary,
+    id: 'rsc',
+    path: '/b/bb56efed-5f5d-4db5-999a-73deb60a2f63?_rsc=3hbm4',
+    search: {
+      ...coldSummary.search,
+      responseContentType: 'text/x-component; charset=utf-8',
+      responseHeaders: 'content-type: text/x-component\nx-matched-path: /b/[businessId].rsc',
+      responseHeadersMasked: 'content-type: text/x-component\nx-matched-path: /b/[businessId].rsc'
+    }
+  };
 
   assert.deepEqual(getSearchValues(coldSummary, 'host'), ['api.local:9443']);
   assert.deepEqual(getSearchValues(coldSummary, 'port'), ['9443']);
@@ -1557,6 +1568,15 @@ test('filterLogs searches cold summary indexes without requiring full headers or
     isAsset: true,
     reason: 'content-type'
   });
+  assert.deepEqual(classifyFrameworkAssetRequest(coldRscSummary), {
+    framework: 'Next.js',
+    isAsset: true,
+    reason: 'next-rsc'
+  });
+  assert.deepEqual(filterLogs([coldSummary, coldRscSummary]).map((log) => log.id), ['summary']);
+  assert.deepEqual(filterLogs([coldSummary, coldRscSummary], {
+    hideFrameworkAssets: false
+  }).map((log) => log.id), ['summary', 'rsc']);
 });
 
 test('filterLogs auto-hides common frontend framework static traffic by default', () => {
@@ -1566,7 +1586,13 @@ test('filterLogs auto-hides common frontend framework static traffic by default'
     path,
     statusCode: options.statusCode ?? 200,
     timestamp: 1700000000000,
-    request: { headers: { host: 'localhost:3000' }, body: options.requestBody ?? '' },
+    request: {
+      headers: {
+        host: 'localhost:3000',
+        ...(options.requestHeaders ?? {})
+      },
+      body: options.requestBody ?? ''
+    },
     response: { headers: options.responseHeaders ?? {}, body: options.responseBody ?? '' }
   });
   const traffic = [
@@ -1574,7 +1600,23 @@ test('filterLogs auto-hides common frontend framework static traffic by default'
       responseBody: '{"ok":true}',
       responseHeaders: { 'content-type': 'application/json' }
     }),
+    createTraffic('api-json', '/api/businesses', {
+      responseBody: '{"items":[]}',
+      responseHeaders: { 'content-type': 'application/json' }
+    }),
     createTraffic('next', '/_next/static/chunks/app/layout.js?v=1'),
+    createTraffic('next-rsc-query', '/b/bb56efed-5f5d-4db5-999a-73deb60a2f63?_rsc=3hbm4', {
+      responseHeaders: { 'content-type': 'text/plain' }
+    }),
+    createTraffic('next-rsc-matched', '/b/bb56efed-5f5d-4db5-999a-73deb60a2f63', {
+      responseHeaders: { 'x-matched-path': '/b/[businessId].rsc' }
+    }),
+    createTraffic('next-rsc-content-type', '/b/bb56efed-5f5d-4db5-999a-73deb60a2f63', {
+      responseHeaders: { 'content-type': 'text/x-component; charset=utf-8' }
+    }),
+    createTraffic('next-rsc-header', '/b/bb56efed-5f5d-4db5-999a-73deb60a2f63', {
+      requestHeaders: { rsc: '1', 'next-router-state-tree': '%5B%22%22%5D' }
+    }),
     createTraffic('vite', '/@vite/client', { responseHeaders: { 'content-type': 'text/javascript' } }),
     createTraffic('nuxt', '/_nuxt/app.js'),
     createTraffic('astro', '/_astro/page.css'),
@@ -1584,61 +1626,95 @@ test('filterLogs auto-hides common frontend framework static traffic by default'
     createTraffic('webpack', '/webpack-dev-server/sockjs.bundle.js'),
     createTraffic('module', '/src/main.tsx?t=1700000000000'),
     createTraffic('image', '/asset-proxy?id=logo', { responseHeaders: { 'content-type': 'image/svg+xml' } }),
-    createTraffic('post', '/_next/static/upload.js', { method: 'POST', requestBody: 'payload', statusCode: 201 })
+    createTraffic('post', '/_next/static/upload.js', { method: 'POST', requestBody: 'payload', statusCode: 201 }),
+    createTraffic('post-rsc', '/b/bb56efed-5f5d-4db5-999a-73deb60a2f63?_rsc=3hbm4', { method: 'POST', requestBody: 'payload', statusCode: 201 })
   ];
 
-  assert.equal(isFrameworkAssetRequest(traffic[0]), false);
-  assert.equal(isFrameworkAssetRequest(traffic[1]), true);
-  assert.equal(isFrameworkAssetRequest(traffic[2]), true);
-  assert.equal(isFrameworkAssetRequest(traffic[3]), true);
-  assert.equal(isFrameworkAssetRequest(traffic[4]), true);
-  assert.equal(isFrameworkAssetRequest(traffic[5]), true);
-  assert.equal(isFrameworkAssetRequest(traffic[6]), true);
-  assert.equal(isFrameworkAssetRequest(traffic[7]), true);
-  assert.equal(isFrameworkAssetRequest(traffic[8]), true);
-  assert.equal(isFrameworkAssetRequest(traffic[9]), true);
-  assert.equal(isFrameworkAssetRequest(traffic[10]), true);
-  assert.equal(isFrameworkAssetRequest(traffic[11]), false);
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[1]), {
+  assert.deepEqual(traffic.map(isFrameworkAssetRequest), [
+    false,
+    false,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false,
+    false
+  ]);
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[2]), {
     framework: 'Next.js',
     isAsset: true,
     reason: 'framework-path'
   });
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[2]), {
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[3]), {
+    framework: 'Next.js',
+    isAsset: true,
+    reason: 'next-rsc'
+  });
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[4]), {
+    framework: 'Next.js',
+    isAsset: true,
+    reason: 'next-rsc'
+  });
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[5]), {
+    framework: 'Next.js',
+    isAsset: true,
+    reason: 'next-rsc'
+  });
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[6]), {
+    framework: 'Next.js',
+    isAsset: true,
+    reason: 'next-rsc'
+  });
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[7]), {
     framework: 'Vite',
     isAsset: true,
     reason: 'framework-path'
   });
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[3]).framework, 'Nuxt');
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[4]).framework, 'Astro');
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[5]).framework, 'SvelteKit');
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[6]).framework, 'Remix');
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[7]).framework, 'Gatsby');
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[8]).framework, 'Webpack');
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[9]), {
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[8]).framework, 'Nuxt');
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[9]).framework, 'Astro');
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[10]).framework, 'SvelteKit');
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[11]).framework, 'Remix');
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[12]).framework, 'Gatsby');
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[13]).framework, 'Webpack');
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[14]), {
     framework: null,
     isAsset: true,
     reason: 'source-module'
   });
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[10]), {
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[15]), {
     framework: null,
     isAsset: true,
     reason: 'content-type'
   });
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[11]), {
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[16]), {
     framework: null,
     isAsset: false,
     reason: null
   });
-  assert.deepEqual(filterLogs(traffic).map((log) => log.id), ['api', 'post']);
+  assert.deepEqual(classifyFrameworkAssetRequest(traffic[17]), {
+    framework: null,
+    isAsset: false,
+    reason: null
+  });
+  assert.deepEqual(filterLogs(traffic).map((log) => log.id), ['api', 'api-json', 'post', 'post-rsc']);
   assert.deepEqual(filterLogs(traffic, { hideFrameworkAssets: false }).map((log) => log.id), traffic.map((log) => log.id));
   assert.deepEqual(summarizeFrameworkAssets(traffic), {
     additionalFrameworkCount: 7,
-    assetCount: 10,
+    assetCount: 14,
     framework: 'Next.js',
-    frameworkCount: 1,
+    frameworkCount: 5,
     frameworks: [
-      { count: 1, framework: 'Next.js' },
+      { count: 5, framework: 'Next.js' },
       { count: 1, framework: 'Vite' },
       { count: 1, framework: 'Nuxt' },
       { count: 1, framework: 'Astro' },
@@ -1648,7 +1724,7 @@ test('filterLogs auto-hides common frontend framework static traffic by default'
       { count: 1, framework: 'Webpack' }
     ]
   });
-  assert.deepEqual(summarizeFrameworkAssets([traffic[0], traffic[11]]), {
+  assert.deepEqual(summarizeFrameworkAssets([traffic[0], traffic[1], traffic[16], traffic[17]]), {
     additionalFrameworkCount: 0,
     assetCount: 0,
     framework: null,
@@ -1677,7 +1753,7 @@ test('filter value helpers support multi-select and clearing', () => {
   }), 0);
   assert.equal(formatFilterLabel([], [], 'all', 'id'), 'search "id" in all fields');
   assert.equal(formatFilterLabel(['GET', 'POST'], ['2xx'], 'path', 'users'), 'method GET,POST | status 2xx | search "users" in path');
-  assert.equal(formatFilterLabel([], [], 'all', '', { hideFrameworkAssets: true }), 'static hidden');
+  assert.equal(formatFilterLabel([], [], 'all', '', { hideFrameworkAssets: true }), 'framework hidden');
   assert.equal(formatFilterLabel([], [], 'all', '', {
     frameworkSummary: {
       additionalFrameworkCount: 1,
