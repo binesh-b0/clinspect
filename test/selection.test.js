@@ -9,8 +9,11 @@ import {
   COMMAND_DEFINITIONS,
   createBlankComposerState,
   createComposerStateFromLog,
+  cycleDetailWidthMode,
+  cyclePaneWidthMode,
   cycleTrafficDensity,
   cycleTrafficPathMode,
+  cycleTrafficWidthMode,
   cycleValue,
   ensureComposerActiveTabRows,
   extractPortFromHost,
@@ -18,6 +21,7 @@ import {
   filterLogs,
   formatCommandSelectionStatus,
   formatFrameworkDetectionLabel,
+  formatPaneWidthLabel,
   formatFooterText,
   formatFilterLabel,
   formatPathForMode,
@@ -41,8 +45,11 @@ import {
   getMouseWheelTarget,
   getNextDetailMatchIndex,
   getPageStep,
+  getPaneLayout,
   getRenderHeight,
   getScrollOffsetForFocusedRow,
+  getTrafficPaneWidth,
+  getTrafficRowWidth,
   isFrameworkAssetRequest,
   parseDetailSearchQuery,
   getSelectedIndex,
@@ -124,7 +131,13 @@ test('traffic list display helpers format path modes and density presets', () =>
   const full = normalizeTrafficListDisplay();
   const compact = normalizeTrafficListDisplay({ density: 'compact' });
   const pathOnly = normalizeTrafficListDisplay({ density: 'path', pathMode: 'end' });
+  const wide = normalizeTrafficListDisplay({ widthMode: 'wide' });
+  const invalidWidth = normalizeTrafficListDisplay({ widthMode: 'huge' });
+  const invalidTarget = normalizeTrafficListDisplay({ widthMode: 'wide', widthTarget: 'side' });
   const toggled = toggleTrafficColumn(full, 'time');
+  const wideLayout = getPaneLayout({ widthMode: 'wide', widthTarget: 'traffic' }, 120);
+  const detailWideLayout = getPaneLayout({ widthMode: 'wide', widthTarget: 'details' }, 120);
+  const wideRowWidth = getTrafficRowWidth(wideLayout.trafficPaneWidth);
 
   assert.equal(formatPathForMode('/short', 12, 'smart'), '/short');
   assert.equal(formatPathForMode('/api/orders/123?include=lineItems', 14, 'start').startsWith('/api/orders'), true);
@@ -133,15 +146,141 @@ test('traffic list display helpers format path modes and density presets', () =>
   assert.equal(formatPathForMode('/abcdef', 3, 'smart'), '/ab');
 
   assert.equal(full.density, 'full');
+  assert.equal(full.widthMode, 'normal');
+  assert.equal(full.widthTarget, 'traffic');
   assert.equal(compact.columns.time, false);
   assert.equal(compact.columns.duration, false);
   assert.equal(pathOnly.columns.method, false);
+  assert.equal(wide.widthMode, 'wide');
+  assert.equal(wide.widthTarget, 'traffic');
+  assert.equal(invalidWidth.widthMode, 'normal');
+  assert.equal(invalidTarget.widthTarget, 'traffic');
   assert.equal(toggled.density, 'custom');
   assert.equal(cycleTrafficPathMode(full).pathMode, 'start');
   assert.equal(cycleTrafficDensity(toggled).density, 'full');
+  assert.equal(cycleTrafficWidthMode(full).widthMode, 'half');
+  assert.equal(cycleTrafficWidthMode(full).widthTarget, 'traffic');
+  assert.equal(cycleTrafficWidthMode({ widthMode: 'half' }).widthMode, 'wide');
+  assert.equal(cycleTrafficWidthMode(wide).widthMode, 'full');
+  assert.equal(cycleTrafficWidthMode(full, -1).widthMode, 'full');
+  assert.equal(cycleDetailWidthMode(full).widthMode, 'wide');
+  assert.equal(cycleDetailWidthMode(full).widthTarget, 'details');
+  assert.equal(cycleDetailWidthMode({ widthMode: 'half' }).widthMode, 'normal');
+  assert.equal(cycleDetailWidthMode({ widthMode: 'half' }).widthTarget, 'traffic');
+  assert.equal(cycleDetailWidthMode({ widthMode: 'wide', widthTarget: 'details' }).widthMode, 'full');
+  assert.equal(cycleDetailWidthMode({ widthMode: 'full', widthTarget: 'details' }).widthMode, 'half');
+  assert.deepEqual(
+    cyclePaneWidthMode({ widthMode: 'wide', widthTarget: 'traffic' }, false),
+    {
+      columns: full.columns,
+      density: 'full',
+      pathMode: 'smart',
+      widthMode: 'half',
+      widthTarget: 'traffic'
+    }
+  );
+  assert.deepEqual(
+    cyclePaneWidthMode({ widthMode: 'wide', widthTarget: 'details' }, true),
+    {
+      columns: full.columns,
+      density: 'full',
+      pathMode: 'smart',
+      widthMode: 'half',
+      widthTarget: 'traffic'
+    }
+  );
+  assert.equal(formatPaneWidthLabel(full), 'normal');
+  assert.equal(formatPaneWidthLabel({ widthMode: 'half' }), 'half');
+  assert.equal(formatPaneWidthLabel({ widthMode: 'wide', widthTarget: 'traffic' }), 'traffic wide');
+  assert.equal(formatPaneWidthLabel({ widthMode: 'full', widthTarget: 'details' }), 'details full');
+  assert.equal(getTrafficPaneWidth('normal', 120), 50);
+  assert.equal(getTrafficPaneWidth('wide', 120), 78);
+  assert.equal(getTrafficPaneWidth('wide', 100), 64);
+  assert.equal(getTrafficPaneWidth('wide', 80), 50);
+  assert.equal(getTrafficPaneWidth('wide', 40), 38);
+  assert.equal(getTrafficPaneWidth('full', 120), 118);
+  assert.equal(getTrafficPaneWidth('invalid', 120), 50);
+  assert.equal(getTrafficPaneWidth('full', Number.NaN), 78);
+  assert.deepEqual(getPaneLayout(full, 120), {
+    availableWidth: 118,
+    detailPaneWidth: 67,
+    gapWidth: 1,
+    showDetailPane: true,
+    showTrafficPane: true,
+    trafficPaneWidth: 50
+  });
+  assert.deepEqual(wideLayout, {
+    availableWidth: 118,
+    detailPaneWidth: 39,
+    gapWidth: 1,
+    showDetailPane: true,
+    showTrafficPane: true,
+    trafficPaneWidth: 78
+  });
+  assert.deepEqual(getPaneLayout({ widthMode: 'half' }, 120), {
+    availableWidth: 118,
+    detailPaneWidth: 59,
+    gapWidth: 1,
+    showDetailPane: true,
+    showTrafficPane: true,
+    trafficPaneWidth: 58
+  });
+  assert.deepEqual(getPaneLayout({ widthMode: 'full', widthTarget: 'traffic' }, 120), {
+    availableWidth: 118,
+    detailPaneWidth: 0,
+    gapWidth: 0,
+    showDetailPane: false,
+    showTrafficPane: true,
+    trafficPaneWidth: 118
+  });
+  assert.deepEqual(detailWideLayout, {
+    availableWidth: 118,
+    detailPaneWidth: 78,
+    gapWidth: 1,
+    showDetailPane: true,
+    showTrafficPane: true,
+    trafficPaneWidth: 39
+  });
+  assert.deepEqual(getPaneLayout({ widthMode: 'full', widthTarget: 'details' }, 120), {
+    availableWidth: 118,
+    detailPaneWidth: 118,
+    gapWidth: 0,
+    showDetailPane: true,
+    showTrafficPane: false,
+    trafficPaneWidth: 0
+  });
+  assert.deepEqual(getPaneLayout({ widthMode: 'wide', widthTarget: 'details' }, 80), {
+    availableWidth: 78,
+    detailPaneWidth: 45,
+    gapWidth: 1,
+    showDetailPane: true,
+    showTrafficPane: true,
+    trafficPaneWidth: 32
+  });
+  assert.deepEqual(getPaneLayout({ widthMode: 'wide', widthTarget: 'details' }, 160), {
+    availableWidth: 158,
+    detailPaneWidth: 116,
+    gapWidth: 1,
+    showDetailPane: true,
+    showTrafficPane: true,
+    trafficPaneWidth: 41
+  });
+  assert.deepEqual(getPaneLayout({ widthMode: 'wide', widthTarget: 'details' }, 40), {
+    availableWidth: 38,
+    detailPaneWidth: 38,
+    gapWidth: 0,
+    showDetailPane: true,
+    showTrafficPane: false,
+    trafficPaneWidth: 0
+  });
+  assert.equal(getTrafficRowWidth(50), 45);
+  assert.equal(getTrafficRowWidth(78), 73);
+  assert.equal(getTrafficRowWidth(82), 77);
 
   assert.equal(formatTrafficHeader(pathOnly).trim(), 'path');
   assert.equal(formatTrafficRow(log, true, full).length, 45);
+  assert.equal(formatTrafficHeader(full, wideRowWidth).length, wideRowWidth);
+  assert.equal(formatTrafficRow(log, true, full, wideRowWidth).length, wideRowWidth);
   assert.equal(formatTrafficRow(log, false, compact).includes('GET'), true);
   assert.equal(formatTrafficRow(log, false, compact).includes('34ms'), false);
   assert.equal(formatTrafficRow(log, false, pathOnly).includes('GET'), false);
@@ -248,6 +387,10 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
     { type: 'cycleTrafficDensity', direction: 1 }
   );
   assert.deepEqual(
+    getKeyboardAction('w'),
+    { type: 'cyclePaneWidthMode', direction: 1 }
+  );
+  assert.deepEqual(
     getKeyboardAction('L'),
     { type: 'openListDisplay' }
   );
@@ -336,6 +479,10 @@ test('keyboard action helper supports colon command mode for careful actions', (
     { type: 'appendCommandText', value: 'r' }
   );
   assert.deepEqual(
+    getKeyboardAction('w', {}, { isCommandOpen: true }),
+    { type: 'appendCommandText', value: 'w' }
+  );
+  assert.deepEqual(
     getKeyboardAction('', { backspace: true }, { isCommandOpen: true }),
     { type: 'backspaceCommandText' }
   );
@@ -411,6 +558,10 @@ test('keyboard action helper supports request composer input', () => {
   assert.deepEqual(
     getKeyboardAction(':', {}, { isComposerOpen: true, isComposerTextFocused: true }),
     { type: 'insertComposerText', value: ':' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('w', {}, { isComposerOpen: true, isComposerTextFocused: true }),
+    { type: 'insertComposerText', value: 'w' }
   );
   assert.deepEqual(
     getKeyboardAction('R', {}, { isComposerOpen: true, isComposerTextFocused: true }),
@@ -581,6 +732,10 @@ test('keyboard action helper gates help modal and preserves filter query input',
     { type: 'closeHelp' }
   );
   assert.deepEqual(
+    getKeyboardAction('w', {}, { isHelpOpen: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
     getKeyboardAction('', { escape: true }, { isHelpOpen: true }),
     { type: 'closeHelp' }
   );
@@ -636,6 +791,10 @@ test('keyboard action helper supports list display modal input', () => {
     { type: 'resetListDisplay' }
   );
   assert.deepEqual(
+    getKeyboardAction('w', {}, { isListDisplayOpen: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
     getKeyboardAction('', { return: true }, { isListDisplayOpen: true }),
     { type: 'closeListDisplay' }
   );
@@ -650,6 +809,10 @@ test('keyboard action helper toggles framework assets outside text inputs', () =
   assert.deepEqual(
     getKeyboardAction('F', {}, { isFilterOpen: true, filterFocus: 'query' }),
     { type: 'appendSearch', value: 'F' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('w', {}, { isFilterOpen: true, filterFocus: 'query' }),
+    { type: 'appendSearch', value: 'w' }
   );
   assert.deepEqual(
     getKeyboardAction('F', {}, { isDetailSearchOpen: true }),
@@ -691,6 +854,10 @@ test('keyboard action helper supports detail modal and detail search input', () 
     { type: 'showCommandHint', message: 'use :resend' }
   );
   assert.deepEqual(
+    getKeyboardAction('w', {}, { isDetailModalOpen: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
     getKeyboardAction('E', {}, { isDetailModalOpen: true, isLiveMode: true }),
     { type: 'openComposer', mode: 'edit-resend' }
   );
@@ -707,6 +874,10 @@ test('keyboard action helper supports detail modal and detail search input', () 
     { type: 'appendDetailSearch', value: 'R' }
   );
   assert.deepEqual(
+    getKeyboardAction('w', {}, { isDetailSearchOpen: true }),
+    { type: 'appendDetailSearch', value: 'w' }
+  );
+  assert.deepEqual(
     getKeyboardAction('', { backspace: true }, { isDetailSearchOpen: true }),
     { type: 'backspaceDetailSearch' }
   );
@@ -716,11 +887,16 @@ test('keyboard action helper supports detail modal and detail search input', () 
   );
 });
 
-test('mouse wheel routing maps the fixed traffic pane by terminal column', () => {
+test('mouse wheel routing maps the active traffic pane by terminal column', () => {
   assert.equal(getMouseWheelTarget(1), 'traffic');
   assert.equal(getMouseWheelTarget(51), 'traffic');
   assert.equal(getMouseWheelTarget(52), 'details');
   assert.equal(getMouseWheelTarget(120), 'details');
+  assert.equal(getMouseWheelTarget(79, getPaneLayout({ widthMode: 'wide', widthTarget: 'traffic' }, 120)), 'traffic');
+  assert.equal(getMouseWheelTarget(80, getPaneLayout({ widthMode: 'wide', widthTarget: 'traffic' }, 120)), 'details');
+  assert.equal(getMouseWheelTarget(119, getPaneLayout({ widthMode: 'full', widthTarget: 'traffic' }, 120)), 'traffic');
+  assert.equal(getMouseWheelTarget(120, getPaneLayout({ widthMode: 'full', widthTarget: 'traffic' }, 120)), 'details');
+  assert.equal(getMouseWheelTarget(1, getPaneLayout({ widthMode: 'full', widthTarget: 'details' }, 120)), 'details');
 });
 
 test('getRenderHeight keeps one terminal row free for Ink updates', () => {
@@ -834,6 +1010,7 @@ test('help sections describe traffic list display controls', () => {
 
   assert.deepEqual(displaySection.rows.find(([keys]) => keys === 't'), ['t', 'cycle path mode']);
   assert.deepEqual(displaySection.rows.find(([keys]) => keys === 'v'), ['v', 'cycle list density']);
+  assert.deepEqual(displaySection.rows.find(([keys]) => keys === 'w'), ['w', 'cycle pane width']);
   assert.deepEqual(displaySection.rows.find(([keys]) => keys === 'F'), ['F', 'show / hide static']);
   assert.deepEqual(displaySection.rows.find(([keys]) => keys === 'L'), ['L', 'list display modal']);
 });

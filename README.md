@@ -166,8 +166,9 @@ Main UI:
 - `/` searches traffic or details, depending on focus.
 - `t` cycles traffic-list path display between smart, start, and end truncation.
 - `v` cycles traffic-list density between full, compact, and path-only views.
+- `w` cycles the focused pane width between normal, half, wide, and full-width views.
 - `F` shows or hides framework/static asset requests.
-- `L` opens traffic-list display settings; `j`/`k` selects a row, left/right changes path mode or density, `space` shows/hides fields or static assets, `r` resets, `enter`/`esc` closes.
+- `L` opens traffic-list display settings; `j`/`k` selects a row, left/right changes path mode, density, or width, `space` shows/hides fields or static assets, `r` resets, `enter`/`esc` closes.
 - `y` copies the focused traffic item or detail.
 - `D` downloads the focused traffic item or detail to `./.clinspect/exports/`.
 - `m`/`r` chooses masked or raw values after starting an export.

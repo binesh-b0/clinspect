@@ -30,7 +30,9 @@ const SEARCH_FIELDS = ['all', 'path', 'status', 'method', 'time', 'host', 'port'
 const FILTER_FOCUS_ORDER = ['query', 'field', 'method', 'status'];
 const TRAFFIC_PATH_MODES = ['smart', 'start', 'end'];
 const TRAFFIC_DENSITY_PRESETS = ['full', 'compact', 'path'];
-const LIST_DISPLAY_FOCUS_ORDER = ['pathMode', 'density', 'frameworkAssets', 'time', 'method', 'status', 'duration'];
+const TRAFFIC_WIDTH_MODES = ['normal', 'half', 'wide', 'full'];
+const PANE_WIDTH_TARGETS = ['traffic', 'details'];
+const LIST_DISPLAY_FOCUS_ORDER = ['pathMode', 'density', 'widthMode', 'frameworkAssets', 'time', 'method', 'status', 'duration'];
 const COMPOSER_TABS = ['params', 'headers', 'body', 'auth', 'cookies', 'env', 'save'];
 const COMPOSER_TAB_LABELS = {
   auth: 'Auth',
@@ -48,6 +50,10 @@ const MULTIPART_FIELD_TYPES = ['text', 'file'];
 const ROOT_PADDING_X = 1;
 const TRAFFIC_LIST_WIDTH = 50;
 const TRAFFIC_ROW_WIDTH = 45;
+const TRAFFIC_PANE_GAP = 1;
+const MIN_TRAFFIC_PANE_WIDTH = 32;
+const MIN_DETAIL_PANE_WIDTH = 32;
+const FALLBACK_TERMINAL_COLUMNS = 80;
 const BODY_LINE_MAX_LENGTH = 120;
 const DETAIL_SEARCH_BAR_HEIGHT = 5;
 const RESEND_CONFIRM_BAR_HEIGHT = 6;
@@ -198,7 +204,9 @@ export const DEFAULT_TRAFFIC_LIST_DISPLAY = {
     time: true
   },
   density: 'full',
-  pathMode: 'smart'
+  pathMode: 'smart',
+  widthMode: 'normal',
+  widthTarget: 'traffic'
 };
 
 const TRAFFIC_DENSITY_COLUMNS = {
@@ -320,6 +328,12 @@ export function normalizeTrafficListDisplay(display = {}) {
   const pathMode = TRAFFIC_PATH_MODES.includes(display.pathMode)
     ? display.pathMode
     : DEFAULT_TRAFFIC_LIST_DISPLAY.pathMode;
+  const widthMode = TRAFFIC_WIDTH_MODES.includes(display.widthMode)
+    ? display.widthMode
+    : DEFAULT_TRAFFIC_LIST_DISPLAY.widthMode;
+  const widthTarget = PANE_WIDTH_TARGETS.includes(display.widthTarget)
+    ? display.widthTarget
+    : DEFAULT_TRAFFIC_LIST_DISPLAY.widthTarget;
   const columns = display.columns
     ? normalizeTrafficColumns(display.columns)
     : { ...TRAFFIC_DENSITY_COLUMNS[density === 'custom' ? DEFAULT_TRAFFIC_LIST_DISPLAY.density : density] };
@@ -327,7 +341,9 @@ export function normalizeTrafficListDisplay(display = {}) {
   return {
     columns,
     density: getTrafficDensityForColumns(columns),
-    pathMode
+    pathMode,
+    widthMode,
+    widthTarget
   };
 }
 
@@ -362,6 +378,36 @@ export function cycleTrafficDensity(display = {}, direction = 1) {
     : (currentIndex + direction + TRAFFIC_DENSITY_PRESETS.length) % TRAFFIC_DENSITY_PRESETS.length;
 
   return applyTrafficDensity(normalized, TRAFFIC_DENSITY_PRESETS[nextIndex]);
+}
+
+export function cyclePaneWidthMode(display = {}, isListFocused = true, direction = 1) {
+  const normalized = normalizeTrafficListDisplay(display);
+  const widthTarget = isListFocused ? 'traffic' : 'details';
+  const widthModeCycle = widthTarget === 'details'
+    ? ['half', 'normal', 'wide', 'full']
+    : TRAFFIC_WIDTH_MODES;
+  const shouldSwitchTarget = normalized.widthMode !== 'normal' &&
+    normalized.widthMode !== 'half' &&
+    normalized.widthTarget !== widthTarget;
+  const widthMode = shouldSwitchTarget
+    ? 'half'
+    : cycleValue(widthModeCycle, normalized.widthMode, direction);
+
+  return {
+    ...normalized,
+    widthMode,
+    widthTarget: widthMode === 'normal' || widthMode === 'half'
+      ? DEFAULT_TRAFFIC_LIST_DISPLAY.widthTarget
+      : widthTarget
+  };
+}
+
+export function cycleTrafficWidthMode(display = {}, direction = 1) {
+  return cyclePaneWidthMode(display, true, direction);
+}
+
+export function cycleDetailWidthMode(display = {}, direction = 1) {
+  return cyclePaneWidthMode(display, false, direction);
 }
 
 export function toggleTrafficColumn(display = {}, column) {
@@ -412,7 +458,112 @@ export function formatPathForMode(value, maxLength, mode = 'smart') {
   return `${text.slice(0, startLength)}...${text.slice(-endLength)}`;
 }
 
-function getTrafficPathWidth(display = {}) {
+function getTerminalColumns(terminalColumns = process.stdout.columns) {
+  return Number.isFinite(terminalColumns) && terminalColumns > 0
+    ? Math.floor(terminalColumns)
+    : FALLBACK_TERMINAL_COLUMNS;
+}
+
+function createPaneLayout(trafficPaneWidth, detailPaneWidth, availableWidth) {
+  const safeTrafficPaneWidth = Math.max(0, Math.floor(Number(trafficPaneWidth) || 0));
+  const safeDetailPaneWidth = Math.max(0, Math.floor(Number(detailPaneWidth) || 0));
+  const showTrafficPane = safeTrafficPaneWidth > 0;
+  const showDetailPane = safeDetailPaneWidth > 0;
+  const gapWidth = showTrafficPane && showDetailPane ? TRAFFIC_PANE_GAP : 0;
+
+  return {
+    availableWidth,
+    detailPaneWidth: safeDetailPaneWidth,
+    gapWidth,
+    showDetailPane,
+    showTrafficPane,
+    trafficPaneWidth: safeTrafficPaneWidth
+  };
+}
+
+export function getPaneLayout(display = {}, terminalColumns = process.stdout.columns) {
+  const normalized = normalizeTrafficListDisplay(display);
+  const availableWidth = Math.max(1, getTerminalColumns(terminalColumns) - (ROOT_PADDING_X * 2));
+  const normalWidth = Math.min(TRAFFIC_LIST_WIDTH, availableWidth);
+
+  if (normalized.widthMode === 'full') {
+    return normalized.widthTarget === 'details'
+      ? createPaneLayout(0, availableWidth, availableWidth)
+      : createPaneLayout(availableWidth, 0, availableWidth);
+  }
+
+  if (normalized.widthMode === 'half') {
+    if (availableWidth < MIN_TRAFFIC_PANE_WIDTH + MIN_DETAIL_PANE_WIDTH + TRAFFIC_PANE_GAP) {
+      return createPaneLayout(0, availableWidth, availableWidth);
+    }
+
+    const splitWidth = availableWidth - TRAFFIC_PANE_GAP;
+    const trafficPaneWidth = Math.floor(splitWidth / 2);
+    const detailPaneWidth = splitWidth - trafficPaneWidth;
+
+    return createPaneLayout(trafficPaneWidth, detailPaneWidth, availableWidth);
+  }
+
+  if (normalized.widthMode === 'wide' && normalized.widthTarget === 'traffic') {
+    const desiredTrafficWidth = Math.floor((availableWidth - TRAFFIC_PANE_GAP) * 2 / 3);
+    const maxTrafficWidthWithDetails = Math.max(
+      normalWidth,
+      availableWidth - MIN_DETAIL_PANE_WIDTH - TRAFFIC_PANE_GAP
+    );
+    const trafficPaneWidth = Math.max(
+      normalWidth,
+      Math.min(desiredTrafficWidth, maxTrafficWidthWithDetails, availableWidth)
+    );
+    const detailPaneWidth = trafficPaneWidth >= availableWidth
+      ? 0
+      : Math.max(0, availableWidth - trafficPaneWidth - TRAFFIC_PANE_GAP);
+
+    return createPaneLayout(trafficPaneWidth, detailPaneWidth, availableWidth);
+  }
+
+  if (normalized.widthMode === 'wide' && normalized.widthTarget === 'details') {
+    if (availableWidth < MIN_TRAFFIC_PANE_WIDTH + MIN_DETAIL_PANE_WIDTH + TRAFFIC_PANE_GAP) {
+      return createPaneLayout(0, availableWidth, availableWidth);
+    }
+
+    const normalDetailWidth = normalWidth >= availableWidth
+      ? 0
+      : Math.max(0, availableWidth - normalWidth - TRAFFIC_PANE_GAP);
+    const desiredDetailWidth = Math.ceil((availableWidth - TRAFFIC_PANE_GAP) * 2 / 3);
+    const maxDetailWidthWithTraffic = availableWidth - MIN_TRAFFIC_PANE_WIDTH - TRAFFIC_PANE_GAP;
+    const minimumWideDetailWidth = normalDetailWidth > 0
+      ? Math.ceil((normalDetailWidth + Math.max(normalDetailWidth, maxDetailWidthWithTraffic)) / 2)
+      : MIN_DETAIL_PANE_WIDTH;
+    const detailPaneWidth = Math.max(
+      MIN_DETAIL_PANE_WIDTH,
+      Math.min(Math.max(desiredDetailWidth, minimumWideDetailWidth), maxDetailWidthWithTraffic, availableWidth)
+    );
+    const trafficPaneWidth = detailPaneWidth >= availableWidth
+      ? 0
+      : Math.max(0, availableWidth - detailPaneWidth - TRAFFIC_PANE_GAP);
+
+    return createPaneLayout(trafficPaneWidth, detailPaneWidth, availableWidth);
+  }
+
+  const detailPaneWidth = normalWidth >= availableWidth
+    ? 0
+    : Math.max(0, availableWidth - normalWidth - TRAFFIC_PANE_GAP);
+
+  return createPaneLayout(normalWidth, detailPaneWidth, availableWidth);
+}
+
+export function getTrafficPaneWidth(widthMode = DEFAULT_TRAFFIC_LIST_DISPLAY.widthMode, terminalColumns = process.stdout.columns) {
+  return getPaneLayout({
+    widthMode,
+    widthTarget: 'traffic'
+  }, terminalColumns).trafficPaneWidth;
+}
+
+export function getTrafficRowWidth(paneWidth = TRAFFIC_LIST_WIDTH) {
+  return Math.max(4, Math.floor(Number(paneWidth) || TRAFFIC_LIST_WIDTH) - 5);
+}
+
+function getTrafficPathWidth(display = {}, rowWidth = TRAFFIC_ROW_WIDTH) {
   const { columns } = normalizeTrafficListDisplay(display);
   const nonPathWidth = 1 +
     (columns.time ? TRAFFIC_COLUMN_WIDTHS.time : 0) +
@@ -426,13 +577,13 @@ function getTrafficPathWidth(display = {}) {
     (columns.duration ? 1 : 0);
   const spaces = Math.max(0, tokenCount - 1);
 
-  return Math.max(4, TRAFFIC_ROW_WIDTH - nonPathWidth - spaces);
+  return Math.max(4, rowWidth - nonPathWidth - spaces);
 }
 
-export function formatTrafficHeader(display = {}) {
+export function formatTrafficHeader(display = {}, rowWidth = TRAFFIC_ROW_WIDTH) {
   const normalized = normalizeTrafficListDisplay(display);
   const { columns } = normalized;
-  const pathWidth = getTrafficPathWidth(normalized);
+  const pathWidth = getTrafficPathWidth(normalized, rowWidth);
   const tokens = [' '];
 
   if (columns.time) {
@@ -456,10 +607,10 @@ export function formatTrafficHeader(display = {}) {
   return tokens.join(' ');
 }
 
-export function formatTrafficRow(log, selected = false, display = {}) {
+export function formatTrafficRow(log, selected = false, display = {}, rowWidth = TRAFFIC_ROW_WIDTH) {
   const normalized = normalizeTrafficListDisplay(display);
   const { columns } = normalized;
-  const pathWidth = getTrafficPathWidth(normalized);
+  const pathWidth = getTrafficPathWidth(normalized, rowWidth);
   const tokens = [selected ? '>' : ' '];
 
   if (columns.time) {
@@ -2105,11 +2256,14 @@ const TrafficList = React.memo(function TrafficList({
   hideFrameworkAssets,
   listDisplay,
   methodFilters,
+  marginRight = TRAFFIC_PANE_GAP,
+  paneWidth = TRAFFIC_LIST_WIDTH,
   statusFilters,
   searchField,
   searchQuery
 }) {
   const normalizedDisplay = normalizeTrafficListDisplay(listDisplay);
+  const rowWidth = getTrafficRowWidth(paneWidth);
   const visibleCount = getTrafficVisibleCount(bottomOffset);
   const startIndex = Math.max(0, Math.min(
     selectedIndex - Math.floor(visibleCount / 2),
@@ -2127,22 +2281,22 @@ const TrafficList = React.memo(function TrafficList({
     Box,
     {
       flexDirection: 'column',
-      width: TRAFFIC_LIST_WIDTH,
+      width: paneWidth,
       flexShrink: 0,
       borderStyle: 'single',
       borderColor: isFocused ? 'cyan' : 'gray',
       paddingX: 1,
-      marginRight: 1
+      marginRight
     },
     h(Text, { bold: true }, `Traffic ${isFocused ? 'focused' : 'idle'} | ${isFollowingLatest ? 'follow' : 'hold'}`),
     h(Text, { color: 'gray', wrap: 'truncate' }, `filters ${filterLabel} | view ${displayLabel}`),
-    h(Text, { color: 'gray' }, formatTrafficHeader(normalizedDisplay)),
+    h(Text, { color: 'gray' }, formatTrafficHeader(normalizedDisplay, rowWidth)),
     logs.length === 0
       ? h(Text, { color: 'gray', wrap: 'truncate' }, noRowsText)
       : visibleLogs.map((log, offset) => {
         const absoluteIndex = startIndex + offset;
         const selected = absoluteIndex === selectedIndex;
-        const row = formatTrafficRow(log, selected, normalizedDisplay);
+        const row = formatTrafficRow(log, selected, normalizedDisplay, rowWidth);
 
         return h(
           Text,
@@ -2214,7 +2368,8 @@ const DetailViewport = React.memo(function DetailViewport({
   title,
   subtitle,
   borderColor,
-  flexGrow = 1
+  flexGrow = 1,
+  width
 }) {
   const maxScrollOffset = getMaxScrollOffset(rows, visibleCount);
   const safeScrollOffset = Math.min(scrollOffset, maxScrollOffset);
@@ -2232,7 +2387,9 @@ const DetailViewport = React.memo(function DetailViewport({
     Box,
     {
       flexDirection: 'column',
-      flexGrow,
+      flexGrow: width ? 0 : flexGrow,
+      flexShrink: width ? 0 : undefined,
+      width,
       borderStyle: 'single',
       borderColor,
       paddingX: 1
@@ -2252,14 +2409,17 @@ const DetailPane = React.memo(function DetailPane({
   focusedRow,
   scrollOffset,
   matchCount = 0,
-  activeMatchIndex = 0
+  activeMatchIndex = 0,
+  paneWidth
 }) {
   if (!log) {
     return h(
       Box,
       {
         flexDirection: 'column',
-        flexGrow: 1,
+        flexGrow: paneWidth ? 0 : 1,
+        flexShrink: paneWidth ? 0 : undefined,
+        width: paneWidth,
         borderStyle: 'single',
         borderColor: isFocused ? 'cyan' : 'gray',
         paddingX: 1
@@ -2281,7 +2441,8 @@ const DetailPane = React.memo(function DetailPane({
     scrollOffset,
     title: summary,
     subtitle: `${tabLabel}${matchLabel}`,
-    visibleCount
+    visibleCount,
+    width: paneWidth
   });
 });
 
@@ -3264,6 +3425,7 @@ export const HELP_SECTIONS = [
     rows: [
       ['t', 'cycle path mode'],
       ['v', 'cycle list density'],
+      ['w', 'cycle pane width'],
       ['F', 'show / hide static'],
       ['L', 'list display modal'],
       ['y', 'copy item'],
@@ -3369,6 +3531,20 @@ function formatBooleanOption(value) {
   return value ? '[x]' : '[ ]';
 }
 
+export function formatPaneWidthLabel(display = {}) {
+  const normalized = normalizeTrafficListDisplay(display);
+
+  if (normalized.widthMode === 'normal') {
+    return 'normal';
+  }
+
+  if (normalized.widthMode === 'half') {
+    return 'half';
+  }
+
+  return `${normalized.widthTarget} ${normalized.widthMode}`;
+}
+
 function formatListDisplayValue(display, key, options = {}) {
   const normalized = normalizeTrafficListDisplay(display);
 
@@ -3378,6 +3554,10 @@ function formatListDisplayValue(display, key, options = {}) {
 
   if (key === 'density') {
     return normalized.density;
+  }
+
+  if (key === 'widthMode') {
+    return formatPaneWidthLabel(normalized);
   }
 
   if (key === 'frameworkAssets') {
@@ -3394,6 +3574,10 @@ function getListDisplayLabel(key) {
 
   if (key === 'density') {
     return 'density';
+  }
+
+  if (key === 'widthMode') {
+    return 'width';
   }
 
   if (key === 'frameworkAssets') {
@@ -3440,10 +3624,10 @@ const ListDisplayModal = React.memo(function ListDisplayModal({
         const selected = index === safeFocusIndex;
         const value = formatListDisplayValue(normalized, key, { hideFrameworkAssets });
         const label = getListDisplayLabel(key);
-        const hint = key === 'pathMode' || key === 'density'
+        const hint = key === 'pathMode' || key === 'density' || key === 'widthMode'
           ? 'change with left/right arrows'
           : 'show/hide with space';
-        const text = `${selected ? '>' : ' '} ${pad(label, 14)} ${pad(value, 8)} ${hint}`;
+        const text = `${selected ? '>' : ' '} ${pad(label, 14)} ${pad(value, 13)} ${hint}`;
 
         return h(Text, {
           key,
@@ -3849,9 +4033,20 @@ export function moveSelectedLogId(logs, selectedLogId, direction) {
   return logs[nextIndex].id;
 }
 
-export function getMouseWheelTarget(column) {
+export function getMouseWheelTarget(column, layoutOrTrafficPaneWidth = TRAFFIC_LIST_WIDTH, showTrafficPane = true) {
   const value = Number(column);
-  const trafficEndColumn = ROOT_PADDING_X + TRAFFIC_LIST_WIDTH;
+  const layout = typeof layoutOrTrafficPaneWidth === 'object' && layoutOrTrafficPaneWidth !== null
+    ? layoutOrTrafficPaneWidth
+    : {
+      showTrafficPane,
+      trafficPaneWidth: Math.max(0, Math.floor(Number(layoutOrTrafficPaneWidth) || TRAFFIC_LIST_WIDTH))
+    };
+
+  if (!layout.showTrafficPane) {
+    return 'details';
+  }
+
+  const trafficEndColumn = ROOT_PADDING_X + Math.max(0, Math.floor(Number(layout.trafficPaneWidth) || 0));
 
   if (Number.isSafeInteger(value) && value > 0 && value <= trafficEndColumn) {
     return 'traffic';
@@ -4036,7 +4231,9 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     isComposerLibraryOpen = false,
     isComposerTextFocused = false,
     detailPageSize = 1,
-    trafficPageSize = 1
+    showTrafficPane = true,
+    trafficPageSize = 1,
+    trafficPaneWidth = TRAFFIC_LIST_WIDTH
   } = options;
   const value = input ?? '';
   const keyState = key ?? {};
@@ -4322,7 +4519,7 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   const mouseEvent = parseInkMouseInput(value);
 
   if (mouseEvent) {
-    if (getMouseWheelTarget(mouseEvent.x) === 'traffic') {
+    if (getMouseWheelTarget(mouseEvent.x, trafficPaneWidth, showTrafficPane) === 'traffic') {
       return { type: 'moveSelection', direction: mouseEvent.direction };
     }
 
@@ -4473,6 +4670,10 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
 
   if (value === 'v') {
     return { type: 'cycleTrafficDensity', direction: 1 };
+  }
+
+  if (value === 'w') {
+    return { type: 'cyclePaneWidthMode', direction: 1 };
   }
 
   if (value === 'y') {
@@ -4637,6 +4838,8 @@ function KeyboardControls({
   isComposerLibraryOpen,
   isComposerTextFocused,
   detailPageSize,
+  showTrafficPane,
+  trafficPaneWidth,
   trafficPageSize,
   onAddComposerRow,
   onAppendCommandText,
@@ -4665,6 +4868,7 @@ function KeyboardControls({
   onDeleteComposerText,
   onCycleFilterFocus,
   onCycleListDisplayOption,
+  onCyclePaneWidthMode,
   onCycleTrafficDensity,
   onCycleTrafficPathMode,
   onFinishExport,
@@ -4740,6 +4944,8 @@ function KeyboardControls({
       isComposerLibraryOpen,
       isComposerTextFocused,
       detailPageSize,
+      showTrafficPane,
+      trafficPaneWidth,
       trafficPageSize
     });
 
@@ -4821,6 +5027,9 @@ function KeyboardControls({
         break;
       case 'cycleTrafficPathMode':
         onCycleTrafficPathMode(action.direction);
+        break;
+      case 'cyclePaneWidthMode':
+        onCyclePaneWidthMode(action.direction);
         break;
       case 'deleteComposerRow':
         onDeleteComposerRow();
@@ -5266,6 +5475,8 @@ export function App({
   const proxyOrigin = getProxyOrigin(context.port ?? 8080);
   const publicTargetUrl = context.mode === 'live' ? context.targetUrl : null;
   const frameworkSummary = useMemo(() => summarizeFrameworkAssets(logs), [logs]);
+  const paneLayout = getPaneLayout(trafficListDisplay);
+  const trafficPaneWidth = paneLayout.trafficPaneWidth;
 
   const filteredLogs = useMemo(() => filterLogs(logs, {
     hideFrameworkAssets,
@@ -5382,6 +5593,19 @@ export function App({
     setMethodOptionIndex(0);
     setStatusOptionIndex(0);
     setIsFollowingLatest(false);
+  };
+
+  const cyclePaneWidth = (direction) => {
+    const nextDisplay = cyclePaneWidthMode(trafficListDisplay, isListFocused, direction);
+    const nextLayout = getPaneLayout(nextDisplay);
+
+    setTrafficListDisplay(nextDisplay);
+
+    if (!nextLayout.showDetailPane) {
+      setIsListFocused(true);
+    } else if (!nextLayout.showTrafficPane) {
+      setIsListFocused(false);
+    }
   };
 
   const closeCommandPrompt = () => {
@@ -5600,6 +5824,10 @@ export function App({
     if (focusKey === 'density') {
       setTrafficListDisplay((current) => cycleTrafficDensity(current, direction));
     }
+
+    if (focusKey === 'widthMode') {
+      cyclePaneWidth(direction);
+    }
   };
 
   const toggleFrameworkAssets = () => {
@@ -5610,7 +5838,7 @@ export function App({
   const toggleFocusedListDisplayColumn = () => {
     const focusKey = LIST_DISPLAY_FOCUS_ORDER[listDisplayFocusIndex];
 
-    if (focusKey === 'pathMode' || focusKey === 'density') {
+    if (focusKey === 'pathMode' || focusKey === 'density' || focusKey === 'widthMode') {
       return;
     }
 
@@ -6021,6 +6249,44 @@ export function App({
       });
   };
 
+  const trafficListNode = h(TrafficList, {
+    key: 'traffic',
+    bottomOffset,
+    emptyText,
+    logs: filteredLogs,
+    totalCount: logs.length,
+    selectedIndex,
+    isFocused: isListFocused,
+    isFollowingLatest,
+    frameworkSummary,
+    hideFrameworkAssets,
+    listDisplay: trafficListDisplay,
+    marginRight: paneLayout.showTrafficPane && paneLayout.showDetailPane ? paneLayout.gapWidth : 0,
+    methodFilters,
+    paneWidth: paneLayout.trafficPaneWidth,
+    searchField,
+    statusFilters,
+    searchQuery
+  });
+
+  const detailPaneNode = h(DetailPane, {
+    key: 'details',
+    bottomOffset,
+    log: inspectedLog,
+    isFocused: !isListFocused,
+    detailTab,
+    focusedRow: focusedDetailRow,
+    rows: detailRows,
+    scrollOffset: detailScrollOffset,
+    matchCount: detailMatches.length,
+    activeMatchIndex: detailMatchIndex,
+    paneWidth: paneLayout.detailPaneWidth
+  });
+  const paneNodes = [
+    paneLayout.showTrafficPane ? trafficListNode : null,
+    paneLayout.showDetailPane ? detailPaneNode : null
+  ].filter(Boolean);
+
   return h(
     Box,
     {
@@ -6050,6 +6316,8 @@ export function App({
         isComposerLibraryOpen: composer.isLibraryOpen,
         isComposerTextFocused: getFocusedComposerDescriptor(composer)?.kind === 'text',
         detailPageSize: activeDetailVisibleCount,
+        showTrafficPane: paneLayout.showTrafficPane,
+        trafficPaneWidth,
         trafficPageSize: trafficVisibleCount,
         onAddComposerRow: () => setComposer(addComposerRow),
         onAppendCommandText: appendCommandText,
@@ -6111,6 +6379,7 @@ export function App({
         onCycleComposerTab: (direction) => setComposer((current) => cycleComposerTab(current, direction)),
         onCycleCommandSuggestion: cycleCommandSuggestion,
         onCycleListDisplayOption: cycleFocusedListDisplayOption,
+        onCyclePaneWidthMode: cyclePaneWidth,
         onCycleTrafficDensity: (direction) => setTrafficListDisplay((current) => cycleTrafficDensity(current, direction)),
         onCycleTrafficPathMode: (direction) => setTrafficListDisplay((current) => cycleTrafficPathMode(current, direction)),
         onDeleteComposerRow: () => setComposer(deleteComposerRow),
@@ -6126,7 +6395,17 @@ export function App({
         onEditPendingResend: editPendingResend,
         onInsertComposerText: (value) => setComposer((current) => insertComposerText(current, value)),
         onLoadComposerLibraryRequest: loadComposerLibraryRequest,
-        onToggleFocus: () => setIsListFocused((current) => !current),
+        onToggleFocus: () => setIsListFocused((current) => {
+          if (!paneLayout.showDetailPane) {
+            return true;
+          }
+
+          if (!paneLayout.showTrafficPane) {
+            return false;
+          }
+
+          return !current;
+        }),
         onMoveFilterOption: (direction) => {
           if (filterFocus === 'field') {
             setSearchField((current) => cycleValue(SEARCH_FIELDS, current, direction));
@@ -6329,37 +6608,7 @@ export function App({
             scrollOffset: detailScrollOffset,
             visibleCount: detailModalVisibleCount
           })
-          : [
-          h(TrafficList, {
-            key: 'traffic',
-            bottomOffset,
-            emptyText,
-            logs: filteredLogs,
-            totalCount: logs.length,
-            selectedIndex,
-            isFocused: isListFocused,
-            isFollowingLatest,
-            frameworkSummary,
-            hideFrameworkAssets,
-            listDisplay: trafficListDisplay,
-            methodFilters,
-            searchField,
-            statusFilters,
-            searchQuery
-          }),
-          h(DetailPane, {
-            key: 'details',
-            bottomOffset,
-            log: inspectedLog,
-            isFocused: !isListFocused,
-            detailTab,
-            focusedRow: focusedDetailRow,
-            rows: detailRows,
-            scrollOffset: detailScrollOffset,
-          matchCount: detailMatches.length,
-          activeMatchIndex: detailMatchIndex
-          })
-        ]))))
+          : paneNodes))))
     ),
     isFilterOpen
         ? h(FilterBar, {
