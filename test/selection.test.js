@@ -68,6 +68,7 @@ import {
   toggleTrafficColumn,
   toggleFilterValue
 } from '../src/ui/App.js';
+import { CommandModal } from '../src/ui/chrome.js';
 
 function getTestKeyBindings(overrides = {}) {
   return normalizeKeyBindings({ keyBindings: overrides }).bindings;
@@ -1118,6 +1119,16 @@ test('command help rows are generated from command definitions', () => {
     rows.find((row) => row.command === ':clear-logs').aliases,
     ':clear, :clear-traffic'
   );
+});
+
+test('command modal renders command suggestions without missing constants', () => {
+  assert.doesNotThrow(() => {
+    CommandModal.type({
+      input: 'r',
+      selectedIndex: 0,
+      status: ''
+    });
+  });
 });
 
 test('help sections keep colon commands in the dedicated command block', () => {

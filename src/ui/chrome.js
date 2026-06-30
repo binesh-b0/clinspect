@@ -1,6 +1,9 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import {
+  COMMAND_MODAL_HEIGHT,
+  COMMAND_MODAL_MAX_WIDTH,
+  COMMAND_MODAL_MIN_WIDTH,
   LIST_DISPLAY_FOCUS_ORDER,
   OFF_RECORDING_STATUS,
   h,
