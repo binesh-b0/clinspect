@@ -112,6 +112,28 @@ test('export target resolution follows list focus, sections, headers, and struct
   });
 });
 
+test('focused query parameter rows export visible row text', () => {
+  const log = createLog({
+    path: '/users?filter[status]=active&ids[]=1&ids[]=2'
+  });
+  const rows = getDetailRows(log, 'request');
+  const queryRowIndex = rows.findIndex((row) => row.text === 'filters.ids: [1, 2]');
+
+  assert.deepEqual(resolveTrafficExportTarget({
+    detailRows: rows,
+    detailTab: 'request',
+    focusedRow: queryRowIndex,
+    isListFocused: false,
+    log
+  }), {
+    detailTab: 'request',
+    filenamePart: 'request-row',
+    kind: 'row',
+    label: 'request row',
+    rowText: 'filters.ids: [1, 2]'
+  });
+});
+
 test('masked exports match UI masking and public target header display while raw exports keep captured values', () => {
   const log = createLog();
   const rows = getDetailRows(log, 'request', {

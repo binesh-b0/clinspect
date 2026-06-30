@@ -116,6 +116,9 @@ export {
   formatPaginationNextStatus
 } from '../pagination.js';
 export {
+  parseQueryParameters
+} from '../query-params.js';
+export {
   DEFAULT_TRAFFIC_LIST_DISPLAY,
   getRenderHeight
 } from './shared.js';

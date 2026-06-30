@@ -64,6 +64,7 @@ import {
   moveSelectedLogId,
   normalizeKeyBindings,
   normalizeTrafficListDisplay,
+  parseQueryParameters,
   createRequestActivity,
   failRequestActivity,
   finishRequestActivity,
@@ -1410,6 +1411,82 @@ test('composer helpers create blank and cloned request state', () => {
   }, { includeCookieHeaders: true }).draft.cookies[0].value, 'secret');
 });
 
+test('query parameter parser groups nested filters, sorting, pagination, and other params', () => {
+  const parsed = parseQueryParameters(
+    '/api/users?filter[status]=active&sort=-createdAt,name&ids[]=1&ids[]=2&fields[user]=id,name&include=team,owner&page=2&limit=50&q=ada'
+  );
+
+  assert.equal(parsed.detected, true);
+  assert.deepEqual(parsed.filters, {
+    ids: ['1', '2'],
+    status: 'active'
+  });
+  assert.deepEqual(parsed.sort, [
+    { direction: 'desc', field: 'createdAt', raw: '-createdAt' },
+    { direction: 'asc', field: 'name', raw: 'name' }
+  ]);
+  assert.deepEqual(parsed.pagination, { limit: '50', page: '2' });
+  assert.deepEqual(parsed.search, { q: 'ada' });
+  assert.deepEqual(parsed.include, ['team', 'owner']);
+  assert.deepEqual(parsed.fields, { user: ['id', 'name'] });
+  assert.deepEqual(parsed.other, {});
+  assert.deepEqual(parsed.decoded.ids, ['1', '2']);
+  assert.deepEqual(parsed.rawEntries.map((entry) => [entry.key, entry.value, entry.group]), [
+    ['filter[status]', 'active', 'filters'],
+    ['sort', '-createdAt,name', 'sort'],
+    ['ids[]', '1', 'filters'],
+    ['ids[]', '2', 'filters'],
+    ['fields[user]', 'id,name', 'fields'],
+    ['include', 'team,owner', 'include'],
+    ['page', '2', 'pagination'],
+    ['limit', '50', 'pagination'],
+    ['q', 'ada', 'search']
+  ]);
+});
+
+test('query parameter parser accepts raw and absolute queries with repeated and empty values', () => {
+  const raw = parseQueryParameters('filter[tags][]=red&filter[range][min]=10&include[]=team&include=owner&fields=id,email&search[term]=ada&query=grace&empty=');
+
+  assert.equal(raw.detected, true);
+  assert.deepEqual(raw.filters, {
+    empty: '',
+    range: { min: '10' },
+    tags: ['red']
+  });
+  assert.deepEqual(raw.include, ['team', 'owner']);
+  assert.deepEqual(raw.fields, { $all: ['id', 'email'] });
+  assert.deepEqual(raw.search, { query: 'grace', term: 'ada' });
+  assert.deepEqual(raw.other, {});
+
+  const absolute = parseQueryParameters('https://example.test/api?filter%5Bstatus%5D=active+now&pageSize=25');
+
+  assert.deepEqual(absolute.filters, { status: 'active now' });
+  assert.deepEqual(absolute.pagination, { pageSize: '25' });
+  assert.deepEqual(parseQueryParameters('meta[debug]=1&broken[key=2').other, {
+    'broken[key': '2',
+    meta: { debug: '1' }
+  });
+  assert.equal(parseQueryParameters('/api/users').detected, false);
+});
+
+test('query parameter parser treats common catalog params as filters and pagination separately', () => {
+  const parsed = parseQueryParameters(
+    '/api/catalog/businesses?type=food&limit=12&postalCode=M1P+1E7&country=CA&radiusKm=25&cursor=abc123'
+  );
+
+  assert.deepEqual(parsed.filters, {
+    country: 'CA',
+    postalCode: 'M1P 1E7',
+    radiusKm: '25',
+    type: 'food'
+  });
+  assert.deepEqual(parsed.pagination, {
+    cursor: 'abc123',
+    limit: '12'
+  });
+  assert.deepEqual(parsed.other, {});
+});
+
 test('pagination analyzer detects query params and Link header next cursors', () => {
   const result = analyzePagination({
     path: '/api/items?page=2&limit=50',
@@ -1673,6 +1750,61 @@ test('next-page draft preserves captured request fields and replaces only the UR
   ]);
   assert.equal(plan.resend.action, 'edit-resend');
   assert.equal(plan.resend.sourcePath, '/api/items?page=2&limit=50');
+});
+
+test('detail rows include structured query parameter summaries without body path metadata', () => {
+  const rows = getDetailRows({
+    method: 'GET',
+    path: '/api/users?filter[status]=active&sort=-createdAt,name&ids[]=1&ids[]=2&fields[user]=id,name&include=team,owner&page=2&limit=50&q=ada',
+    request: { headers: {}, body: '' },
+    response: { headers: {}, body: '' }
+  }, 'request');
+
+  assert.equal(rows.some((row) => row.id === 'request-query-params-title'), true);
+  assert.deepEqual(rows
+    .filter((row) => row.type === 'query')
+    .map((row) => [row.text, row.path]), [
+    ['filters.status: active', null],
+    ['filters.ids: [1, 2]', null],
+    ['sort: createdAt desc, name asc', null],
+    ['search.q: ada', null],
+    ['include: team, owner', null],
+    ['fields.user: id, name', null]
+  ]);
+
+  assert.equal(
+    getDetailRows({
+      method: 'GET',
+      path: '/api/users?filter[status]=active',
+      request: { headers: {}, body: '' },
+      response: { headers: {}, body: '' }
+    }, 'response').some((row) => row.id === 'response-query-params-title'),
+    false
+  );
+});
+
+test('detail query rows keep catalog filters simple and avoid duplicate pagination rows', () => {
+  const longToken = 't'.repeat(140);
+  const rows = getDetailRows({
+    method: 'GET',
+    path: `/api/catalog/businesses?type=food&limit=12&postalCode=M1P+1E7&country=CA&radiusKm=25&cursor=abc123&debugToken=${longToken}`,
+    request: { headers: {}, body: '' },
+    response: { headers: {}, body: '' }
+  }, 'request');
+  const queryRows = rows.filter((row) => row.type === 'query');
+  const tokenRow = queryRows.find((row) => row.text.startsWith('filters.debugToken: '));
+
+  assert.deepEqual(queryRows.map((row) => row.text), [
+    'filters.type: food',
+    'filters.postalCode: M1P 1E7',
+    'filters.country: CA',
+    'filters.radiusKm: 25',
+    `filters.debugToken: ${longToken.slice(0, 93)}...`
+  ]);
+  assert.equal(queryRows.some((row) => row.text.startsWith('pagination:')), false);
+  assert.equal(rows.some((row) => row.id === 'request-pagination-title'), true);
+  assert.equal(tokenRow.searchText.includes(longToken), true);
+  assert.equal(tokenRow.path, null);
 });
 
 test('detail rows include pagination summaries without body path metadata', () => {

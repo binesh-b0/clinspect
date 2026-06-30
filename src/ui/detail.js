@@ -3,6 +3,7 @@ import { XMLParser } from 'fast-xml-parser';
 import { parseDocument } from 'htmlparser2';
 import { Box, Text } from 'ink';
 import { analyzePagination } from '../pagination.js';
+import { parseQueryParameters } from '../query-params.js';
 import {
   BODY_LINE_MAX_LENGTH,
   TEXTUAL_CONTENT_TYPE_PATTERNS,
@@ -154,6 +155,146 @@ function formatPaginationDetailRows(log, detailTab) {
   }
 
   return rows;
+}
+
+function hasObjectEntries(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0;
+}
+
+const QUERY_VALUE_DISPLAY_MAX_LENGTH = 96;
+
+function formatQueryValue(value, options = {}) {
+  const maxLength = options.maxLength ?? QUERY_VALUE_DISPLAY_MAX_LENGTH;
+  const maybeTruncate = (text) => options.truncate === false
+    ? text
+    : truncate(text, maxLength);
+
+  if (Array.isArray(value)) {
+    const separator = options.arraySeparator ?? ', ';
+    const content = value.map((item) => formatQueryValue(item, {
+      arraySeparator: separator,
+      bareArray: true,
+      truncate: false
+    })).join(separator);
+    const text = options.bareArray ? content : `[${content}]`;
+
+    return maybeTruncate(text);
+  }
+
+  if (value && typeof value === 'object') {
+    return maybeTruncate(JSON.stringify(value));
+  }
+
+  return maybeTruncate(sanitizeTerminalText(value));
+}
+
+function flattenQueryGroup(prefix, value) {
+  if (Array.isArray(value) || value === null || typeof value !== 'object') {
+    return [{ label: prefix, value }];
+  }
+
+  return Object.entries(value).flatMap(([key, child]) => {
+    const label = key === '$value' || key === '$all'
+      ? prefix
+      : `${prefix}.${key}`;
+
+    if (child && typeof child === 'object' && !Array.isArray(child)) {
+      return flattenQueryGroup(label, child);
+    }
+
+    return [{ label, value: child }];
+  });
+}
+
+function createQueryDetailRow(detailTab, index, label, value, options = {}) {
+  const displayValue = formatQueryValue(value, options);
+  const fullValue = formatQueryValue(value, { ...options, truncate: false });
+  const text = `${label}: ${displayValue}`;
+  const fullText = `${label}: ${fullValue}`;
+
+  return createDetailRow({
+    id: `${detailTab}-query-param-${index}`,
+    searchText: `query params ${fullText}`,
+    segments: [
+      { text: label, color: 'cyan' },
+      { text: ': ', color: 'gray' },
+      { text: displayValue }
+    ],
+    text,
+    type: 'query'
+  });
+}
+
+function formatQuerySortValue(sort = []) {
+  return sort
+    .map((item) => `${item.field} ${item.direction}`)
+    .join(', ');
+}
+
+function createQueryRowsFromParsed(parsed, detailTab) {
+  const rows = [];
+  let index = 0;
+  const pushRow = (label, value, options) => {
+    rows.push(createQueryDetailRow(detailTab, index, label, value, options));
+    index += 1;
+  };
+
+  if (hasObjectEntries(parsed.filters)) {
+    for (const { label, value } of flattenQueryGroup('filters', parsed.filters)) {
+      pushRow(label, value);
+    }
+  }
+
+  if (parsed.sort.length > 0) {
+    pushRow('sort', formatQuerySortValue(parsed.sort));
+  }
+
+  if (hasObjectEntries(parsed.search)) {
+    for (const { label, value } of flattenQueryGroup('search', parsed.search)) {
+      pushRow(label === 'search.search' ? 'search' : label, value);
+    }
+  }
+
+  if (parsed.include.length > 0) {
+    pushRow('include', parsed.include, { bareArray: true });
+  }
+
+  if (hasObjectEntries(parsed.fields)) {
+    for (const { label, value } of flattenQueryGroup('fields', parsed.fields)) {
+      pushRow(label, value, { bareArray: true });
+    }
+  }
+
+  if (hasObjectEntries(parsed.other)) {
+    for (const { label, value } of flattenQueryGroup('other', parsed.other)) {
+      pushRow(label, value);
+    }
+  }
+
+  return rows;
+}
+
+function formatQueryParameterDetailRows(log, detailTab) {
+  if (detailTab !== 'request') {
+    return [];
+  }
+
+  const parsed = parseQueryParameters(log?.path ?? '');
+  const queryRows = createQueryRowsFromParsed(parsed, detailTab);
+
+  if (!parsed.detected || queryRows.length === 0) {
+    return [];
+  }
+
+  return [
+    createDetailRow({ id: `${detailTab}-query-params-spacer`, text: '', type: 'blank' }),
+    createDetailRow({
+      id: `${detailTab}-query-params-title`,
+      segments: [{ text: 'Query Params', color: 'cyan', bold: true }],
+      type: 'section'
+    }),
+    ...queryRows
+  ];
 }
 
 function createDetailRow(options = {}) {
@@ -934,6 +1075,7 @@ export function getDetailRows(log, detailTab = 'request', options = {}) {
       type: 'section'
     }),
     ...formatHeaderDetailRows(payload.headers, headerOptions, detailTab),
+    ...formatQueryParameterDetailRows(log, detailTab),
     ...formatPaginationDetailRows(log, detailTab),
     createDetailRow({ id: `${detailTab}-spacer`, text: '', type: 'blank' }),
     createDetailRow({
