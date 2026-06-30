@@ -172,11 +172,8 @@ Main UI:
 - `D` downloads the focused traffic item or detail to `./.clinspect/exports/`.
 - `m`/`r` chooses masked or raw values after starting an export.
 - `m` opens method filters; `s` opens status filters; `x` clears filters.
-- `p` pauses capture.
-- `P` starts, pauses, or resumes recording.
-- `S` stops recording.
+- `:` opens command mode for careful actions: `:resend`, `:record`, `:stop`, `:pause`, `:clear`, `:quit`, and `:help`.
 - `h` opens help.
-- `q` quits.
 
 Composer:
 

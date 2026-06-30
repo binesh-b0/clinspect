@@ -6,6 +6,7 @@ import {
   classifyFrameworkAssetRequest,
   clampDetailRowIndex,
   clampScrollOffset,
+  COMMAND_DEFINITIONS,
   createBlankComposerState,
   createComposerStateFromLog,
   cycleTrafficDensity,
@@ -15,6 +16,7 @@ import {
   extractPortFromHost,
   findDetailMatches,
   filterLogs,
+  formatCommandSelectionStatus,
   formatFrameworkDetectionLabel,
   formatFooterText,
   formatFilterLabel,
@@ -25,6 +27,10 @@ import {
   formatTrafficRow,
   HELP_SECTIONS,
   getBoundaryLogId,
+  getCommandHintForKey,
+  getCommandMatches,
+  getCommandSuggestionRows,
+  getCommandSuggestionIndex,
   getComposerFieldDescriptors,
   getComposerSectionRows,
   getDetailVisibleCount,
@@ -44,6 +50,7 @@ import {
   getTrafficVisibleCount,
   moveSelectedLogId,
   normalizeTrafficListDisplay,
+  resolveCommandInput,
   resolveSelectedLogId,
   selectComposerTab,
   summarizeFrameworkAssets,
@@ -196,22 +203,6 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
     { type: 'scrollDetailsTo', boundary: 'bottom' }
   );
   assert.deepEqual(
-    getKeyboardAction('P', {}, { isReplayMode: false }),
-    { type: 'toggleRecordingPause' }
-  );
-  assert.deepEqual(
-    getKeyboardAction('P', {}, { isReplayMode: true }),
-    { type: 'none' }
-  );
-  assert.deepEqual(
-    getKeyboardAction('S', {}, { isReplayMode: false }),
-    { type: 'stopRecording' }
-  );
-  assert.deepEqual(
-    getKeyboardAction('S', {}, { isReplayMode: true }),
-    { type: 'none' }
-  );
-  assert.deepEqual(
     getKeyboardAction('', { return: true }, { isListFocused: true }),
     { type: 'inspectSelected' }
   );
@@ -286,7 +277,7 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
   );
   assert.deepEqual(
     getKeyboardAction('R', {}, { isLiveMode: true }),
-    { type: 'startResend', mode: 'exact' }
+    { type: 'showCommandHint', message: 'use :resend' }
   );
   assert.deepEqual(
     getKeyboardAction('e', {}, { isLiveMode: false }),
@@ -294,7 +285,7 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
   );
   assert.deepEqual(
     getKeyboardAction('R', {}, { isLiveMode: false }),
-    { type: 'none' }
+    { type: 'showCommandHint', message: 'use :resend' }
   );
   assert.deepEqual(
     getKeyboardAction('l', {}, { isLiveMode: true }),
@@ -306,10 +297,124 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
   );
 });
 
+test('keyboard action helper supports colon command mode for careful actions', () => {
+  assert.deepEqual(getKeyboardAction(':'), { type: 'openCommandPrompt' });
+  assert.deepEqual(
+    getKeyboardAction(':', {}, { isDetailModalOpen: true }),
+    { type: 'openCommandPrompt' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('q'),
+    { type: 'showCommandHint', message: 'use :quit' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('P'),
+    { type: 'showCommandHint', message: 'use :record' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('S'),
+    { type: 'showCommandHint', message: 'use :stop-recording' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('p'),
+    { type: 'showCommandHint', message: 'use :pause-capture' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('c'),
+    { type: 'showCommandHint', message: 'use :clear-logs' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { escape: true }, { isCommandOpen: true }),
+    { type: 'closeCommandPrompt' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { return: true }, { isCommandOpen: true }),
+    { type: 'submitCommand' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('r', {}, { isCommandOpen: true }),
+    { type: 'appendCommandText', value: 'r' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isCommandOpen: true }),
+    { type: 'backspaceCommandText' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { tab: true }, { isCommandOpen: true }),
+    { type: 'cycleCommandSuggestion', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { upArrow: true }, { isCommandOpen: true }),
+    { type: 'cycleCommandSuggestion', direction: -1 }
+  );
+
+  assert.deepEqual(getCommandHintForKey('R'), 'use :resend');
+  assert.deepEqual(COMMAND_DEFINITIONS.map((command) => command.name), [
+    'quit',
+    'resend',
+    'record',
+    'stop-recording',
+    'pause-capture',
+    'clear-logs',
+    'help'
+  ]);
+  assert.deepEqual(getCommandMatches('res').map((command) => command.name), ['resend']);
+  assert.deepEqual(getCommandMatches('r').map((command) => command.name), ['resend', 'record']);
+  assert.equal(getCommandSuggestionIndex('r', -1, 1), 0);
+  assert.equal(getCommandSuggestionIndex('r', 0, 1), 1);
+  assert.equal(getCommandSuggestionIndex('r', 0, -1), 1);
+  assert.equal(getCommandSuggestionRows('res').length, 7);
+  assert.deepEqual(
+    getCommandSuggestionRows('res').map((row) => row.name),
+    ['resend', '', '', '', '', '', '']
+  );
+  assert.deepEqual(
+    getCommandSuggestionRows('r', 1).map((row) => row.isSelected),
+    [false, true, false, false, false, false, false]
+  );
+  assert.deepEqual(
+    getCommandSuggestionRows('wat').map((row) => row.name),
+    ['', '', '', '', '', '', '']
+  );
+  assert.deepEqual(
+    getCommandSuggestionRows('').map((row) => row.primaryAlias),
+    ['q', 'rs', 'rec', 'stop', 'pause', 'clear', 'h']
+  );
+  assert.equal(
+    formatCommandSelectionStatus(getCommandSuggestionRows('r', 1)[1]),
+    'selected :record (rec)'
+  );
+  assert.equal(formatCommandSelectionStatus(getCommandSuggestionRows('wat')[0]), '');
+  assert.deepEqual(resolveCommandInput('q'), {
+    ok: true,
+    action: { type: 'quit' },
+    command: COMMAND_DEFINITIONS[0]
+  });
+  assert.deepEqual(resolveCommandInput('rs').action, { type: 'startResend', mode: 'exact' });
+  assert.deepEqual(resolveCommandInput('res').action, { type: 'startResend', mode: 'exact' });
+  assert.deepEqual(resolveCommandInput('r'), {
+    ok: false,
+    error: 'ambiguous command: resend, record'
+  });
+  assert.deepEqual(resolveCommandInput('r', 1).action, { type: 'toggleRecordingPause' });
+  assert.deepEqual(resolveCommandInput('wat'), {
+    ok: false,
+    error: 'unknown command: wat'
+  });
+});
+
 test('keyboard action helper supports request composer input', () => {
   assert.deepEqual(
     getKeyboardAction('a', {}, { isComposerOpen: true, isComposerTextFocused: true }),
     { type: 'insertComposerText', value: 'a' }
+  );
+  assert.deepEqual(
+    getKeyboardAction(':', {}, { isComposerOpen: true, isComposerTextFocused: true }),
+    { type: 'insertComposerText', value: ':' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('R', {}, { isComposerOpen: true, isComposerTextFocused: true }),
+    { type: 'insertComposerText', value: 'R' }
   );
   assert.deepEqual(
     getKeyboardAction('\u007F', {}, { isComposerOpen: true, isComposerTextFocused: true }),
@@ -492,6 +597,14 @@ test('keyboard action helper gates help modal and preserves filter query input',
     { type: 'appendSearch', value: '[' }
   );
   assert.deepEqual(
+    getKeyboardAction(':', {}, { isFilterOpen: true, filterFocus: 'query' }),
+    { type: 'appendSearch', value: ':' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('q', {}, { isFilterOpen: true, filterFocus: 'query' }),
+    { type: 'appendSearch', value: 'q' }
+  );
+  assert.deepEqual(
     getKeyboardAction('?', {}, { isFilterOpen: true, filterFocus: 'method' }),
     { type: 'none' }
   );
@@ -575,7 +688,7 @@ test('keyboard action helper supports detail modal and detail search input', () 
   );
   assert.deepEqual(
     getKeyboardAction('R', {}, { isDetailModalOpen: true, isLiveMode: true }),
-    { type: 'startResend', mode: 'exact' }
+    { type: 'showCommandHint', message: 'use :resend' }
   );
   assert.deepEqual(
     getKeyboardAction('E', {}, { isDetailModalOpen: true, isLiveMode: true }),
@@ -584,6 +697,14 @@ test('keyboard action helper supports detail modal and detail search input', () 
   assert.deepEqual(
     getKeyboardAction('a', {}, { isDetailSearchOpen: true }),
     { type: 'appendDetailSearch', value: 'a' }
+  );
+  assert.deepEqual(
+    getKeyboardAction(':', {}, { isDetailSearchOpen: true }),
+    { type: 'appendDetailSearch', value: ':' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('R', {}, { isDetailSearchOpen: true }),
+    { type: 'appendDetailSearch', value: 'R' }
   );
   assert.deepEqual(
     getKeyboardAction('', { backspace: true }, { isDetailSearchOpen: true }),
@@ -611,37 +732,37 @@ test('getRenderHeight keeps one terminal row free for Ink updates', () => {
 test('footer text shows mode-aware essential keymaps', () => {
   assert.equal(
     formatFooterText({ isListFocused: true }),
-    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  R resend  E edit  tab details  P rec  h help  q quit'
+    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  E edit  tab details  : command  h help'
   );
   assert.equal(
     formatFooterText({ isListFocused: false }),
-    'j/k scroll  [/] page  r req/res  t path  v density  L display  y copy  D download  / find  n/N match  R resend  E edit  tab traffic  P rec  h help  q quit'
+    'j/k scroll  [/] page  r req/res  t path  v density  L display  y copy  D download  / find  n/N match  E edit  tab traffic  : command  h help'
   );
   assert.equal(
     formatFooterText({ hideFrameworkAssets: false, isListFocused: true }),
-    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  R resend  E edit  tab details  P rec  h help  q quit'
+    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  E edit  tab details  : command  h help'
   );
   assert.equal(
     formatFooterText({ isDetailModalOpen: true }),
-    'j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  R resend  E edit  enter collapse  esc/q close'
+    'j/k scroll  [/] page  r req/res  y copy  D download  / find  n/N match  E edit  enter collapse  esc/q close  : command'
   );
   assert.equal(
     formatFooterText({ isListFocused: true, isLiveMode: false, isReplayMode: true }),
-    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  tab details  h help  q quit'
+    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  tab details  : command  h help'
   );
   assert.equal(
     formatFooterText({
       isListFocused: true,
       recordingStatus: { mode: 'full', path: './capture.ndjson', state: 'recording', error: null }
     }),
-    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  R resend  E edit  tab details  P pause  S stop  h help  q quit'
+    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  E edit  tab details  : command  h help'
   );
   assert.equal(
     formatFooterText({
       isListFocused: false,
       recordingStatus: { mode: 'partial', path: './capture.ndjson', state: 'paused', error: null }
     }),
-    'j/k scroll  [/] page  r req/res  t path  v density  L display  y copy  D download  / find  n/N match  R resend  E edit  tab traffic  P resume  S stop  h help  q quit'
+    'j/k scroll  [/] page  r req/res  t path  v density  L display  y copy  D download  / find  n/N match  E edit  tab traffic  : command  h help'
   );
   assert.equal(
     formatFooterText({ isComposerOpen: true }),
@@ -657,11 +778,11 @@ test('footer text shows mode-aware essential keymaps', () => {
   );
   assert.equal(
     formatFooterText({ isListFocused: false, isDetailSearchActive: true }),
-    'detail search active  / edit  n/N match  R resend  E edit  j/k scroll  enter collapse  o big  tab traffic  q quit'
+    'detail search active  / edit  n/N match  E edit  j/k scroll  enter collapse  o big  tab traffic  : command'
   );
   assert.equal(
     formatFooterText({ isListFocused: false, isDetailSearchActive: true, isDetailModalOpen: true }),
-    'detail search active  / edit  n/N match  R resend  E edit  j/k scroll  enter collapse  esc/q close'
+    'detail search active  / edit  n/N match  E edit  j/k scroll  enter collapse  esc/q close  : command'
   );
   assert.equal(
     formatFooterText({ isExportPromptOpen: true }),
@@ -673,11 +794,19 @@ test('footer text shows mode-aware essential keymaps', () => {
   );
   assert.equal(
     formatFooterText({ exportStatus: 'copied response body', isListFocused: false }),
-    'j/k scroll  [/] page  r req/res  t path  v density  L display  y copy  D download  / find  n/N match  R resend  E edit  tab traffic  P rec  h help  q quit | copied response body'
+    'j/k scroll  [/] page  r req/res  t path  v density  L display  y copy  D download  / find  n/N match  E edit  tab traffic  : command  h help | copied response body'
   );
   assert.equal(
     formatFooterText({ isListFocused: true, resendStatus: 'resent GET /food' }),
-    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  R resend  E edit  tab details  P rec  h help  q quit | resent GET /food'
+    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  E edit  tab details  : command  h help | resent GET /food'
+  );
+  assert.equal(
+    formatFooterText({ commandStatus: 'use :quit', isListFocused: true }),
+    'j/k move  [/] page  enter inspect  t path  v density  L display  y copy  D download  n new  E edit  tab details  : command  h help | use :quit'
+  );
+  assert.equal(
+    formatFooterText({ isCommandOpen: true }),
+    ''
   );
   assert.equal(formatFooterText({ isHelpOpen: true }), 'help | esc/h/q close');
 });
@@ -685,9 +814,11 @@ test('footer text shows mode-aware essential keymaps', () => {
 test('help sections describe starting, pausing, and stopping recording', () => {
   const captureSection = HELP_SECTIONS.find((section) => section.title === 'Capture / Session');
 
-  assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'p'), ['p', 'pause capture']);
-  assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'P'), ['P', 'record on/off']);
-  assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'S'), ['S', 'stop recording']);
+  assert.deepEqual(captureSection.rows.find(([keys]) => keys === ':pause'), [':pause', 'pause capture']);
+  assert.deepEqual(captureSection.rows.find(([keys]) => keys === ':record'), [':record', 'record on/off']);
+  assert.deepEqual(captureSection.rows.find(([keys]) => keys === ':stop'), [':stop', 'stop recording']);
+  assert.deepEqual(captureSection.rows.find(([keys]) => keys === ':clear'), [':clear', 'clear logs']);
+  assert.deepEqual(captureSection.rows.find(([keys]) => keys === ':quit'), [':quit', 'quit']);
 });
 
 test('help sections describe copy and download exports', () => {
@@ -720,7 +851,7 @@ test('help sections describe request composer keys', () => {
   const composeSection = HELP_SECTIONS.find((section) => section.title === 'Compose');
 
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'n'), ['n', 'new request']);
-  assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'R'), ['R', 'exact resend']);
+  assert.deepEqual(composeSection.rows.find(([keys]) => keys === ':resend'), [':resend', 'exact resend']);
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'E'), ['E', 'edit and resend']);
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'e'), ['e', 'edit selected request']);
   assert.deepEqual(composeSection.rows.find(([keys]) => keys === 'l'), ['l', 'saved requests']);

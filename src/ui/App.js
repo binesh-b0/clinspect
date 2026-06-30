@@ -51,6 +51,10 @@ const TRAFFIC_ROW_WIDTH = 45;
 const BODY_LINE_MAX_LENGTH = 120;
 const DETAIL_SEARCH_BAR_HEIGHT = 5;
 const RESEND_CONFIRM_BAR_HEIGHT = 6;
+const COMMAND_MODAL_ROW_COUNT = 7;
+const COMMAND_MODAL_HEIGHT = 18;
+const COMMAND_MODAL_MAX_WIDTH = 68;
+const COMMAND_MODAL_MIN_WIDTH = 46;
 const TEXTUAL_CONTENT_TYPE_PATTERNS = [
   /^text\//,
   /(?:^|[+/.-])json$/,
@@ -98,6 +102,60 @@ const FRAMEWORK_ASSET_PATH_MATCHERS = [
     patterns: [/^\/__webpack(?:_|\/|$)/i, /^\/webpack-dev-server(?:\/|$)/i, /^\/sockjs-node(?:\/|$)/i]
   }
 ];
+
+export const COMMAND_DEFINITIONS = [
+  {
+    name: 'quit',
+    aliases: ['q'],
+    description: 'quit',
+    action: { type: 'quit' }
+  },
+  {
+    name: 'resend',
+    aliases: ['rs'],
+    description: 'exact resend selected request',
+    action: { type: 'startResend', mode: 'exact' }
+  },
+  {
+    name: 'record',
+    aliases: ['rec'],
+    description: 'start, pause, or resume recording',
+    action: { type: 'toggleRecordingPause' }
+  },
+  {
+    name: 'stop-recording',
+    aliases: ['stop', 'stop-rec'],
+    description: 'stop recording',
+    action: { type: 'stopRecording' }
+  },
+  {
+    name: 'pause-capture',
+    aliases: ['capture-pause', 'pause'],
+    description: 'pause or resume capture',
+    action: { type: 'togglePause' }
+  },
+  {
+    name: 'clear-logs',
+    aliases: ['clear', 'clear-traffic'],
+    description: 'clear current logs',
+    action: { type: 'clearLogs' }
+  },
+  {
+    name: 'help',
+    aliases: ['h'],
+    description: 'open help',
+    action: { type: 'openHelp' }
+  }
+];
+
+const COMMAND_HINTS_BY_KEY = new Map([
+  ['q', 'use :quit'],
+  ['R', 'use :resend'],
+  ['P', 'use :record'],
+  ['S', 'use :stop-recording'],
+  ['p', 'use :pause-capture'],
+  ['c', 'use :clear-logs']
+]);
 const STATIC_ASSET_CONTENT_TYPE_PATTERNS = [
   /^image\//,
   /^font\//,
@@ -3190,7 +3248,7 @@ export const HELP_SECTIONS = [
     title: 'Compose',
     rows: [
       ['n', 'new request'],
-      ['R', 'exact resend'],
+      [':resend', 'exact resend'],
       ['E', 'edit and resend'],
       ['e', 'edit selected request'],
       ['l', 'saved requests'],
@@ -3216,12 +3274,13 @@ export const HELP_SECTIONS = [
   {
     title: 'Capture / Session',
     rows: [
-      ['p', 'pause capture'],
-      ['P', 'record on/off'],
-      ['S', 'stop recording'],
+      [':pause', 'pause capture'],
+      [':record', 'record on/off'],
+      [':stop', 'stop recording'],
       ['f', 'follow latest'],
-      ['c', 'clear logs'],
-      ['h/q', 'help / quit']
+      [':clear', 'clear logs'],
+      ['h / :help', 'help'],
+      [':quit', 'quit']
     ]
   }
 ];
@@ -3403,33 +3462,15 @@ function joinFooterParts(parts) {
   return parts.filter(Boolean).join('  ');
 }
 
-function getRecordingFooterParts(recordingStatus = OFF_RECORDING_STATUS, isReplayMode = false) {
-  if (isReplayMode) {
-    return [];
-  }
-
-  if (recordingStatus.mode === 'off' || recordingStatus.state === 'off') {
-    return ['P rec'];
-  }
-
-  if (recordingStatus.state === 'paused') {
-    return ['P resume', 'S stop'];
-  }
-
-  if (recordingStatus.state === 'error') {
-    return ['S stop'];
-  }
-
-  return ['P pause', 'S stop'];
-}
-
 export function formatFooterText({
+  commandStatus = '',
   exportStatus = '',
   isListDisplayOpen = false,
   resendStatus = '',
   isComposerConfirmOpen = false,
   isComposerOpen = false,
   isComposerTextFocused = false,
+  isCommandOpen = false,
   isDetailModalOpen = false,
   isDetailSearchActive = false,
   isExportPromptOpen = false,
@@ -3442,19 +3483,22 @@ export function formatFooterText({
   recordingStatus = OFF_RECORDING_STATUS
 } = {}) {
   const withStatus = (value) => {
-    const status = [exportStatus, resendStatus]
+    const status = [exportStatus, resendStatus, commandStatus]
       .map((item) => String(item ?? '').trim())
       .filter(Boolean)
       .join(' | ');
 
     return status ? `${value} | ${status}` : value;
   };
-  const liveDetailActions = isLiveMode ? ['R resend', 'E edit'] : [];
+  const liveDetailActions = isLiveMode ? ['E edit'] : [];
   const liveListActions = isLiveMode ? ['n new', ...liveDetailActions] : [];
-  const recordingActions = getRecordingFooterParts(recordingStatus, isReplayMode);
 
   if (!isRawModeSupported) {
     return 'keyboard input unavailable in this shell | Ctrl-C or SIGTERM quit';
+  }
+
+  if (isCommandOpen) {
+    return '';
   }
 
   if (isExportPromptOpen) {
@@ -3488,7 +3532,8 @@ export function formatFooterText({
         ...liveDetailActions,
         'j/k scroll',
         'enter collapse',
-        'esc/q close'
+        'esc/q close',
+        ': command'
       ]))
       : withStatus(joinFooterParts([
         'detail search active',
@@ -3499,7 +3544,7 @@ export function formatFooterText({
         'enter collapse',
         'o big',
         'tab traffic',
-        'q quit'
+        ': command'
       ]));
   }
 
@@ -3514,7 +3559,8 @@ export function formatFooterText({
       'n/N match',
       ...liveDetailActions,
       'enter collapse',
-      'esc/q close'
+      'esc/q close',
+      ': command'
     ]));
   }
 
@@ -3530,9 +3576,8 @@ export function formatFooterText({
       'D download',
       ...liveListActions,
       'tab details',
-      ...recordingActions,
-      'h help',
-      'q quit'
+      ': command',
+      'h help'
     ]));
   }
 
@@ -3549,19 +3594,20 @@ export function formatFooterText({
     'n/N match',
     ...liveDetailActions,
     'tab traffic',
-    ...recordingActions,
-    'h help',
-    'q quit'
+    ': command',
+    'h help'
   ]));
 }
 
 const Footer = React.memo(function Footer({
+  commandStatus,
   exportStatus,
   isListDisplayOpen,
   resendStatus,
   isComposerConfirmOpen,
   isComposerOpen,
   isComposerTextFocused,
+  isCommandOpen,
   isDetailModalOpen,
   isDetailSearchActive,
   isExportPromptOpen,
@@ -3580,12 +3626,14 @@ const Footer = React.memo(function Footer({
       Text,
       { color: 'gray', wrap: 'truncate' },
       formatFooterText({
+        commandStatus,
         exportStatus,
         isListDisplayOpen,
         resendStatus,
         isComposerConfirmOpen,
         isComposerOpen,
         isComposerTextFocused,
+        isCommandOpen,
         isDetailModalOpen,
         isDetailSearchActive,
         isExportPromptOpen,
@@ -3597,6 +3645,125 @@ const Footer = React.memo(function Footer({
         isReplayMode,
         recordingStatus
       })
+    )
+  );
+});
+
+const CommandModal = React.memo(function CommandModal({
+  input = '',
+  selectedIndex = -1,
+  status = ''
+}) {
+  const columns = Number.isFinite(process.stdout.columns) && process.stdout.columns > 0
+    ? process.stdout.columns
+    : 80;
+  const width = Math.max(COMMAND_MODAL_MIN_WIDTH, Math.min(COMMAND_MODAL_MAX_WIDTH, columns - 6));
+  const contentWidth = Math.max(28, width - 6);
+  const commandColumnWidth = Math.min(20, Math.max(16, Math.floor(contentWidth * 0.32)));
+  const aliasColumnWidth = Math.min(9, Math.max(6, Math.floor(contentWidth * 0.14)));
+  const descriptionColumnWidth = Math.max(8, contentWidth - commandColumnWidth - aliasColumnWidth - 2);
+  const inputWidth = Math.max(24, contentWidth);
+  const matches = getCommandMatches(input);
+  const rows = getCommandSuggestionRows(input, selectedIndex);
+  const selectedRow = rows.find((row) => row.command && row.isSelected);
+  const statusColor = /^unknown|^ambiguous|^command required/.test(status) ? 'red' : 'gray';
+  const inputText = input ? `:${input}_` : ':_';
+  const commandHelpText = 'enter run  tab/up/down select  esc cancel';
+  const selectedStatusText = formatCommandSelectionStatus(selectedRow);
+  const statusText = status || (matches.length === 0 ? 'No command matches' : selectedStatusText || commandHelpText);
+  const statusHelpText = !status && selectedStatusText && contentWidth >= 36 ? 'enter run' : '';
+  const statusTextWidth = statusHelpText
+    ? Math.max(8, contentWidth - statusHelpText.length - 1)
+    : contentWidth;
+
+  return h(
+    Box,
+    {
+      flexGrow: 1,
+      justifyContent: 'center',
+      alignItems: 'center'
+    },
+    h(
+      Box,
+      {
+        flexDirection: 'column',
+        borderStyle: 'single',
+        borderColor: statusColor === 'red' ? 'red' : 'cyan',
+        height: COMMAND_MODAL_HEIGHT,
+        paddingX: 2,
+        paddingY: 1,
+        width
+      },
+      h(
+        Box,
+        { flexDirection: 'row' },
+        h(Text, { bold: true, color: 'cyan' }, 'Command'),
+        h(Text, { color: 'gray' }, '  careful actions')
+      ),
+      h(
+        Box,
+        { borderStyle: 'single', borderColor: 'gray', marginTop: 1, paddingX: 1, width: inputWidth },
+        h(Text, { color: 'cyan', wrap: 'truncate' }, inputText)
+      ),
+      h(
+        Box,
+        { flexDirection: 'column', marginTop: 1 },
+        ...rows.map((row, index) => {
+          const key = row.command?.name ?? `empty-${index}`;
+
+          if (!row.command) {
+            return h(Text, { key }, '');
+          }
+
+          const commandName = `:${row.name}`;
+
+          return h(
+            Box,
+            {
+              key,
+              flexDirection: 'row',
+              width: contentWidth
+            },
+            h(
+              Box,
+              {
+                marginRight: 1,
+                width: commandColumnWidth
+              },
+              h(Text, {
+                bold: row.isSelected,
+                color: 'cyan',
+                wrap: 'truncate'
+              }, `${row.isSelected ? '>' : ' '} ${commandName}`)
+            ),
+            h(
+              Box,
+              { marginRight: 1, width: aliasColumnWidth },
+              h(Text, {
+                color: row.isSelected ? 'cyan' : 'gray',
+                wrap: 'truncate'
+              }, row.primaryAlias)
+            ),
+            h(
+              Box,
+              { width: descriptionColumnWidth },
+              h(Text, { wrap: 'truncate' }, row.description)
+            )
+          );
+        })
+      ),
+      h(
+        Box,
+        { flexDirection: 'row', width: contentWidth },
+        h(
+          Box,
+          { marginRight: statusHelpText ? 1 : 0, width: statusTextWidth },
+          h(Text, { color: status ? statusColor : 'gray', wrap: 'truncate' }, statusText)
+        ),
+        statusHelpText
+          ? h(Text, { color: 'gray', wrap: 'truncate' }, statusHelpText)
+          : null
+      )
     )
   );
 });
@@ -3701,6 +3868,152 @@ function isDeleteInput(value, _keyState = {}) {
   return value === '\u001B[3~';
 }
 
+function normalizeCommandInput(input = '') {
+  return String(input ?? '').trim().replace(/^:/, '').toLowerCase();
+}
+
+function getCommandLabels(command) {
+  return [command.name, ...(command.aliases ?? [])];
+}
+
+function cloneCommandAction(command) {
+  return { ...command.action };
+}
+
+export function getCommandMatches(input = '') {
+  const value = normalizeCommandInput(input);
+
+  if (!value) {
+    return COMMAND_DEFINITIONS;
+  }
+
+  return COMMAND_DEFINITIONS.filter((command) => (
+    getCommandLabels(command).some((label) => label.startsWith(value))
+  ));
+}
+
+export function getCommandSuggestionIndex(input = '', currentIndex = -1, direction = 1) {
+  const matches = getCommandMatches(input);
+
+  if (matches.length === 0) {
+    return -1;
+  }
+
+  if (currentIndex < 0) {
+    return direction < 0 ? matches.length - 1 : 0;
+  }
+
+  return (currentIndex + direction + matches.length) % matches.length;
+}
+
+function getCompactCommandAlias(command) {
+  const aliases = command?.aliases ?? [];
+
+  if (aliases.length === 0) {
+    return '';
+  }
+
+  return [...aliases].sort((first, second) => first.length - second.length)[0];
+}
+
+export function getCommandSuggestionRows(input = '', selectedIndex = -1, rowCount = COMMAND_MODAL_ROW_COUNT) {
+  const matches = getCommandMatches(input).slice(0, rowCount);
+  const safeSelectedIndex = selectedIndex >= 0 && matches.length > 0
+    ? selectedIndex % matches.length
+    : -1;
+  const rows = matches.map((command, index) => ({
+    aliases: command.aliases?.length ? command.aliases.join(', ') : '',
+    command,
+    description: command.description,
+    isSelected: index === safeSelectedIndex,
+    name: command.name,
+    primaryAlias: getCompactCommandAlias(command)
+  }));
+
+  while (rows.length < rowCount) {
+    rows.push({
+      aliases: '',
+      command: null,
+      description: '',
+      isSelected: false,
+      name: '',
+      primaryAlias: ''
+    });
+  }
+
+  return rows;
+}
+
+export function formatCommandSelectionStatus(row) {
+  if (!row?.command) {
+    return '';
+  }
+
+  const aliasText = row.primaryAlias ? ` (${row.primaryAlias})` : '';
+
+  return `selected :${row.name}${aliasText}`;
+}
+
+export function getCommandHintForKey(input = '') {
+  return COMMAND_HINTS_BY_KEY.get(String(input ?? '')) ?? null;
+}
+
+export function resolveCommandInput(input = '', selectedIndex = -1) {
+  const value = normalizeCommandInput(input);
+
+  if (!value) {
+    return {
+      ok: false,
+      error: 'command required'
+    };
+  }
+
+  const exactCommand = COMMAND_DEFINITIONS.find((command) => (
+    getCommandLabels(command).includes(value)
+  ));
+
+  if (exactCommand) {
+    return {
+      ok: true,
+      action: cloneCommandAction(exactCommand),
+      command: exactCommand
+    };
+  }
+
+  const matches = getCommandMatches(value);
+
+  if (matches.length === 0) {
+    return {
+      ok: false,
+      error: `unknown command: ${value}`
+    };
+  }
+
+  if (matches.length === 1) {
+    return {
+      ok: true,
+      action: cloneCommandAction(matches[0]),
+      command: matches[0]
+    };
+  }
+
+  if (selectedIndex >= 0) {
+    const safeIndex = selectedIndex % matches.length;
+    const command = matches[safeIndex];
+
+    return {
+      ok: true,
+      action: cloneCommandAction(command),
+      command
+    };
+  }
+
+  return {
+    ok: false,
+    error: `ambiguous command: ${matches.map((command) => command.name).join(', ')}`
+  };
+}
+
 export function getKeyboardAction(input = '', key = {}, options = {}) {
   const {
     filterFocus = 'query',
@@ -3710,6 +4023,7 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     isFilterOpen = false,
     isDetailSearchOpen = false,
     isDetailModalOpen = false,
+    isCommandOpen = false,
     isExportPromptOpen = false,
     isResendConfirmOpen = false,
     isResending = false,
@@ -3729,6 +4043,34 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
 
   if (value === 'c' && keyState.ctrl) {
     return { type: 'quit' };
+  }
+
+  if (isCommandOpen) {
+    if (keyState.escape) {
+      return { type: 'closeCommandPrompt' };
+    }
+
+    if (keyState.return) {
+      return { type: 'submitCommand' };
+    }
+
+    if (isBackspaceInput(value, keyState) || isDeleteInput(value, keyState)) {
+      return { type: 'backspaceCommandText' };
+    }
+
+    if (keyState.tab || keyState.downArrow) {
+      return { type: 'cycleCommandSuggestion', direction: 1 };
+    }
+
+    if (keyState.upArrow) {
+      return { type: 'cycleCommandSuggestion', direction: -1 };
+    }
+
+    if (value && !keyState.ctrl && !keyState.meta && !parseInkMouseInput(value) && !isInkMouseInput(value)) {
+      return { type: 'appendCommandText', value };
+    }
+
+    return { type: 'none' };
   }
 
   if (isExportPromptOpen) {
@@ -3991,6 +4333,10 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     return { type: 'none' };
   }
 
+  if (value === ':' && !isFilterOpen) {
+    return { type: 'openCommandPrompt' };
+  }
+
   if (value === 'F' && !isFilterOpen) {
     return { type: 'toggleFrameworkAssets' };
   }
@@ -4012,8 +4358,8 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
       return { type: 'openDetailSearch' };
     }
 
-    if (value === 'R' && isLiveMode) {
-      return { type: 'startResend', mode: 'exact' };
+    if (value === 'R') {
+      return { type: 'showCommandHint', message: getCommandHintForKey(value) };
     }
 
     if ((value === 'E' || value === 'e') && isLiveMode) {
@@ -4141,8 +4487,8 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     return { type: 'openComposer', mode: 'blank' };
   }
 
-  if (value === 'R' && isLiveMode) {
-    return { type: 'startResend', mode: 'exact' };
+  if (value === 'R') {
+    return { type: 'showCommandHint', message: getCommandHintForKey(value) };
   }
 
   if ((value === 'E' || value === 'e') && isLiveMode) {
@@ -4154,7 +4500,7 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   }
 
   if (value === 'q') {
-    return { type: 'quit' };
+    return { type: 'showCommandHint', message: getCommandHintForKey(value) };
   }
 
   if (value === '/') {
@@ -4168,7 +4514,7 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   }
 
   if (value === 'c') {
-    return { type: 'clearLogs' };
+    return { type: 'showCommandHint', message: getCommandHintForKey(value) };
   }
 
   if (value === 'f') {
@@ -4188,15 +4534,15 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   }
 
   if (value === 'p') {
-    return isReplayMode ? { type: 'none' } : { type: 'togglePause' };
+    return { type: 'showCommandHint', message: getCommandHintForKey(value) };
   }
 
   if (value === 'P') {
-    return isReplayMode ? { type: 'none' } : { type: 'toggleRecordingPause' };
+    return { type: 'showCommandHint', message: getCommandHintForKey(value) };
   }
 
   if (value === 'S') {
-    return isReplayMode ? { type: 'none' } : { type: 'stopRecording' };
+    return { type: 'showCommandHint', message: getCommandHintForKey(value) };
   }
 
   if (value === 'r') {
@@ -4278,6 +4624,7 @@ function KeyboardControls({
   isFilterOpen,
   isDetailSearchOpen,
   isDetailModalOpen,
+  isCommandOpen,
   isExportPromptOpen,
   isResendConfirmOpen,
   isResending,
@@ -4292,8 +4639,10 @@ function KeyboardControls({
   detailPageSize,
   trafficPageSize,
   onAddComposerRow,
+  onAppendCommandText,
   onAppendSearch,
   onAppendDetailSearch,
+  onBackspaceCommandText,
   onBackspaceComposerText,
   onBackspaceSearch,
   onBackspaceDetailSearch,
@@ -4306,10 +4655,12 @@ function KeyboardControls({
   onClearLogs,
   onCloseDetailModal,
   onCloseComposer,
+  onCloseCommandPrompt,
   onCloseHelp,
   onCloseListDisplay,
   onCycleComposerFocus,
   onCycleComposerTab,
+  onCycleCommandSuggestion,
   onDeleteComposerRow,
   onDeleteComposerText,
   onCycleFilterFocus,
@@ -4338,6 +4689,7 @@ function KeyboardControls({
   onOpenComposer,
   onOpenComposerBodyEditor,
   onOpenComposerLibrary,
+  onOpenCommandPrompt,
   onOpenFilter,
   onOpenHelp,
   onOpenListDisplay,
@@ -4350,8 +4702,10 @@ function KeyboardControls({
   onSendComposer,
   onSendResend,
   onSelectComposerTab,
+  onShowCommandHint,
   onStartExport,
   onStartResend,
+  onSubmitCommand,
   onStopRecording,
   onToggleComposerField,
   onToggleComposerReveal,
@@ -4373,6 +4727,7 @@ function KeyboardControls({
       isFilterOpen,
       isDetailSearchOpen,
       isDetailModalOpen,
+      isCommandOpen,
       isExportPromptOpen,
       isResendConfirmOpen,
       isResending,
@@ -4392,8 +4747,14 @@ function KeyboardControls({
       case 'addComposerRow':
         onAddComposerRow();
         break;
+      case 'appendCommandText':
+        onAppendCommandText(action.value);
+        break;
       case 'backspaceComposerText':
         onBackspaceComposerText();
+        break;
+      case 'backspaceCommandText':
+        onBackspaceCommandText();
         break;
       case 'appendSearch':
         onAppendSearch(action.value);
@@ -4434,6 +4795,9 @@ function KeyboardControls({
       case 'closeComposer':
         onCloseComposer();
         break;
+      case 'closeCommandPrompt':
+        onCloseCommandPrompt();
+        break;
       case 'closeHelp':
         onCloseHelp();
         break;
@@ -4445,6 +4809,9 @@ function KeyboardControls({
         break;
       case 'cycleComposerTab':
         onCycleComposerTab(action.direction);
+        break;
+      case 'cycleCommandSuggestion':
+        onCycleCommandSuggestion(action.direction);
         break;
       case 'cycleListDisplayOption':
         onCycleListDisplayOption(action.direction);
@@ -4533,6 +4900,9 @@ function KeyboardControls({
       case 'openComposerLibrary':
         onOpenComposerLibrary();
         break;
+      case 'openCommandPrompt':
+        onOpenCommandPrompt();
+        break;
       case 'openHelp':
         onOpenHelp();
         break;
@@ -4566,11 +4936,17 @@ function KeyboardControls({
       case 'selectComposerTab':
         onSelectComposerTab(action.tab);
         break;
+      case 'showCommandHint':
+        onShowCommandHint(action.message);
+        break;
       case 'startExport':
         onStartExport(action.action);
         break;
       case 'startResend':
         onStartResend(action.mode);
+        break;
+      case 'submitCommand':
+        onSubmitCommand();
         break;
       case 'stopRecording':
         onStopRecording();
@@ -4865,6 +5241,12 @@ export function App({
   const [exportStatus, setExportStatus] = useState('');
   const [pendingResend, setPendingResend] = useState(null);
   const [resendStatus, setResendStatus] = useState('');
+  const [commandState, setCommandState] = useState({
+    input: '',
+    isOpen: false,
+    selectedIndex: -1,
+    status: ''
+  });
   const [isResending, setIsResending] = useState(false);
   const [manualLibrary, setManualLibrary] = useState(() => manualRequestStore?.getLibrary?.() ?? {
     schemaVersion: 1,
@@ -5000,6 +5382,165 @@ export function App({
     setMethodOptionIndex(0);
     setStatusOptionIndex(0);
     setIsFollowingLatest(false);
+  };
+
+  const closeCommandPrompt = () => {
+    setCommandState({
+      input: '',
+      isOpen: false,
+      selectedIndex: -1,
+      status: ''
+    });
+  };
+
+  const openCommandPrompt = () => {
+    setCommandState({
+      input: '',
+      isOpen: true,
+      selectedIndex: -1,
+      status: ''
+    });
+  };
+
+  const showCommandHint = (message) => {
+    setCommandState({
+      input: '',
+      isOpen: false,
+      selectedIndex: -1,
+      status: message || 'press : for commands'
+    });
+  };
+
+  const appendCommandText = (value) => {
+    setCommandState((current) => ({
+      ...current,
+      input: `${current.input}${value}`,
+      selectedIndex: -1,
+      status: ''
+    }));
+  };
+
+  const backspaceCommandText = () => {
+    setCommandState((current) => ({
+      ...current,
+      input: current.input.slice(0, -1),
+      selectedIndex: -1,
+      status: ''
+    }));
+  };
+
+  const cycleCommandSuggestion = (direction) => {
+    setCommandState((current) => ({
+      ...current,
+      selectedIndex: getCommandSuggestionIndex(current.input, current.selectedIndex, direction),
+      status: ''
+    }));
+  };
+
+  const clearLogs = () => {
+    stateStore.clear();
+    setSelectedLogId(null);
+    setInspectedLogId(null);
+    setIsFollowingLatest(false);
+    setDetailScrollOffset(0);
+    setFocusedDetailRow(0);
+  };
+
+  const stopRecording = () => {
+    const result = trafficRecorder?.stopRecording?.();
+
+    Promise.resolve(result)
+      .catch(() => {})
+      .finally(() => setRecordingStatus(getRecordingStatus(trafficRecorder)));
+  };
+
+  const toggleCapturePause = () => {
+    setIsPaused((current) => {
+      const next = !current;
+      captureController?.setPaused?.(next);
+      return next;
+    });
+  };
+
+  const toggleRecordingPause = () => {
+    trafficRecorder?.togglePaused?.();
+    setRecordingStatus(getRecordingStatus(trafficRecorder));
+  };
+
+  const closeCompletedCommand = (status = '') => {
+    setCommandState({
+      input: '',
+      isOpen: false,
+      selectedIndex: -1,
+      status
+    });
+  };
+
+  const runCommandAction = (resolvedCommand) => {
+    const { action, command } = resolvedCommand;
+    const completedStatus = `ran :${command.name}`;
+
+    switch (action.type) {
+      case 'clearLogs':
+        clearLogs();
+        closeCompletedCommand(completedStatus);
+        break;
+      case 'openHelp':
+        closeCompletedCommand('');
+        setIsHelpOpen(true);
+        break;
+      case 'quit':
+        closeCompletedCommand('');
+        onQuit();
+        break;
+      case 'startResend':
+        closeCompletedCommand('');
+        startResend(action.mode);
+        break;
+      case 'stopRecording':
+        if (isReplayMode) {
+          closeCompletedCommand('recording unavailable in replay mode');
+          break;
+        }
+        stopRecording();
+        closeCompletedCommand(completedStatus);
+        break;
+      case 'togglePause':
+        if (isReplayMode) {
+          closeCompletedCommand('capture control unavailable in replay mode');
+          break;
+        }
+        toggleCapturePause();
+        closeCompletedCommand(completedStatus);
+        break;
+      case 'toggleRecordingPause':
+        if (isReplayMode) {
+          closeCompletedCommand('recording unavailable in replay mode');
+          break;
+        }
+        toggleRecordingPause();
+        closeCompletedCommand(completedStatus);
+        break;
+      default:
+        setCommandState((current) => ({
+          ...current,
+          status: `unsupported command action: ${action.type}`
+        }));
+    }
+  };
+
+  const submitCommand = () => {
+    const resolved = resolveCommandInput(commandState.input, commandState.selectedIndex);
+
+    if (!resolved.ok) {
+      setCommandState((current) => ({
+        ...current,
+        status: resolved.error
+      }));
+      return;
+    }
+
+    runCommandAction(resolved);
   };
 
   const focusDetailRowAt = (rowIndex) => {
@@ -5496,6 +6037,7 @@ export function App({
         isFilterOpen,
         isDetailSearchOpen,
         isDetailModalOpen,
+        isCommandOpen: commandState.isOpen,
         isExportPromptOpen: Boolean(pendingExport),
         isResendConfirmOpen: Boolean(pendingResend),
         isResending,
@@ -5510,6 +6052,7 @@ export function App({
         detailPageSize: activeDetailVisibleCount,
         trafficPageSize: trafficVisibleCount,
         onAddComposerRow: () => setComposer(addComposerRow),
+        onAppendCommandText: appendCommandText,
         onAppendDetailSearch: (value) => {
           setDetailSearchQuery((current) => `${current}${value}`);
           setDetailMatchIndex(0);
@@ -5522,6 +6065,7 @@ export function App({
           setDetailSearchQuery((current) => current.slice(0, -1));
           setDetailMatchIndex(0);
         },
+        onBackspaceCommandText: backspaceCommandText,
         onBackspaceComposerText: () => setComposer(backspaceComposerText),
         onBackspaceSearch: () => {
           setSearchQuery((current) => current.slice(0, -1));
@@ -5530,14 +6074,7 @@ export function App({
         onCancelExport: cancelTrafficExport,
         onCancelResend: cancelResend,
         onClearFilters: clearFilters,
-        onClearLogs: () => {
-          stateStore.clear();
-          setSelectedLogId(null);
-          setInspectedLogId(null);
-          setIsFollowingLatest(false);
-          setDetailScrollOffset(0);
-          setFocusedDetailRow(0);
-        },
+        onClearLogs: clearLogs,
         onCloseDetailModal: () => setIsDetailModalOpen(false),
         onCloseComposer: () => {
           setComposer((current) => ({
@@ -5555,6 +6092,7 @@ export function App({
             isBodyEditorOpen: false
           }));
         },
+        onCloseCommandPrompt: closeCommandPrompt,
         onCloseComposerLibrary: () => {
           setComposer((current) => ({
             ...current,
@@ -5571,6 +6109,7 @@ export function App({
         onCloseListDisplay: () => setIsListDisplayOpen(false),
         onCycleComposerFocus: (direction) => setComposer((current) => moveComposerFocus(current, direction)),
         onCycleComposerTab: (direction) => setComposer((current) => cycleComposerTab(current, direction)),
+        onCycleCommandSuggestion: cycleCommandSuggestion,
         onCycleListDisplayOption: cycleFocusedListDisplayOption,
         onCycleTrafficDensity: (direction) => setTrafficListDisplay((current) => cycleTrafficDensity(current, direction)),
         onCycleTrafficPathMode: (direction) => setTrafficListDisplay((current) => cycleTrafficPathMode(current, direction)),
@@ -5665,6 +6204,7 @@ export function App({
           });
         },
         onOpenComposerLibrary: openComposerLibrary,
+        onOpenCommandPrompt: openCommandPrompt,
         onOpenHelp: () => setIsHelpOpen(true),
         onOpenListDisplay: openListDisplay,
         onPreviewComposerSend: () => {
@@ -5682,8 +6222,10 @@ export function App({
           setListDisplayFocusIndex(0);
         },
         onSelectComposerTab: (tab) => setComposer((current) => selectComposerTab(current, tab)),
+        onShowCommandHint: showCommandHint,
         onStartExport: startTrafficExport,
         onStartResend: startResend,
+        onSubmitCommand: submitCommand,
         onScrollDetails: (direction) => {
           moveDetailFocus(direction);
         },
@@ -5693,13 +6235,7 @@ export function App({
         },
         onSendComposer: sendComposer,
         onSendResend: () => sendResendPlan(pendingResend),
-        onStopRecording: () => {
-          const result = trafficRecorder?.stopRecording?.();
-
-          Promise.resolve(result)
-            .catch(() => {})
-            .finally(() => setRecordingStatus(getRecordingStatus(trafficRecorder)));
-        },
+        onStopRecording: stopRecording,
         onFollowLatest: () => {
           setIsFollowingLatest(true);
           const latestLogId = resolveSelectedLogId(filteredLogs, selectedLogId, { followLatest: true });
@@ -5746,17 +6282,8 @@ export function App({
         },
         onToggleDetailNode: toggleFocusedDetailNode,
         onToggleFrameworkAssets: toggleFrameworkAssets,
-        onTogglePause: () => {
-          setIsPaused((current) => {
-            const next = !current;
-            captureController?.setPaused?.(next);
-            return next;
-          });
-        },
-        onToggleRecordingPause: () => {
-          trafficRecorder?.togglePaused?.();
-          setRecordingStatus(getRecordingStatus(trafficRecorder));
-        }
+        onTogglePause: toggleCapturePause,
+        onToggleRecordingPause: toggleRecordingPause
       })
       : null,
     h(Header, {
@@ -5771,7 +6298,13 @@ export function App({
     h(
       Box,
       { flexDirection: 'row', flexGrow: 1 },
-      isHelpOpen
+      commandState.isOpen
+        ? h(CommandModal, {
+          input: commandState.input,
+          selectedIndex: commandState.selectedIndex,
+          status: commandState.status
+        })
+        : (isHelpOpen
         ? h(HelpModal)
         : (isListDisplayOpen
           ? h(ListDisplayModal, {
@@ -5823,10 +6356,10 @@ export function App({
             focusedRow: focusedDetailRow,
             rows: detailRows,
             scrollOffset: detailScrollOffset,
-            matchCount: detailMatches.length,
-            activeMatchIndex: detailMatchIndex
+          matchCount: detailMatches.length,
+          activeMatchIndex: detailMatchIndex
           })
-        ])))
+        ]))))
     ),
     isFilterOpen
         ? h(FilterBar, {
@@ -5852,11 +6385,13 @@ export function App({
           query: detailSearchQuery
         })
           : h(Footer, {
+          commandStatus: commandState.status,
           exportStatus,
           resendStatus,
           isComposerConfirmOpen: composer.isConfirmOpen,
           isComposerOpen: composer.isOpen,
           isComposerTextFocused: getFocusedComposerDescriptor(composer)?.kind === 'text',
+          isCommandOpen: commandState.isOpen,
           isDetailModalOpen,
           isDetailSearchActive: detailSearchQuery.trim().length > 0,
           isExportPromptOpen: Boolean(pendingExport),
