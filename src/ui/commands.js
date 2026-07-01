@@ -45,6 +45,12 @@ export const COMMAND_DEFINITIONS = [
     action: { type: 'openRequestActivity' }
   },
   {
+    name: 'endpoints',
+    aliases: ['ep', 'endpoint-groups'],
+    description: 'open endpoint groups',
+    action: { type: 'openEndpointGroups' }
+  },
+  {
     name: 'record',
     aliases: ['rec'],
     description: 'start, pause, or resume recording',
@@ -366,6 +372,7 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     isListFocused = true,
     isHelpOpen = false,
     isListDisplayOpen = false,
+    isEndpointGroupsOpen = false,
     isRequestActivityOpen = false,
     isDiffOpen = false,
     isDiffFilterOpen = false,
@@ -387,6 +394,7 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     isComposerTextFocused = false,
     diffPageSize = 1,
     diffValuePageSize = 1,
+    endpointGroupsPageSize = 1,
     detailPageSize = 1,
     keyBindings: configuredKeyBindings,
     showTrafficPane = true,
@@ -517,6 +525,38 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
 
     if (matches('listDisplay.reset')) {
       return { type: 'resetListDisplay' };
+    }
+
+    return { type: 'none' };
+  }
+
+  if (isEndpointGroupsOpen) {
+    if (matches('endpointGroups.close')) {
+      return { type: 'closeEndpointGroups' };
+    }
+
+    if (matches('endpointGroups.moveUp')) {
+      return { type: 'moveEndpointGroup', direction: -1 };
+    }
+
+    if (matches('endpointGroups.moveDown')) {
+      return { type: 'moveEndpointGroup', direction: 1 };
+    }
+
+    if (matches('endpointGroups.pageUp')) {
+      return { type: 'moveEndpointGroup', direction: -getPageStep(endpointGroupsPageSize) };
+    }
+
+    if (matches('endpointGroups.pageDown')) {
+      return { type: 'moveEndpointGroup', direction: getPageStep(endpointGroupsPageSize) };
+    }
+
+    if (matches('endpointGroups.top')) {
+      return { type: 'moveEndpointGroupTo', boundary: 'top' };
+    }
+
+    if (matches('endpointGroups.bottom')) {
+      return { type: 'moveEndpointGroupTo', boundary: 'bottom' };
     }
 
     return { type: 'none' };
@@ -1225,6 +1265,7 @@ export function KeyboardControls({
   isListFocused,
   isHelpOpen,
   isListDisplayOpen,
+  isEndpointGroupsOpen,
   isRequestActivityOpen,
   isDiffOpen,
   isDiffFilterOpen,
@@ -1246,6 +1287,7 @@ export function KeyboardControls({
   isComposerTextFocused,
   diffPageSize,
   diffValuePageSize,
+  endpointGroupsPageSize,
   detailPageSize,
   keyBindings,
   showTrafficPane,
@@ -1276,6 +1318,7 @@ export function KeyboardControls({
   onCloseCommandPrompt,
   onCloseDiff,
   onCloseDiffValue,
+  onCloseEndpointGroups,
   onCloseHelp,
   onCloseListDisplay,
   onCycleComposerFocus,
@@ -1304,6 +1347,8 @@ export function KeyboardControls({
   onMoveDiffFocusTo,
   onMoveDiffValueScroll,
   onMoveDiffValueScrollTo,
+  onMoveEndpointGroup,
+  onMoveEndpointGroupTo,
   onMoveSelectionTo,
   onMoveFilterOption,
   onMoveSelection,
@@ -1362,6 +1407,7 @@ export function KeyboardControls({
       isListFocused,
       isHelpOpen,
       isListDisplayOpen,
+      isEndpointGroupsOpen,
       isRequestActivityOpen,
       isDiffOpen,
       isDiffFilterOpen,
@@ -1383,6 +1429,7 @@ export function KeyboardControls({
       isComposerTextFocused,
       diffPageSize,
       diffValuePageSize,
+      endpointGroupsPageSize,
       detailPageSize,
       keyBindings,
       showTrafficPane,
@@ -1462,6 +1509,9 @@ export function KeyboardControls({
         break;
       case 'closeDiffValue':
         onCloseDiffValue();
+        break;
+      case 'closeEndpointGroups':
+        onCloseEndpointGroups();
         break;
       case 'closeHelp':
         onCloseHelp();
@@ -1555,6 +1605,12 @@ export function KeyboardControls({
         break;
       case 'moveDiffValueScrollTo':
         onMoveDiffValueScrollTo(action.boundary);
+        break;
+      case 'moveEndpointGroup':
+        onMoveEndpointGroup(action.direction);
+        break;
+      case 'moveEndpointGroupTo':
+        onMoveEndpointGroupTo(action.boundary);
         break;
       case 'moveSelection':
         onMoveSelection(action.direction);

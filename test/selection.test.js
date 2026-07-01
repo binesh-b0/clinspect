@@ -11,8 +11,10 @@ import {
   createRequestDiff,
   createBlankComposerState,
   createComposerStateFromLog,
+  createEndpointGroups,
   createNextPageRequestDraftFromLog,
   DEFAULT_KEY_BINDINGS,
+  EndpointGroupsModal,
   cycleDetailWidthMode,
   cyclePaneWidthMode,
   cycleTrafficDensity,
@@ -25,6 +27,7 @@ import {
   filterLogs,
   filterRequestDiffRows,
   formatCommandSelectionStatus,
+  formatEndpointGroupRow,
   formatFrameworkDetectionLabel,
   formatPaginationNextStatus,
   formatPaneWidthLabel,
@@ -38,6 +41,7 @@ import {
   HELP_SECTIONS,
   getDiffCandidateLogIds,
   getDiffEndpointShape,
+  getEndpointRoutePattern,
   getRequestDiffRows,
   getBoundaryLogId,
   getCommandHelpRows,
@@ -1000,6 +1004,103 @@ test('request diff endpoint shape normalizes ids and ignores query strings', () 
   );
 });
 
+test('endpoint route patterns normalize ids, queries, and trailing slashes', () => {
+  assert.equal(getEndpointRoutePattern('/api/users/123?include=roles'), '/api/users/:id');
+  assert.equal(getEndpointRoutePattern('/api/users/123/'), '/api/users/:id');
+  assert.equal(
+    getEndpointRoutePattern('/api/users/550e8400-e29b-41d4-a716-446655440000'),
+    '/api/users/:id'
+  );
+  assert.equal(
+    getEndpointRoutePattern('/api/assets/0123456789abcdef01234567'),
+    '/api/assets/:id'
+  );
+  assert.equal(getEndpointRoutePattern('/api/orders/ord_1234567890ab'), '/api/orders/:id');
+  assert.equal(getEndpointRoutePattern('/api/users/current'), '/api/users/current');
+  assert.equal(getEndpointRoutePattern('/'), '/');
+});
+
+test('endpoint groups aggregate status distribution, errors, latency, and impact sorting', () => {
+  const groups = createEndpointGroups([
+    createDiffLog({ id: 'users-1', method: 'GET', path: '/api/users/123?include=roles', statusCode: 200, responseTimeMs: 10 }),
+    createDiffLog({ id: 'users-2', method: 'GET', path: '/api/users/456', statusCode: 500, responseTimeMs: 30 }),
+    createDiffLog({ id: 'users-3', method: 'GET', path: '/api/users/789', statusCode: 'bad', responseTimeMs: 'bad' }),
+    createDiffLog({ id: 'post-user', method: 'POST', path: '/api/users/123', statusCode: 404, responseTimeMs: 40 }),
+    createDiffLog({ id: 'orders-1', method: 'DELETE', path: '/api/orders/1', statusCode: 404, responseTimeMs: 20 }),
+    createDiffLog({ id: 'orders-2', method: 'DELETE', path: '/api/orders/2', statusCode: 503, responseTimeMs: 60 }),
+    createDiffLog({ id: 'orders-3', method: 'DELETE', path: '/api/orders/3', statusCode: 204, responseTimeMs: 10 })
+  ]);
+
+  assert.deepEqual(groups.map((group) => `${group.method} ${group.routePattern}`), [
+    'DELETE /api/orders/:id',
+    'POST /api/users/:id',
+    'GET /api/users/:id'
+  ]);
+
+  const getUsers = groups.find((group) => group.method === 'GET');
+
+  assert.equal(getUsers.count, 3);
+  assert.equal(getUsers.errorCount, 1);
+  assert.equal(getUsers.errorRate, 1 / 3);
+  assert.equal(getUsers.averageResponseTimeMs, 20);
+  assert.deepEqual(getUsers.statusCounts, {
+    '2xx': 1,
+    '3xx': 0,
+    '4xx': 0,
+    '5xx': 1,
+    other: 1
+  });
+});
+
+test('endpoint group rows and modal render summary, truncation, empty, and focused states', () => {
+  const groups = createEndpointGroups([
+    createDiffLog({ id: 'one', method: 'GET', path: '/api/users/123', statusCode: 200, responseTimeMs: 10 }),
+    createDiffLog({ id: 'two', method: 'GET', path: '/api/users/456', statusCode: 500, responseTimeMs: 30 }),
+    createDiffLog({
+      id: 'long',
+      method: 'POST',
+      path: '/api/accounts/1234567890abcdef/projects/9876543210abcdef/environments/1234567890abcdef',
+      statusCode: 201,
+      responseTimeMs: 50
+    })
+  ]);
+  const row = formatEndpointGroupRow(groups[1], { width: 66 });
+  const modal = EndpointGroupsModal.type({
+    focusedIndex: 1,
+    groups,
+    keyBindings: DEFAULT_KEY_BINDINGS,
+    totalLogs: 5
+  });
+  const emptyModal = EndpointGroupsModal.type({
+    focusedIndex: 0,
+    groups: [],
+    keyBindings: DEFAULT_KEY_BINDINGS,
+    totalLogs: 0
+  });
+  const flatten = (node) => {
+    if (Array.isArray(node)) {
+      return node.flatMap(flatten);
+    }
+
+    if (!node || typeof node === 'string') {
+      return [];
+    }
+
+    return [node, ...asArray(node.props?.children).flatMap(flatten)];
+  };
+  const modalNodes = flatten(modal);
+  const focusedRows = modalNodes.filter((node) => node.props?.backgroundColor === 'cyan');
+
+  assert.equal(row.includes('...'), true);
+  assert.equal(row.length, 66);
+  assert.match(getNodeText(modal), /2 groups \| 3\/5 visible requests \| 1 errors \(33%\) \| slowest POST/);
+  assert.match(getNodeText(modal), /Current filtered traffic \| sorted by impact \| item 2\/2/);
+  assert.equal(modalNodes.some((node) => getNodeText(node).includes('2xx')), true);
+  assert.equal(modalNodes.some((node) => getNodeText(node).includes('oth')), true);
+  assert.equal(focusedRows.some((node) => getNodeText(node).includes('POST')), true);
+  assert.match(getNodeText(emptyModal), /No visible traffic to group/);
+});
+
 test('request diff candidate helper returns same method and endpoint shape from supplied logs', () => {
   const base = createDiffLog({ id: 'base', method: 'GET', path: '/api/users/123?include=roles' });
   const candidates = [
@@ -1304,6 +1405,38 @@ test('keyboard action helper supports colon command mode for careful actions', (
     { type: 'inspectRequestActivity' }
   );
   assert.deepEqual(
+    getKeyboardAction('j', {}, { isEndpointGroupsOpen: true }),
+    { type: 'moveEndpointGroup', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('k', {}, { isEndpointGroupsOpen: true }),
+    { type: 'moveEndpointGroup', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction(']', {}, { endpointGroupsPageSize: 9, isEndpointGroupsOpen: true }),
+    { type: 'moveEndpointGroup', direction: 9 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('g', {}, { isEndpointGroupsOpen: true }),
+    { type: 'moveEndpointGroupTo', boundary: 'top' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('G', {}, { isEndpointGroupsOpen: true }),
+    { type: 'moveEndpointGroupTo', boundary: 'bottom' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('q', {}, { isEndpointGroupsOpen: true }),
+    { type: 'closeEndpointGroups' }
+  );
+  assert.deepEqual(
+    getKeyboardAction(':', {}, { isEndpointGroupsOpen: true }),
+    { type: 'openCommandPrompt' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('h', {}, { isEndpointGroupsOpen: true }),
+    { type: 'openHelp' }
+  );
+  assert.deepEqual(
     getKeyboardAction('h', {}, { isDiffOpen: true }),
     { type: 'openHelp' }
   );
@@ -1423,6 +1556,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
   const globalShortcutSurfaces = [
     { isExportPromptOpen: true },
     { isListDisplayOpen: true },
+    { isEndpointGroupsOpen: true },
     { isRequestActivityOpen: true },
     { isDiffOpen: true },
     { isDiffOpen: true, isDiffValueOpen: true },
@@ -1454,6 +1588,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
     'next-page',
     'send-next-page',
     'requests',
+    'endpoints',
     'record',
     'stop-recording',
     'pause-capture',
@@ -1464,6 +1599,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(getCommandMatches('np').map((command) => command.name), ['next-page']);
   assert.deepEqual(getCommandMatches('snp').map((command) => command.name), ['send-next-page']);
   assert.deepEqual(getCommandMatches('rq').map((command) => command.name), ['requests']);
+  assert.deepEqual(getCommandMatches('ep').map((command) => command.name), ['endpoints']);
   assert.deepEqual(getCommandMatches('r').map((command) => command.name), ['resend', 'requests', 'record']);
   assert.deepEqual(resolveCommandInput('next-page').action, { type: 'openNextPage' });
   assert.deepEqual(resolveCommandInput('np').action, { type: 'openNextPage' });
@@ -1471,6 +1607,9 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(resolveCommandInput('snp').action, { type: 'sendNextPage' });
   assert.deepEqual(resolveCommandInput('requests').action, { type: 'openRequestActivity' });
   assert.deepEqual(resolveCommandInput('sent').action, { type: 'openRequestActivity' });
+  assert.deepEqual(resolveCommandInput('endpoints').action, { type: 'openEndpointGroups' });
+  assert.deepEqual(resolveCommandInput('endpoint-groups').action, { type: 'openEndpointGroups' });
+  assert.deepEqual(resolveCommandInput('ep').action, { type: 'openEndpointGroups' });
   assert.equal(getCommandSuggestionIndex('r', -1, 1), 0);
   assert.equal(getCommandSuggestionIndex('r', 0, 1), 1);
   assert.equal(getCommandSuggestionIndex('r', 0, -1), 2);
@@ -1489,7 +1628,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
   );
   assert.deepEqual(
     getCommandSuggestionRows('').map((row) => row.primaryAlias),
-    ['q', 'rs', 'np', 'snp', 'rq', 'rec', 'stop']
+    ['q', 'rs', 'np', 'snp', 'rq', 'ep', 'rec']
   );
   assert.deepEqual(
     getCommandSuggestionRows('', 0).map((row) => row.isSelected),
@@ -1497,7 +1636,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
   );
   assert.deepEqual(
     getCommandSuggestionRows('', 8).map((row) => row.name),
-    ['next-page', 'send-next-page', 'requests', 'record', 'stop-recording', 'pause-capture', 'clear-logs']
+    ['next-page', 'send-next-page', 'requests', 'endpoints', 'record', 'stop-recording', 'pause-capture']
   );
   assert.deepEqual(
     getCommandSuggestionRows('', 8).map((row) => row.isSelected),
@@ -1558,7 +1697,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.equal(getCommandMatches('snp', unavailableNextPageContext).length, 0);
   assert.deepEqual(
     getCommandSuggestionRows('', -1, unavailableNextPageContext).map((row) => row.name),
-    ['quit', 'resend', 'requests', 'record', 'stop-recording', 'pause-capture', 'clear-logs']
+    ['quit', 'resend', 'requests', 'endpoints', 'record', 'stop-recording', 'pause-capture']
   );
   assert.deepEqual(resolveCommandInput('np', -1, unavailableNextPageContext), {
     ok: false,
@@ -2286,6 +2425,10 @@ test('footer text shows mode-aware essential keymaps', () => {
     'sent requests  j/k move  enter inspect log  esc/q close  h help'
   );
   assert.equal(
+    formatFooterText({ isEndpointGroupsOpen: true }),
+    'endpoint groups  j/k: move  [ / ]: page  g/G: top/bottom  esc/q: close  h: help'
+  );
+  assert.equal(
     formatFooterText({ isDiffOpen: true }),
     'diff  n/N: change  [ / ]: page  g/G: top/bottom  v: layout  /: filter  enter: full row  esc/q: close  h: help'
   );
@@ -2471,6 +2614,14 @@ test('command help rows are generated from command definitions', () => {
       description: 'open sent requests'
     }
   );
+  assert.deepEqual(
+    rows.find((row) => row.command === ':endpoints'),
+    {
+      aliases: ':ep, :endpoint-groups',
+      command: ':endpoints',
+      description: 'open endpoint groups'
+    }
+  );
   assert.equal(
     rows.find((row) => row.command === ':clear-logs').aliases,
     ':clear, :clear-traffic'
@@ -2480,6 +2631,7 @@ test('command help rows are generated from command definitions', () => {
 test('contextual help sections focus the active surface and command availability', () => {
   const trafficSections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'traffic' });
   const diffSections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'diff' });
+  const endpointSections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'endpointGroups' });
   const requestActivitySections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'requestActivity' });
 
   assert.deepEqual(
@@ -2498,6 +2650,14 @@ test('contextual help sections focus the active surface and command availability
   assert.deepEqual(
     diffSections[0].rows.find((row) => row[1] === 'filter rows'),
     ['/', 'filter rows']
+  );
+  assert.deepEqual(
+    endpointSections.map((section) => section.title),
+    ['Endpoint Groups']
+  );
+  assert.deepEqual(
+    endpointSections[0].rows.find((row) => row[1] === 'move endpoint'),
+    ['j/k', 'move endpoint']
   );
   assert.deepEqual(
     requestActivitySections[0].rows.find((row) => row[1] === 'close'),

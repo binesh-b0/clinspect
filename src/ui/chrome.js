@@ -382,6 +382,18 @@ function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context =
           ]
         }
       ];
+    case 'endpointGroups':
+      return [
+        {
+          title: 'Endpoint Groups',
+          rows: [
+            [getActionPairLabel(keyBindings, 'endpointGroups.moveDown', 'endpointGroups.moveUp'), 'move endpoint'],
+            [getActionPairLabel(keyBindings, 'endpointGroups.pageUp', 'endpointGroups.pageDown', { separator: ' / ' }), 'move page'],
+            [getActionPairLabel(keyBindings, 'endpointGroups.top', 'endpointGroups.bottom'), 'top / bottom'],
+            [getActionLabel(keyBindings, 'endpointGroups.close', { limit: 2 }), 'close']
+          ]
+        }
+      ];
     case 'requestActivity':
       return [
         {
@@ -702,6 +714,7 @@ export function formatFooterText({
   isDiffOpen = false,
   isDetailModalOpen = false,
   isDetailSearchActive = false,
+  isEndpointGroupsOpen = false,
   isExportPromptOpen = false,
   hasDiffBase = false,
   isHelpOpen = false,
@@ -768,6 +781,17 @@ export function formatFooterText({
       formatFooterBinding(getActionLabel(keyBindings, 'diff.openFocusedRow', { limit: 1 }), 'full row'),
       ...unmarkDiffAction,
       formatFooterBinding(getActionLabel(keyBindings, 'diff.close', { limit: 2 }), 'close'),
+      formatFooterBinding(getActionLabel(keyBindings, 'main.openHelp', { limit: 1 }), 'help')
+    ]));
+  }
+
+  if (isEndpointGroupsOpen) {
+    return withStatus(joinFooterParts([
+      'endpoint groups',
+      formatFooterBinding(getActionPairLabel(keyBindings, 'endpointGroups.moveDown', 'endpointGroups.moveUp'), 'move'),
+      formatFooterBinding(getActionPairLabel(keyBindings, 'endpointGroups.pageUp', 'endpointGroups.pageDown', { separator: ' / ' }), 'page'),
+      formatFooterBinding(getActionPairLabel(keyBindings, 'endpointGroups.top', 'endpointGroups.bottom'), 'top/bottom'),
+      formatFooterBinding(getActionLabel(keyBindings, 'endpointGroups.close', { limit: 2 }), 'close'),
       formatFooterBinding(getActionLabel(keyBindings, 'main.openHelp', { limit: 1 }), 'help')
     ]));
   }
@@ -870,6 +894,7 @@ export const Footer = React.memo(function Footer({
   isDiffOpen,
   isDetailModalOpen,
   isDetailSearchActive,
+  isEndpointGroupsOpen,
   isExportPromptOpen,
   hasDiffBase,
   isHelpOpen,
@@ -900,6 +925,7 @@ export const Footer = React.memo(function Footer({
         isDiffOpen,
         isDetailModalOpen,
         isDetailSearchActive,
+        isEndpointGroupsOpen,
         isExportPromptOpen,
         hasDiffBase,
         isHelpOpen,

@@ -106,6 +106,12 @@ import {
   formatRequestActivityToast
 } from './request-activity.js';
 import {
+  EndpointGroupsModal,
+  createEndpointGroups,
+  formatEndpointGroupRow,
+  getEndpointRoutePattern
+} from './endpoints.js';
+import {
   DIFF_FILTER_FOCUS_ORDER,
   DiffFilterBar,
   REQUEST_DIFF_LAYOUT_MODES,
@@ -233,6 +239,12 @@ export {
   formatRequestActivityToast
 } from './request-activity.js';
 export {
+  EndpointGroupsModal,
+  createEndpointGroups,
+  formatEndpointGroupRow,
+  getEndpointRoutePattern
+} from './endpoints.js';
+export {
   createRequestDiff,
   filterRequestDiffRows,
   clampRequestDiffValueScrollOffset,
@@ -344,6 +356,7 @@ function getActiveHelpContext({
   isDiffFilterOpen = false,
   isDiffOpen = false,
   isDiffValueOpen = false,
+  isEndpointGroupsOpen = false,
   isExportPromptOpen = false,
   isFilterOpen = false,
   isListDisplayOpen = false,
@@ -361,6 +374,10 @@ function getActiveHelpContext({
 
   if (isListDisplayOpen) {
     return { surface: 'listDisplay' };
+  }
+
+  if (isEndpointGroupsOpen) {
+    return { surface: 'endpointGroups' };
   }
 
   if (isRequestActivityOpen) {
@@ -492,6 +509,8 @@ export function App({
   const [requestActivities, setRequestActivities] = useState([]);
   const [selectedRequestActivityId, setSelectedRequestActivityId] = useState(null);
   const [isRequestActivityOpen, setIsRequestActivityOpen] = useState(false);
+  const [isEndpointGroupsOpen, setIsEndpointGroupsOpen] = useState(false);
+  const [focusedEndpointGroupIndex, setFocusedEndpointGroupIndex] = useState(0);
   const [diffBaseLogId, setDiffBaseLogId] = useState(null);
   const [isDiffOpen, setIsDiffOpen] = useState(false);
   const [focusedDiffIndex, setFocusedDiffIndex] = useState(0);
@@ -545,6 +564,7 @@ export function App({
     statusFilters,
     wordMatchMode
   }), [hideFrameworkAssets, logs, matchCase, methodFilters, searchField, searchMode, searchQuery, showCookieValues, statusFilters, wordMatchMode]);
+  const endpointGroups = useMemo(() => createEndpointGroups(filteredLogs), [filteredLogs]);
 
   useEffect(() => {
     const handleUpdate = (updatedLogs) => setLogs(updatedLogs);
@@ -594,6 +614,10 @@ export function App({
         : requestActivities[0].id;
     });
   }, [requestActivities]);
+
+  useEffect(() => {
+    setFocusedEndpointGroupIndex((current) => Math.max(0, Math.min(endpointGroups.length - 1, current)));
+  }, [endpointGroups]);
 
   useEffect(() => {
     setDetailScrollOffset(0);
@@ -689,6 +713,7 @@ export function App({
     isFilterOpen: isDiffFilterOpen
   });
   const diffVisibleCount = getRequestDiffVisibleCount(15 + diffBottomControlHeight);
+  const endpointGroupPageSize = Math.max(6, renderHeight - 9);
   const diffValueContentWidth = Math.max(34, getRequestDiffFrameWidth() - 4);
   const diffValueLines = useMemo(
     () => getRequestDiffValueLines(filteredRequestDiffRows[focusedDiffIndex], diffValueContentWidth),
@@ -960,9 +985,37 @@ export function App({
     setIsDetailModalOpen(false);
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
+    setIsEndpointGroupsOpen(false);
     setIsDiffOpen(false);
     setPendingExport(null);
     setPendingResend(null);
+  };
+
+  const openEndpointGroups = () => {
+    setIsEndpointGroupsOpen(true);
+    setFocusedEndpointGroupIndex((current) => Math.max(0, Math.min(endpointGroups.length - 1, current)));
+    setIsFilterOpen(false);
+    setIsDetailSearchOpen(false);
+    setIsDetailModalOpen(false);
+    setIsHelpOpen(false);
+    setIsListDisplayOpen(false);
+    setIsRequestActivityOpen(false);
+    setIsDiffOpen(false);
+    setPendingExport(null);
+    setPendingResend(null);
+  };
+
+  const moveEndpointGroup = (direction) => {
+    setFocusedEndpointGroupIndex((current) => Math.max(
+      0,
+      Math.min(endpointGroups.length - 1, current + direction)
+    ));
+  };
+
+  const moveEndpointGroupTo = (boundary) => {
+    setFocusedEndpointGroupIndex(boundary === 'bottom'
+      ? Math.max(0, endpointGroups.length - 1)
+      : 0);
   };
 
   const moveRequestActivity = (direction) => {
@@ -1058,6 +1111,10 @@ export function App({
       case 'openRequestActivity':
         closeCompletedCommand('');
         openRequestActivity();
+        break;
+      case 'openEndpointGroups':
+        closeCompletedCommand('');
+        openEndpointGroups();
         break;
       case 'stopRecording':
         if (isReplayMode) {
@@ -1195,6 +1252,7 @@ export function App({
     setIsDetailModalOpen(false);
     setIsHelpOpen(false);
     setIsRequestActivityOpen(false);
+    setIsEndpointGroupsOpen(false);
     setIsDiffOpen(false);
     setPendingExport(null);
     setPendingResend(null);
@@ -1317,6 +1375,7 @@ export function App({
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
+    setIsEndpointGroupsOpen(false);
     setPendingExport(null);
     setPendingResend(null);
   };
@@ -1453,6 +1512,7 @@ export function App({
     }
 
     setIsRequestActivityOpen(false);
+    setIsEndpointGroupsOpen(false);
     setIsDiffOpen(false);
     setPendingExport({
       action,
@@ -1464,6 +1524,7 @@ export function App({
     setIsDetailSearchOpen(false);
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
+    setIsEndpointGroupsOpen(false);
   };
 
   const formatSavedExportPath = (filePath) => {
@@ -1547,6 +1608,7 @@ export function App({
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
+    setIsEndpointGroupsOpen(false);
     setIsDiffOpen(false);
   };
 
@@ -1570,6 +1632,7 @@ export function App({
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
+    setIsEndpointGroupsOpen(false);
     setIsDiffOpen(false);
   };
 
@@ -1630,6 +1693,7 @@ export function App({
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
+    setIsEndpointGroupsOpen(false);
     setIsDiffOpen(false);
   };
 
@@ -1699,6 +1763,7 @@ export function App({
     setIsDetailModalOpen(false);
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
+    setIsEndpointGroupsOpen(false);
     setIsDiffOpen(false);
 
     Promise.resolve()
@@ -1798,6 +1863,7 @@ export function App({
       setIsHelpOpen(false);
       setIsListDisplayOpen(false);
       setIsRequestActivityOpen(false);
+      setIsEndpointGroupsOpen(false);
       setIsDiffOpen(false);
       return;
     }
@@ -1808,6 +1874,7 @@ export function App({
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
+    setIsEndpointGroupsOpen(false);
     sendResendPlan(plan);
   };
 
@@ -1837,6 +1904,7 @@ export function App({
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
+    setIsEndpointGroupsOpen(false);
     setIsDiffOpen(false);
   };
 
@@ -2010,6 +2078,12 @@ export function App({
     keyBindings,
     selectedId: selectedRequestActivityId
   });
+  const endpointGroupsNode = h(EndpointGroupsModal, {
+    focusedIndex: focusedEndpointGroupIndex,
+    groups: endpointGroups,
+    keyBindings,
+    totalLogs: logs.length
+  });
   const requestDiffNode = h(RequestDiffModal, {
     diff: requestDiff,
     focusedRow: focusedDiffIndex,
@@ -2033,6 +2107,7 @@ export function App({
     isDiffFilterOpen,
     isDiffOpen,
     isDiffValueOpen,
+    isEndpointGroupsOpen,
     isExportPromptOpen: Boolean(pendingExport),
     isFilterOpen,
     isListDisplayOpen,
@@ -2058,6 +2133,7 @@ export function App({
     hideFrameworkAssets,
     isLiveMode,
     isListDisplayOpen,
+    isEndpointGroupsOpen,
     isRequestActivityOpen,
     isListFocused: isDetailModalOpen ? false : isListFocused,
     isRawModeSupported,
@@ -2079,6 +2155,7 @@ export function App({
         isListFocused,
         isHelpOpen,
         isListDisplayOpen,
+        isEndpointGroupsOpen,
         isRequestActivityOpen,
         isDiffOpen,
         isDiffFilterOpen,
@@ -2101,6 +2178,7 @@ export function App({
         keyBindings,
         diffPageSize: diffVisibleCount,
         diffValuePageSize: diffVisibleCount,
+        endpointGroupsPageSize: endpointGroupPageSize,
         detailPageSize: activeDetailVisibleCount,
         showTrafficPane: paneLayout.showTrafficPane,
         trafficPaneWidth,
@@ -2136,6 +2214,7 @@ export function App({
         onClearLogs: clearLogs,
         onCloseDetailModal: () => setIsDetailModalOpen(false),
         onCloseDiff: closeDiff,
+        onCloseEndpointGroups: () => setIsEndpointGroupsOpen(false),
         onCloseRequestActivity: () => setIsRequestActivityOpen(false),
         onCloseComposer: () => {
           setComposer((current) => ({
@@ -2255,6 +2334,8 @@ export function App({
         onMoveDiffFocusTo: moveDiffFocusTo,
         onMoveDiffValueScroll: moveDiffValueScroll,
         onMoveDiffValueScrollTo: moveDiffValueScrollTo,
+        onMoveEndpointGroup: moveEndpointGroup,
+        onMoveEndpointGroupTo: moveEndpointGroupTo,
         onMoveSelection: (direction) => {
           setIsFollowingLatest(false);
           setSelectedLogId((currentId) => moveSelectedLogId(filteredLogs, currentId, direction));
@@ -2269,6 +2350,7 @@ export function App({
           setIsDetailSearchOpen(false);
           setIsListDisplayOpen(false);
           setIsRequestActivityOpen(false);
+          setIsEndpointGroupsOpen(false);
           setIsDiffOpen(false);
           setIsFollowingLatest(false);
         },
@@ -2279,6 +2361,7 @@ export function App({
             setIsFilterOpen(false);
             setIsListDisplayOpen(false);
             setIsRequestActivityOpen(false);
+            setIsEndpointGroupsOpen(false);
             setIsDiffOpen(false);
           }
         },
@@ -2287,6 +2370,7 @@ export function App({
           setIsFilterOpen(false);
           setIsListDisplayOpen(false);
           setIsRequestActivityOpen(false);
+          setIsEndpointGroupsOpen(false);
           setIsDiffOpen(false);
           setIsListFocused(false);
         },
@@ -2449,6 +2533,8 @@ export function App({
           })
         : (isDiffOpen
           ? requestDiffNode
+        : (isEndpointGroupsOpen
+          ? endpointGroupsNode
         : (isRequestActivityOpen
           ? requestActivityNode
         : (composer.isOpen
@@ -2470,7 +2556,7 @@ export function App({
             scrollOffset: detailScrollOffset,
             visibleCount: detailModalVisibleCount
           })
-          : paneNodes))))))
+          : paneNodes)))))))
     ),
     h(ToastNotification, { toast }),
     isDiffOpen && !commandState.isOpen && !isHelpOpen && !isListDisplayOpen

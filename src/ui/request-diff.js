@@ -17,6 +17,7 @@ import {
   getSearchQueryWarning,
   matchesSearchValues
 } from './traffic.js';
+import { getEndpointRoutePattern } from './endpoints.js';
 import {
   DEFAULT_KEY_BINDINGS,
   getBindingLabel,
@@ -167,42 +168,10 @@ function parseRequestPath(path = '') {
   }
 }
 
-function getRequestPathname(path = '') {
-  return parseRequestPath(path).pathname;
-}
-
-function isUuidPathSegment(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
-
-function isIdLikePathSegment(value) {
-  const text = String(value ?? '');
-
-  return /^\d+$/.test(text) ||
-    isUuidPathSegment(text) ||
-    /^[0-9a-f]{12,}$/i.test(text) ||
-    (text.length >= 12 && /\d/.test(text) && /^[A-Za-z0-9_-]+$/.test(text));
-}
-
-function normalizeEndpointPathShape(path = '') {
-  const pathname = getRequestPathname(path)
-    .replace(/\/+$/, '') || '/';
-
-  if (pathname === '/') {
-    return '/';
-  }
-
-  return `/${pathname
-    .split('/')
-    .filter(Boolean)
-    .map((segment) => isIdLikePathSegment(segment) ? ':id' : segment)
-    .join('/')}`;
-}
-
 export function getDiffEndpointShape(log = {}) {
   const method = String(log?.method ?? 'GET').toUpperCase();
 
-  return `${method} ${normalizeEndpointPathShape(log?.path ?? '/')}`;
+  return `${method} ${getEndpointRoutePattern(log?.path ?? '/')}`;
 }
 
 export function getDiffCandidateLogIds(baseLog, logs = []) {

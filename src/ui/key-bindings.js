@@ -78,6 +78,14 @@ export const DEFAULT_KEY_BINDINGS = Object.freeze({
   'listDisplay.toggleOption': Object.freeze(['space']),
   'listDisplay.reset': Object.freeze(['r']),
 
+  'endpointGroups.close': Object.freeze(['escape', 'q']),
+  'endpointGroups.moveDown': Object.freeze(['j', 'down']),
+  'endpointGroups.moveUp': Object.freeze(['k', 'up']),
+  'endpointGroups.pageDown': Object.freeze(['pagedown', ']']),
+  'endpointGroups.pageUp': Object.freeze(['pageup', '[']),
+  'endpointGroups.top': Object.freeze(['g']),
+  'endpointGroups.bottom': Object.freeze(['G']),
+
   'resend.confirm': Object.freeze(['enter', 'y', 'Y']),
   'resend.edit': Object.freeze(['E', 'e']),
   'resend.cancel': Object.freeze(['escape', 'n', 'N']),
@@ -241,6 +249,15 @@ const ACTION_CONTEXT_GROUPS = [
     'listDisplay.nextOption',
     'listDisplay.toggleOption',
     'listDisplay.reset'
+  ],
+  [
+    'endpointGroups.close',
+    'endpointGroups.moveDown',
+    'endpointGroups.moveUp',
+    'endpointGroups.pageDown',
+    'endpointGroups.pageUp',
+    'endpointGroups.top',
+    'endpointGroups.bottom'
   ],
   ['resend.confirm', 'resend.edit', 'resend.cancel'],
   ['composerConfirm.confirm', 'composerConfirm.cancel'],
