@@ -398,6 +398,19 @@ function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context =
           ]
         }
       ];
+    case 'schemaInference':
+      return [
+        {
+          title: 'Schema Inference',
+          rows: [
+            [getActionPairLabel(keyBindings, 'schemaInference.nextGroup', 'schemaInference.previousGroup'), 'change schema group'],
+            [getActionPairLabel(keyBindings, 'schemaInference.moveDown', 'schemaInference.moveUp'), 'move field'],
+            [getActionPairLabel(keyBindings, 'schemaInference.pageUp', 'schemaInference.pageDown', { separator: ' / ' }), 'move page'],
+            [getActionPairLabel(keyBindings, 'schemaInference.top', 'schemaInference.bottom'), 'top / bottom'],
+            [getActionLabel(keyBindings, 'schemaInference.close', { limit: 2 }), 'close']
+          ]
+        }
+      ];
     case 'requestActivity':
       return [
         {
@@ -710,6 +723,7 @@ export function formatFooterText({
   exportStatus = '',
   isListDisplayOpen = false,
   isRequestActivityOpen = false,
+  isSchemaInferenceOpen = false,
   resendStatus = '',
   isComposerConfirmOpen = false,
   isComposerOpen = false,
@@ -797,6 +811,18 @@ export function formatFooterText({
       formatFooterBinding(getActionPairLabel(keyBindings, 'endpointGroups.pageUp', 'endpointGroups.pageDown', { separator: ' / ' }), 'page'),
       formatFooterBinding(getActionPairLabel(keyBindings, 'endpointGroups.top', 'endpointGroups.bottom'), 'top/bottom'),
       formatFooterBinding(getActionLabel(keyBindings, 'endpointGroups.close', { limit: 2 }), 'close'),
+      formatFooterBinding(getActionLabel(keyBindings, 'main.openHelp', { limit: 1 }), 'help')
+    ]));
+  }
+
+  if (isSchemaInferenceOpen) {
+    return withStatus(joinFooterParts([
+      'schemas',
+      formatFooterBinding(getActionPairLabel(keyBindings, 'schemaInference.nextGroup', 'schemaInference.previousGroup'), 'group'),
+      formatFooterBinding(getActionPairLabel(keyBindings, 'schemaInference.moveDown', 'schemaInference.moveUp'), 'field'),
+      formatFooterBinding(getActionPairLabel(keyBindings, 'schemaInference.pageUp', 'schemaInference.pageDown', { separator: ' / ' }), 'page'),
+      formatFooterBinding(getActionPairLabel(keyBindings, 'schemaInference.top', 'schemaInference.bottom'), 'top/bottom'),
+      formatFooterBinding(getActionLabel(keyBindings, 'schemaInference.close', { limit: 2 }), 'close'),
       formatFooterBinding(getActionLabel(keyBindings, 'main.openHelp', { limit: 1 }), 'help')
     ]));
   }
@@ -903,6 +929,7 @@ export const Footer = React.memo(function Footer({
   isDetailModalOpen,
   isDetailSearchActive,
   isEndpointGroupsOpen,
+  isSchemaInferenceOpen,
   isExportPromptOpen,
   hasDiffBase,
   isHelpOpen,
@@ -934,6 +961,7 @@ export const Footer = React.memo(function Footer({
         isDetailModalOpen,
         isDetailSearchActive,
         isEndpointGroupsOpen,
+        isSchemaInferenceOpen,
         isExportPromptOpen,
         hasDiffBase,
         isHelpOpen,

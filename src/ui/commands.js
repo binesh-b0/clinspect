@@ -51,6 +51,12 @@ export const COMMAND_DEFINITIONS = [
     action: { type: 'openEndpointGroups' }
   },
   {
+    name: 'schemas',
+    aliases: ['schema', 'sc', 'shapes'],
+    description: 'open schema inference',
+    action: { type: 'openSchemaInference' }
+  },
+  {
     name: 'record',
     aliases: ['rec'],
     description: 'start, pause, or resume recording',
@@ -379,6 +385,7 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     isHelpOpen = false,
     isListDisplayOpen = false,
     isEndpointGroupsOpen = false,
+    isSchemaInferenceOpen = false,
     isRequestActivityOpen = false,
     isDiffOpen = false,
     isDiffFilterOpen = false,
@@ -401,6 +408,7 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     diffPageSize = 1,
     diffValuePageSize = 1,
     endpointGroupsPageSize = 1,
+    schemaInferencePageSize = 1,
     detailPageSize = 1,
     keyBindings: configuredKeyBindings,
     showTrafficPane = true,
@@ -563,6 +571,46 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
 
     if (matches('endpointGroups.bottom')) {
       return { type: 'moveEndpointGroupTo', boundary: 'bottom' };
+    }
+
+    return { type: 'none' };
+  }
+
+  if (isSchemaInferenceOpen) {
+    if (matches('schemaInference.close')) {
+      return { type: 'closeSchemaInference' };
+    }
+
+    if (matches('schemaInference.moveUp')) {
+      return { type: 'moveSchemaField', direction: -1 };
+    }
+
+    if (matches('schemaInference.moveDown')) {
+      return { type: 'moveSchemaField', direction: 1 };
+    }
+
+    if (matches('schemaInference.pageUp')) {
+      return { type: 'moveSchemaField', direction: -getPageStep(schemaInferencePageSize) };
+    }
+
+    if (matches('schemaInference.pageDown')) {
+      return { type: 'moveSchemaField', direction: getPageStep(schemaInferencePageSize) };
+    }
+
+    if (matches('schemaInference.top')) {
+      return { type: 'moveSchemaFieldTo', boundary: 'top' };
+    }
+
+    if (matches('schemaInference.bottom')) {
+      return { type: 'moveSchemaFieldTo', boundary: 'bottom' };
+    }
+
+    if (matches('schemaInference.nextGroup')) {
+      return { type: 'moveSchemaGroup', direction: 1 };
+    }
+
+    if (matches('schemaInference.previousGroup')) {
+      return { type: 'moveSchemaGroup', direction: -1 };
     }
 
     return { type: 'none' };
@@ -1276,6 +1324,7 @@ export function KeyboardControls({
   isHelpOpen,
   isListDisplayOpen,
   isEndpointGroupsOpen,
+  isSchemaInferenceOpen,
   isRequestActivityOpen,
   isDiffOpen,
   isDiffFilterOpen,
@@ -1298,6 +1347,7 @@ export function KeyboardControls({
   diffPageSize,
   diffValuePageSize,
   endpointGroupsPageSize,
+  schemaInferencePageSize,
   detailPageSize,
   keyBindings,
   showTrafficPane,
@@ -1329,6 +1379,7 @@ export function KeyboardControls({
   onCloseDiff,
   onCloseDiffValue,
   onCloseEndpointGroups,
+  onCloseSchemaInference,
   onCloseHelp,
   onCloseListDisplay,
   onCycleComposerFocus,
@@ -1359,6 +1410,9 @@ export function KeyboardControls({
   onMoveDiffValueScrollTo,
   onMoveEndpointGroup,
   onMoveEndpointGroupTo,
+  onMoveSchemaField,
+  onMoveSchemaFieldTo,
+  onMoveSchemaGroup,
   onMoveSelectionTo,
   onMoveFilterOption,
   onMoveSelection,
@@ -1381,6 +1435,7 @@ export function KeyboardControls({
   onOpenFilter,
   onOpenHelp,
   onOpenListDisplay,
+  onOpenSchemaInference,
   onInspectRequestActivity,
   onMarkDiffBase,
   onPreviewComposerSend,
@@ -1419,6 +1474,7 @@ export function KeyboardControls({
       isHelpOpen,
       isListDisplayOpen,
       isEndpointGroupsOpen,
+      isSchemaInferenceOpen,
       isRequestActivityOpen,
       isDiffOpen,
       isDiffFilterOpen,
@@ -1441,6 +1497,7 @@ export function KeyboardControls({
       diffPageSize,
       diffValuePageSize,
       endpointGroupsPageSize,
+      schemaInferencePageSize,
       detailPageSize,
       keyBindings,
       showTrafficPane,
@@ -1523,6 +1580,9 @@ export function KeyboardControls({
         break;
       case 'closeEndpointGroups':
         onCloseEndpointGroups();
+        break;
+      case 'closeSchemaInference':
+        onCloseSchemaInference();
         break;
       case 'closeHelp':
         onCloseHelp();
@@ -1623,6 +1683,15 @@ export function KeyboardControls({
       case 'moveEndpointGroupTo':
         onMoveEndpointGroupTo(action.boundary);
         break;
+      case 'moveSchemaField':
+        onMoveSchemaField(action.direction);
+        break;
+      case 'moveSchemaFieldTo':
+        onMoveSchemaFieldTo(action.boundary);
+        break;
+      case 'moveSchemaGroup':
+        onMoveSchemaGroup(action.direction);
+        break;
       case 'moveSelection':
         onMoveSelection(action.direction);
         break;
@@ -1685,6 +1754,9 @@ export function KeyboardControls({
         break;
       case 'openListDisplay':
         onOpenListDisplay();
+        break;
+      case 'openSchemaInference':
+        onOpenSchemaInference();
         break;
       case 'inspectRequestActivity':
         onInspectRequestActivity();

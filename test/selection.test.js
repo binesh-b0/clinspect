@@ -13,6 +13,7 @@ import {
   createComposerStateFromLog,
   createEndpointGroups,
   createNextPageRequestDraftFromLog,
+  createSchemaGroups,
   DEFAULT_KEY_BINDINGS,
   EndpointGroupsModal,
   cycleDetailWidthMode,
@@ -37,9 +38,11 @@ import {
   formatPathForMode,
   formatStructuredPayloadRows,
   formatRecordingLabel,
+  formatSchemaRow,
   formatTrafficHeader,
   formatTrafficRow,
   HELP_SECTIONS,
+  inferJsonShape,
   getDiffCandidateLogIds,
   getDiffEndpointShape,
   getEndpointRoutePattern,
@@ -80,12 +83,14 @@ import {
   normalizeTrafficListDisplay,
   parseSearchTerms,
   parseQueryParameters,
+  parseJsonPayloadForSchema,
   createRequestActivity,
   failRequestActivity,
   finishRequestActivity,
   formatRequestActivityRow,
   formatRequestActivityToast,
   RequestActivityPage,
+  SchemaInferenceModal,
   ToastNotification,
   resolveCommandInput,
   resolveSelectedLogId,
@@ -1250,6 +1255,192 @@ test('endpoint group rows and modal render summary, truncation, empty, and focus
   assert.match(getNodeText(emptyModal), /No visible traffic to group/);
 });
 
+test('schema inference parses JSON payloads and infers field shapes', () => {
+  assert.deepEqual(parseJsonPayloadForSchema({
+    body: '{"ok":true}',
+    headers: { 'content-type': 'text/plain' },
+    truncated: false
+  }), {
+    parsed: true,
+    reason: 'parsed',
+    skipped: false,
+    value: { ok: true }
+  });
+  assert.deepEqual(parseJsonPayloadForSchema({
+    body: '{"bad"',
+    headers: { 'content-type': 'application/json' },
+    truncated: false
+  }), {
+    parsed: false,
+    reason: 'invalid-json',
+    skipped: false,
+    value: null
+  });
+  assert.equal(parseJsonPayloadForSchema({ body: '', headers: {} }).reason, 'empty');
+  assert.equal(parseJsonPayloadForSchema({ body: '{"ok":true}', headers: {}, truncated: true }).reason, 'truncated');
+  assert.equal(parseJsonPayloadForSchema({
+    body: '{"ok":true}',
+    headers: { 'content-encoding': 'gzip' }
+  }).reason, 'encoded');
+  assert.equal(parseJsonPayloadForSchema({
+    body: 'plain text',
+    headers: { 'content-type': 'application/octet-stream' }
+  }).reason, 'binary');
+
+  const shape = inferJsonShape({
+    empty: [],
+    id: 123,
+    items: [
+      { active: true, id: 1 },
+      { extra: null, id: '2' }
+    ],
+    name: null,
+    tags: ['new', 'sale']
+  });
+  const byPath = Object.fromEntries(shape.rows.map((row) => [row.path, row]));
+
+  assert.equal(shape.fieldCount, 11);
+  assert.deepEqual(byPath.$.types, ['object']);
+  assert.deepEqual(byPath['$.id'].types, ['number']);
+  assert.deepEqual(byPath['$.name'].types, ['null']);
+  assert.equal(byPath['$.name'].nullable, true);
+  assert.deepEqual(byPath['$.tags'].types, ['array<string>']);
+  assert.deepEqual(byPath['$.tags[]'].types, ['string']);
+  assert.deepEqual(byPath['$.empty'].types, ['array<empty>']);
+  assert.deepEqual(byPath['$.items'].types, ['array<object>']);
+  assert.equal(byPath['$.items[].id'].drift, true);
+  assert.deepEqual(byPath['$.items[].id'].types, ['string', 'number']);
+});
+
+test('schema groups aggregate request and response JSON shapes with drift sorting', () => {
+  const groups = createSchemaGroups([
+    createDiffLog({
+      id: 'users-1',
+      method: 'GET',
+      path: '/api/users/123?include=profile',
+      response: {
+        body: JSON.stringify({ id: 1, name: 'Ada', profile: { age: 30 }, tags: ['admin'] }),
+        headers: { 'content-type': 'application/json' }
+      }
+    }),
+    createDiffLog({
+      id: 'users-2',
+      method: 'GET',
+      path: '/api/users/456',
+      response: {
+        body: JSON.stringify({ extra: true, id: 2, name: null, profile: { age: 'unknown' }, tags: [] }),
+        headers: { 'content-type': 'application/json' }
+      }
+    }),
+    createDiffLog({
+      id: 'users-invalid',
+      method: 'GET',
+      path: '/api/users/789',
+      response: {
+        body: '{"bad"',
+        headers: { 'content-type': 'application/json' }
+      }
+    }),
+    createDiffLog({
+      id: 'users-non-json',
+      method: 'GET',
+      path: '/api/users/current',
+      response: {
+        body: 'ok',
+        headers: { 'content-type': 'text/plain' }
+      }
+    }),
+    createDiffLog({
+      id: 'post-user',
+      method: 'POST',
+      path: '/api/users',
+      request: {
+        body: JSON.stringify({ name: 'Grace', roles: ['admin'] }),
+        headers: { 'content-type': 'application/json' }
+      }
+    })
+  ]);
+  const responseGroup = groups.find((group) => (
+    group.method === 'GET' && group.routePattern === '/api/users/:id' && group.side === 'response'
+  ));
+  const requestGroup = groups.find((group) => (
+    group.method === 'POST' && group.routePattern === '/api/users' && group.side === 'request'
+  ));
+  const byPath = Object.fromEntries(responseGroup.rows.map((row) => [row.path, row]));
+
+  assert.equal(groups[0], responseGroup);
+  assert.equal(responseGroup.trafficCount, 3);
+  assert.equal(responseGroup.jsonSampleCount, 2);
+  assert.equal(responseGroup.parseFailureCount, 1);
+  assert.equal(responseGroup.skippedCount, 0);
+  assert.equal(responseGroup.optionalFieldCount, 2);
+  assert.equal(responseGroup.nullableFieldCount, 1);
+  assert.equal(responseGroup.driftFieldCount, 1);
+  assert.equal(byPath['$.extra'].optional, true);
+  assert.equal(byPath['$.name'].nullable, true);
+  assert.equal(byPath['$.profile.age'].drift, true);
+  assert.deepEqual(byPath['$.profile.age'].types, ['string', 'number']);
+  assert.equal(requestGroup.trafficCount, 1);
+  assert.equal(requestGroup.jsonSampleCount, 1);
+  assert.equal(requestGroup.rows.find((row) => row.path === '$.roles').array, true);
+});
+
+test('schema rows and modal render summary, truncation, empty, focused state, and drift markers', () => {
+  const groups = createSchemaGroups([
+    createDiffLog({
+      id: 'one',
+      method: 'GET',
+      path: '/api/users/123',
+      response: {
+        body: JSON.stringify({
+          id: 1,
+          profile: { age: 30 },
+          veryLongFieldNameForSchemaInferenceTruncation: 'value'
+        }),
+        headers: { 'content-type': 'application/json' }
+      }
+    }),
+    createDiffLog({
+      id: 'two',
+      method: 'GET',
+      path: '/api/users/456',
+      response: {
+        body: JSON.stringify({
+          id: '2',
+          profile: { age: 'unknown' }
+        }),
+        headers: { 'content-type': 'application/json' }
+      }
+    })
+  ]);
+  const group = groups[0];
+  const driftIndex = group.rows.findIndex((row) => row.path === '$.id');
+  const row = formatSchemaRow(group.rows.find((item) => item.path.includes('veryLongFieldName')), { width: 46 });
+  const modal = SchemaInferenceModal.type({
+    focusedGroupIndex: 0,
+    focusedRowIndex: driftIndex,
+    groups,
+    keyBindings: DEFAULT_KEY_BINDINGS,
+    totalLogs: 2
+  });
+  const emptyModal = SchemaInferenceModal.type({
+    focusedGroupIndex: 0,
+    focusedRowIndex: 0,
+    groups: [],
+    keyBindings: DEFAULT_KEY_BINDINGS,
+    totalLogs: 0
+  });
+  const focusedRows = collectNodes(modal).filter((node) => node.props?.backgroundColor === 'cyan');
+
+  assert.equal(row.includes('...'), true);
+  assert.equal(row.length, 46);
+  assert.match(getNodeText(modal), /1 schema groups \| 2 JSON samples \| 2 drift fields/);
+  assert.match(getNodeText(modal), /group 1\/1 \| 2\/2 JSON/);
+  assert.equal(collectNodes(modal).some((node) => getNodeText(node).includes('types')), true);
+  assert.equal(focusedRows.some((node) => getNodeText(node).includes('!') && getNodeText(node).includes('$.id')), true);
+  assert.match(getNodeText(emptyModal), /No JSON request or response bodies in visible traffic/);
+});
+
 test('request diff candidate helper returns same method and endpoint shape from supplied logs', () => {
   const base = createDiffLog({ id: 'base', method: 'GET', path: '/api/users/123?include=roles' });
   const candidates = [
@@ -1598,6 +1789,50 @@ test('keyboard action helper supports colon command mode for careful actions', (
     { type: 'openHelp' }
   );
   assert.deepEqual(
+    getKeyboardAction('j', {}, { isSchemaInferenceOpen: true }),
+    { type: 'moveSchemaField', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('k', {}, { isSchemaInferenceOpen: true }),
+    { type: 'moveSchemaField', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction(']', {}, { isSchemaInferenceOpen: true, schemaInferencePageSize: 8 }),
+    { type: 'moveSchemaField', direction: 8 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('g', {}, { isSchemaInferenceOpen: true }),
+    { type: 'moveSchemaFieldTo', boundary: 'top' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('G', {}, { isSchemaInferenceOpen: true }),
+    { type: 'moveSchemaFieldTo', boundary: 'bottom' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('n', {}, { isSchemaInferenceOpen: true }),
+    { type: 'moveSchemaGroup', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('N', {}, { isSchemaInferenceOpen: true }),
+    { type: 'moveSchemaGroup', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('q', {}, { isSchemaInferenceOpen: true }),
+    { type: 'closeSchemaInference' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isSchemaInferenceOpen: true }),
+    { type: 'closeSchemaInference' }
+  );
+  assert.deepEqual(
+    getKeyboardAction(':', {}, { isSchemaInferenceOpen: true }),
+    { type: 'openCommandPrompt' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('h', {}, { isSchemaInferenceOpen: true }),
+    { type: 'openHelp' }
+  );
+  assert.deepEqual(
     getKeyboardAction('h', {}, { isDiffOpen: true }),
     { type: 'openHelp' }
   );
@@ -1730,6 +1965,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
     { isExportPromptOpen: true },
     { isListDisplayOpen: true },
     { isEndpointGroupsOpen: true },
+    { isSchemaInferenceOpen: true },
     { isRequestActivityOpen: true },
     { isDiffOpen: true },
     { isDiffOpen: true, isDiffValueOpen: true },
@@ -1762,6 +1998,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
     'send-next-page',
     'requests',
     'endpoints',
+    'schemas',
     'record',
     'stop-recording',
     'pause-capture',
@@ -1774,6 +2011,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(getCommandMatches('snp').map((command) => command.name), ['send-next-page']);
   assert.deepEqual(getCommandMatches('rq').map((command) => command.name), ['requests']);
   assert.deepEqual(getCommandMatches('ep').map((command) => command.name), ['endpoints']);
+  assert.deepEqual(getCommandMatches('sc').map((command) => command.name), ['schemas']);
   assert.deepEqual(getCommandMatches('anom').map((command) => command.name), ['anomalies']);
   assert.deepEqual(getCommandMatches('r').map((command) => command.name), ['resend', 'requests', 'record']);
   assert.deepEqual(resolveCommandInput('next-page').action, { type: 'openNextPage' });
@@ -1785,6 +2023,10 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(resolveCommandInput('endpoints').action, { type: 'openEndpointGroups' });
   assert.deepEqual(resolveCommandInput('endpoint-groups').action, { type: 'openEndpointGroups' });
   assert.deepEqual(resolveCommandInput('ep').action, { type: 'openEndpointGroups' });
+  assert.deepEqual(resolveCommandInput('schemas').action, { type: 'openSchemaInference' });
+  assert.deepEqual(resolveCommandInput('schema').action, { type: 'openSchemaInference' });
+  assert.deepEqual(resolveCommandInput('sc').action, { type: 'openSchemaInference' });
+  assert.deepEqual(resolveCommandInput('shapes').action, { type: 'openSchemaInference' });
   assert.deepEqual(resolveCommandInput('anomalies').action, { type: 'toggleAnomalies' });
   assert.deepEqual(resolveCommandInput('anomaly').action, { type: 'toggleAnomalies' });
   assert.deepEqual(resolveCommandInput('anom').action, { type: 'toggleAnomalies' });
@@ -1806,7 +2048,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
   );
   assert.deepEqual(
     getCommandSuggestionRows('').map((row) => row.primaryAlias),
-    ['q', 'rs', 'np', 'snp', 'rq', 'ep', 'rec']
+    ['q', 'rs', 'np', 'snp', 'rq', 'ep', 'sc']
   );
   assert.deepEqual(
     getCommandSuggestionRows('', 0).map((row) => row.isSelected),
@@ -1814,7 +2056,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
   );
   assert.deepEqual(
     getCommandSuggestionRows('', 8).map((row) => row.name),
-    ['next-page', 'send-next-page', 'requests', 'endpoints', 'record', 'stop-recording', 'pause-capture']
+    ['next-page', 'send-next-page', 'requests', 'endpoints', 'schemas', 'record', 'stop-recording']
   );
   assert.deepEqual(
     getCommandSuggestionRows('', 8).map((row) => row.isSelected),
@@ -1875,7 +2117,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.equal(getCommandMatches('snp', unavailableNextPageContext).length, 0);
   assert.deepEqual(
     getCommandSuggestionRows('', -1, unavailableNextPageContext).map((row) => row.name),
-    ['quit', 'resend', 'requests', 'endpoints', 'record', 'stop-recording', 'pause-capture']
+    ['quit', 'resend', 'requests', 'endpoints', 'schemas', 'record', 'stop-recording']
   );
   assert.deepEqual(resolveCommandInput('np', -1, unavailableNextPageContext), {
     ok: false,
@@ -2681,6 +2923,10 @@ test('footer text shows mode-aware essential keymaps', () => {
     'endpoint groups  j/k: move  [ / ]: page  g/G: top/bottom  esc/q: close  h: help'
   );
   assert.equal(
+    formatFooterText({ isSchemaInferenceOpen: true }),
+    'schemas  n/N: group  j/k: field  [ / ]: page  g/G: top/bottom  esc/q: close  h: help'
+  );
+  assert.equal(
     formatFooterText({ isDiffOpen: true }),
     'diff  n/N: change  [ / ]: page  g/G: top/bottom  v: layout  /: filter  enter: full row  esc/q: close  h: help'
   );
@@ -2885,6 +3131,14 @@ test('command help rows are generated from command definitions', () => {
     }
   );
   assert.deepEqual(
+    rows.find((row) => row.command === ':schemas'),
+    {
+      aliases: ':schema, :sc, :shapes',
+      command: ':schemas',
+      description: 'open schema inference'
+    }
+  );
+  assert.deepEqual(
     rows.find((row) => row.command === ':anomalies'),
     {
       aliases: ':anomaly, :anom',
@@ -2902,6 +3156,7 @@ test('contextual help sections focus the active surface and command availability
   const trafficSections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'traffic' });
   const diffSections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'diff' });
   const endpointSections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'endpointGroups' });
+  const schemaSections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'schemaInference' });
   const requestActivitySections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'requestActivity' });
 
   assert.deepEqual(
@@ -2932,6 +3187,14 @@ test('contextual help sections focus the active surface and command availability
   assert.deepEqual(
     endpointSections[0].rows.find((row) => row[1] === 'move endpoint'),
     ['j/k', 'move endpoint']
+  );
+  assert.deepEqual(
+    schemaSections.map((section) => section.title),
+    ['Schema Inference']
+  );
+  assert.deepEqual(
+    schemaSections[0].rows.find((row) => row[1] === 'change schema group'),
+    ['n/N', 'change schema group']
   );
   assert.deepEqual(
     requestActivitySections[0].rows.find((row) => row[1] === 'close'),

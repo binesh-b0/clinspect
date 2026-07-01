@@ -86,6 +86,16 @@ export const DEFAULT_KEY_BINDINGS = Object.freeze({
   'endpointGroups.top': Object.freeze(['g']),
   'endpointGroups.bottom': Object.freeze(['G']),
 
+  'schemaInference.close': Object.freeze(['escape', 'q', 'backspace']),
+  'schemaInference.moveDown': Object.freeze(['j', 'down']),
+  'schemaInference.moveUp': Object.freeze(['k', 'up']),
+  'schemaInference.pageDown': Object.freeze(['pagedown', ']']),
+  'schemaInference.pageUp': Object.freeze(['pageup', '[']),
+  'schemaInference.top': Object.freeze(['g']),
+  'schemaInference.bottom': Object.freeze(['G']),
+  'schemaInference.nextGroup': Object.freeze(['n']),
+  'schemaInference.previousGroup': Object.freeze(['N']),
+
   'resend.confirm': Object.freeze(['enter', 'y', 'Y']),
   'resend.edit': Object.freeze(['E', 'e']),
   'resend.cancel': Object.freeze(['escape', 'n', 'N', 'backspace']),
@@ -259,6 +269,17 @@ const ACTION_CONTEXT_GROUPS = [
     'endpointGroups.pageUp',
     'endpointGroups.top',
     'endpointGroups.bottom'
+  ],
+  [
+    'schemaInference.close',
+    'schemaInference.moveDown',
+    'schemaInference.moveUp',
+    'schemaInference.pageDown',
+    'schemaInference.pageUp',
+    'schemaInference.top',
+    'schemaInference.bottom',
+    'schemaInference.nextGroup',
+    'schemaInference.previousGroup'
   ],
   ['resend.confirm', 'resend.edit', 'resend.cancel'],
   ['composerConfirm.confirm', 'composerConfirm.cancel'],

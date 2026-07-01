@@ -113,6 +113,13 @@ import {
   getEndpointRoutePattern
 } from './endpoints.js';
 import {
+  SchemaInferenceModal,
+  createSchemaGroups,
+  formatSchemaRow,
+  inferJsonShape,
+  parseJsonPayloadForSchema
+} from './schema-inference.js';
+import {
   DIFF_FILTER_FOCUS_ORDER,
   DiffFilterBar,
   REQUEST_DIFF_LAYOUT_MODES,
@@ -249,6 +256,13 @@ export {
   getEndpointRoutePattern
 } from './endpoints.js';
 export {
+  SchemaInferenceModal,
+  createSchemaGroups,
+  formatSchemaRow,
+  inferJsonShape,
+  parseJsonPayloadForSchema
+} from './schema-inference.js';
+export {
   createRequestDiff,
   filterRequestDiffRows,
   clampRequestDiffValueScrollOffset,
@@ -361,6 +375,7 @@ function getActiveHelpContext({
   isDiffOpen = false,
   isDiffValueOpen = false,
   isEndpointGroupsOpen = false,
+  isSchemaInferenceOpen = false,
   isExportPromptOpen = false,
   isFilterOpen = false,
   isListDisplayOpen = false,
@@ -382,6 +397,10 @@ function getActiveHelpContext({
 
   if (isEndpointGroupsOpen) {
     return { surface: 'endpointGroups' };
+  }
+
+  if (isSchemaInferenceOpen) {
+    return { surface: 'schemaInference' };
   }
 
   if (isRequestActivityOpen) {
@@ -520,6 +539,9 @@ export function App({
   const [isRequestActivityOpen, setIsRequestActivityOpen] = useState(false);
   const [isEndpointGroupsOpen, setIsEndpointGroupsOpen] = useState(false);
   const [focusedEndpointGroupIndex, setFocusedEndpointGroupIndex] = useState(0);
+  const [isSchemaInferenceOpen, setIsSchemaInferenceOpen] = useState(false);
+  const [focusedSchemaGroupIndex, setFocusedSchemaGroupIndex] = useState(0);
+  const [focusedSchemaRowIndex, setFocusedSchemaRowIndex] = useState(0);
   const [diffBaseLogId, setDiffBaseLogId] = useState(null);
   const [isDiffOpen, setIsDiffOpen] = useState(false);
   const [focusedDiffIndex, setFocusedDiffIndex] = useState(0);
@@ -575,6 +597,7 @@ export function App({
   }), [hideFrameworkAssets, logs, matchCase, methodFilters, searchField, searchMode, searchQuery, showCookieValues, statusFilters, wordMatchMode]);
   const trafficAnomalyMap = useMemo(() => getTrafficAnomalyMap(filteredLogs), [filteredLogs]);
   const endpointGroups = useMemo(() => createEndpointGroups(filteredLogs), [filteredLogs]);
+  const schemaGroups = useMemo(() => createSchemaGroups(filteredLogs), [filteredLogs]);
 
   useEffect(() => {
     const handleUpdate = (updatedLogs) => setLogs(updatedLogs);
@@ -628,6 +651,16 @@ export function App({
   useEffect(() => {
     setFocusedEndpointGroupIndex((current) => Math.max(0, Math.min(endpointGroups.length - 1, current)));
   }, [endpointGroups]);
+
+  useEffect(() => {
+    setFocusedSchemaGroupIndex((current) => Math.max(0, Math.min(schemaGroups.length - 1, current)));
+  }, [schemaGroups]);
+
+  useEffect(() => {
+    const currentRows = schemaGroups[focusedSchemaGroupIndex]?.rows ?? [];
+
+    setFocusedSchemaRowIndex((current) => Math.max(0, Math.min(currentRows.length - 1, current)));
+  }, [focusedSchemaGroupIndex, schemaGroups]);
 
   useEffect(() => {
     setDetailScrollOffset(0);
@@ -724,6 +757,7 @@ export function App({
   });
   const diffVisibleCount = getRequestDiffVisibleCount(15 + diffBottomControlHeight);
   const endpointGroupPageSize = Math.max(6, renderHeight - 9);
+  const schemaInferencePageSize = Math.max(4, renderHeight - 14);
   const diffValueContentWidth = Math.max(34, getRequestDiffFrameWidth() - 4);
   const diffValueLines = useMemo(
     () => getRequestDiffValueLines(filteredRequestDiffRows[focusedDiffIndex], diffValueContentWidth),
@@ -996,6 +1030,7 @@ export function App({
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
     setIsEndpointGroupsOpen(false);
+    setIsSchemaInferenceOpen(false);
     setIsDiffOpen(false);
     setPendingExport(null);
     setPendingResend(null);
@@ -1010,6 +1045,23 @@ export function App({
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
+    setIsSchemaInferenceOpen(false);
+    setIsDiffOpen(false);
+    setPendingExport(null);
+    setPendingResend(null);
+  };
+
+  const openSchemaInference = () => {
+    setIsSchemaInferenceOpen(true);
+    setFocusedSchemaGroupIndex((current) => Math.max(0, Math.min(schemaGroups.length - 1, current)));
+    setFocusedSchemaRowIndex(0);
+    setIsFilterOpen(false);
+    setIsDetailSearchOpen(false);
+    setIsDetailModalOpen(false);
+    setIsHelpOpen(false);
+    setIsListDisplayOpen(false);
+    setIsRequestActivityOpen(false);
+    setIsEndpointGroupsOpen(false);
     setIsDiffOpen(false);
     setPendingExport(null);
     setPendingResend(null);
@@ -1025,6 +1077,35 @@ export function App({
   const moveEndpointGroupTo = (boundary) => {
     setFocusedEndpointGroupIndex(boundary === 'bottom'
       ? Math.max(0, endpointGroups.length - 1)
+      : 0);
+  };
+
+  const moveSchemaGroup = (direction) => {
+    setFocusedSchemaGroupIndex((current) => {
+      if (schemaGroups.length === 0) {
+        return 0;
+      }
+
+      const nextIndex = Math.max(0, Math.min(schemaGroups.length - 1, current + direction));
+      setFocusedSchemaRowIndex(0);
+      return nextIndex;
+    });
+  };
+
+  const moveSchemaField = (direction) => {
+    const rows = schemaGroups[focusedSchemaGroupIndex]?.rows ?? [];
+
+    setFocusedSchemaRowIndex((current) => Math.max(
+      0,
+      Math.min(rows.length - 1, current + direction)
+    ));
+  };
+
+  const moveSchemaFieldTo = (boundary) => {
+    const rows = schemaGroups[focusedSchemaGroupIndex]?.rows ?? [];
+
+    setFocusedSchemaRowIndex(boundary === 'bottom'
+      ? Math.max(0, rows.length - 1)
       : 0);
   };
 
@@ -1125,6 +1206,10 @@ export function App({
       case 'openEndpointGroups':
         closeCompletedCommand('');
         openEndpointGroups();
+        break;
+      case 'openSchemaInference':
+        closeCompletedCommand('');
+        openSchemaInference();
         break;
       case 'toggleAnomalies':
         closeCompletedCommand(toggleAnomalies());
@@ -1283,6 +1368,7 @@ export function App({
     setIsHelpOpen(false);
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
+    setIsSchemaInferenceOpen(false);
     setIsDiffOpen(false);
     setPendingExport(null);
     setPendingResend(null);
@@ -1406,6 +1492,7 @@ export function App({
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
+    setIsSchemaInferenceOpen(false);
     setPendingExport(null);
     setPendingResend(null);
   };
@@ -1543,6 +1630,7 @@ export function App({
 
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
+    setIsSchemaInferenceOpen(false);
     setIsDiffOpen(false);
     setPendingExport({
       action,
@@ -1555,6 +1643,7 @@ export function App({
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
     setIsEndpointGroupsOpen(false);
+    setIsSchemaInferenceOpen(false);
   };
 
   const formatSavedExportPath = (filePath) => {
@@ -1639,6 +1728,7 @@ export function App({
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
+    setIsSchemaInferenceOpen(false);
     setIsDiffOpen(false);
   };
 
@@ -1663,6 +1753,7 @@ export function App({
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
+    setIsSchemaInferenceOpen(false);
     setIsDiffOpen(false);
   };
 
@@ -1724,6 +1815,7 @@ export function App({
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
+    setIsSchemaInferenceOpen(false);
     setIsDiffOpen(false);
   };
 
@@ -1794,6 +1886,7 @@ export function App({
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
     setIsEndpointGroupsOpen(false);
+    setIsSchemaInferenceOpen(false);
     setIsDiffOpen(false);
 
     Promise.resolve()
@@ -1894,6 +1987,7 @@ export function App({
       setIsListDisplayOpen(false);
       setIsRequestActivityOpen(false);
       setIsEndpointGroupsOpen(false);
+    setIsSchemaInferenceOpen(false);
       setIsDiffOpen(false);
       return;
     }
@@ -1905,6 +1999,7 @@ export function App({
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
+    setIsSchemaInferenceOpen(false);
     sendResendPlan(plan);
   };
 
@@ -1935,6 +2030,7 @@ export function App({
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
+    setIsSchemaInferenceOpen(false);
     setIsDiffOpen(false);
   };
 
@@ -2116,6 +2212,13 @@ export function App({
     keyBindings,
     totalLogs: logs.length
   });
+  const schemaInferenceNode = h(SchemaInferenceModal, {
+    focusedGroupIndex: focusedSchemaGroupIndex,
+    focusedRowIndex: focusedSchemaRowIndex,
+    groups: schemaGroups,
+    keyBindings,
+    totalLogs: filteredLogs.length
+  });
   const requestDiffNode = h(RequestDiffModal, {
     diff: requestDiff,
     focusedRow: focusedDiffIndex,
@@ -2140,6 +2243,7 @@ export function App({
     isDiffOpen,
     isDiffValueOpen,
     isEndpointGroupsOpen,
+    isSchemaInferenceOpen,
     isExportPromptOpen: Boolean(pendingExport),
     isFilterOpen,
     isListDisplayOpen,
@@ -2166,6 +2270,7 @@ export function App({
     isLiveMode,
     isListDisplayOpen,
     isEndpointGroupsOpen,
+    isSchemaInferenceOpen,
     isRequestActivityOpen,
     isListFocused: isDetailModalOpen ? false : isListFocused,
     isRawModeSupported,
@@ -2188,6 +2293,7 @@ export function App({
         isHelpOpen,
         isListDisplayOpen,
         isEndpointGroupsOpen,
+        isSchemaInferenceOpen,
         isRequestActivityOpen,
         isDiffOpen,
         isDiffFilterOpen,
@@ -2211,6 +2317,7 @@ export function App({
         diffPageSize: diffVisibleCount,
         diffValuePageSize: diffVisibleCount,
         endpointGroupsPageSize: endpointGroupPageSize,
+        schemaInferencePageSize,
         detailPageSize: activeDetailVisibleCount,
         showTrafficPane: paneLayout.showTrafficPane,
         trafficPaneWidth,
@@ -2272,6 +2379,7 @@ export function App({
             isLibraryOpen: false
           }));
         },
+        onCloseSchemaInference: () => setIsSchemaInferenceOpen(false),
         onCloseComposerPreview: () => {
           setComposer((current) => ({
             ...current,
@@ -2368,6 +2476,9 @@ export function App({
         onMoveDiffValueScrollTo: moveDiffValueScrollTo,
         onMoveEndpointGroup: moveEndpointGroup,
         onMoveEndpointGroupTo: moveEndpointGroupTo,
+        onMoveSchemaField: moveSchemaField,
+        onMoveSchemaFieldTo: moveSchemaFieldTo,
+        onMoveSchemaGroup: moveSchemaGroup,
         onMoveSelection: (direction) => {
           setIsFollowingLatest(false);
           setSelectedLogId((currentId) => moveSelectedLogId(filteredLogs, currentId, direction));
@@ -2383,6 +2494,7 @@ export function App({
           setIsListDisplayOpen(false);
           setIsRequestActivityOpen(false);
           setIsEndpointGroupsOpen(false);
+          setIsSchemaInferenceOpen(false);
           setIsDiffOpen(false);
           setIsFollowingLatest(false);
         },
@@ -2394,6 +2506,7 @@ export function App({
             setIsListDisplayOpen(false);
             setIsRequestActivityOpen(false);
             setIsEndpointGroupsOpen(false);
+            setIsSchemaInferenceOpen(false);
             setIsDiffOpen(false);
           }
         },
@@ -2403,6 +2516,7 @@ export function App({
           setIsListDisplayOpen(false);
           setIsRequestActivityOpen(false);
           setIsEndpointGroupsOpen(false);
+          setIsSchemaInferenceOpen(false);
           setIsDiffOpen(false);
           setIsListFocused(false);
         },
@@ -2432,6 +2546,7 @@ export function App({
         onOpenDiffValue: openDiffValue,
         onOpenHelp: () => setIsHelpOpen(true),
         onOpenListDisplay: openListDisplay,
+        onOpenSchemaInference: openSchemaInference,
         onInspectRequestActivity: inspectRequestActivity,
         onMarkDiffBase: markDiffBase,
         onPreviewComposerSend: () => {
@@ -2481,6 +2596,7 @@ export function App({
             setIsListDisplayOpen(false);
             setIsRequestActivityOpen(false);
             setIsEndpointGroupsOpen(false);
+            setIsSchemaInferenceOpen(false);
             setIsDiffOpen(false);
           }
           if (selectedLog) {
@@ -2577,6 +2693,8 @@ export function App({
           ? requestDiffNode
         : (isEndpointGroupsOpen
           ? endpointGroupsNode
+        : (isSchemaInferenceOpen
+          ? schemaInferenceNode
         : (isRequestActivityOpen
           ? requestActivityNode
         : (composer.isOpen
@@ -2598,7 +2716,7 @@ export function App({
             scrollOffset: detailScrollOffset,
             visibleCount: detailModalVisibleCount
           })
-          : paneNodes)))))))
+          : paneNodes))))))))
     ),
     h(ToastNotification, { toast }),
     isDiffOpen && !commandState.isOpen && !isHelpOpen && !isListDisplayOpen
