@@ -250,6 +250,31 @@ function getMatchedComposerTab(input, key, bindings, actions) {
   return matchedAction?.[1] ?? null;
 }
 
+function isTextEntryContext({
+  diffFilterFocus = 'query',
+  filterFocus = 'query',
+  isCommandOpen = false,
+  isComposerBodyEditorOpen = false,
+  isComposerConfirmOpen = false,
+  isComposerLibraryOpen = false,
+  isComposerOpen = false,
+  isComposerTextFocused = false,
+  isDetailSearchOpen = false,
+  isDiffFilterOpen = false,
+  isFilterOpen = false
+} = {}) {
+  return Boolean(
+    isCommandOpen
+      || isDetailSearchOpen
+      || (isFilterOpen && filterFocus === 'query')
+      || (isDiffFilterOpen && diffFilterFocus === 'query')
+      || (isComposerOpen && (
+        isComposerBodyEditorOpen
+          || (isComposerTextFocused && !isComposerConfirmOpen && !isComposerLibraryOpen)
+      ))
+  );
+}
+
 export function resolveCommandInput(input = '', selectedIndex = -1, commandContext = null) {
   const value = normalizeCommandInput(input);
 
@@ -351,9 +376,32 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   const keyState = key ?? {};
   const keyBindings = resolveActiveKeyBindings(configuredKeyBindings);
   const matches = (actionId) => matchesKeyBinding(value, keyState, keyBindings, actionId);
+  const textEntryContext = isTextEntryContext({
+    diffFilterFocus,
+    filterFocus,
+    isCommandOpen,
+    isComposerBodyEditorOpen,
+    isComposerConfirmOpen,
+    isComposerLibraryOpen,
+    isComposerOpen,
+    isComposerTextFocused,
+    isDetailSearchOpen,
+    isDiffFilterOpen,
+    isFilterOpen
+  });
 
   if (matches('global.quit')) {
     return { type: 'quit' };
+  }
+
+  if (!textEntryContext) {
+    if (matches('global.openCommandPrompt')) {
+      return { type: 'openCommandPrompt' };
+    }
+
+    if (matches('main.openHelp')) {
+      return isHelpOpen ? { type: 'closeHelp' } : { type: 'openHelp' };
+    }
   }
 
   if (isCommandOpen) {
@@ -483,10 +531,6 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   }
 
   if (isDiffValueOpen) {
-    if (matches('main.openHelp')) {
-      return { type: 'openHelp' };
-    }
-
     if (matches('diffValue.close')) {
       return { type: 'closeDiffValue' };
     }
@@ -519,10 +563,6 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   }
 
   if (isDiffOpen) {
-    if (matches('main.openHelp')) {
-      return { type: 'openHelp' };
-    }
-
     if (matches('diff.openFilter')) {
       return { type: 'openDiffFilter' };
     }
@@ -836,10 +876,6 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
 
   if (isInkMouseInput(value)) {
     return { type: 'none' };
-  }
-
-  if (matches('global.openCommandPrompt') && !isFilterOpen) {
-    return { type: 'openCommandPrompt' };
   }
 
   if (matches('main.toggleFrameworkAssets') && !isFilterOpen) {

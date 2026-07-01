@@ -69,7 +69,30 @@ function getCommandSuggestionLabel(bindings) {
   return next === 'tab/down' && previous === 'up' ? 'tab/up/down' : `${next}/${previous}`;
 }
 
-export function getHelpSections(keyBindings = DEFAULT_KEY_BINDINGS) {
+function getActionTokens(bindings, actionId) {
+  return bindings?.[actionId] ?? DEFAULT_KEY_BINDINGS[actionId] ?? [];
+}
+
+function getActionLabelExcluding(bindings, actionId, excludedActionId, options = {}) {
+  const excludedTokens = new Set(getActionTokens(bindings, excludedActionId));
+  const tokens = getActionTokens(bindings, actionId).filter((token) => !excludedTokens.has(token));
+  const activeTokens = tokens.length > 0 ? tokens : getActionTokens(bindings, actionId);
+  const limitedTokens = Number.isInteger(options.limit) ? activeTokens.slice(0, options.limit) : activeTokens;
+
+  return limitedTokens.length > 0
+    ? limitedTokens.map(formatKeyToken).join(options.separator ?? '/')
+    : 'unbound';
+}
+
+function normalizeHelpSurface(context) {
+  if (typeof context === 'string') {
+    return context;
+  }
+
+  return context?.surface ?? '';
+}
+
+function getDefaultHelpSections(keyBindings = DEFAULT_KEY_BINDINGS) {
   return [
     {
       title: 'Move',
@@ -153,6 +176,258 @@ export function getHelpSections(keyBindings = DEFAULT_KEY_BINDINGS) {
   ];
 }
 
+function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context = null) {
+  const surface = normalizeHelpSurface(context);
+  const closeRequestActivity = getActionLabelExcluding(keyBindings, 'help.close', 'main.openHelp', { limit: 2 });
+
+  switch (surface) {
+    case 'traffic':
+      return [
+        {
+          title: 'Traffic',
+          rows: [
+            [getActionPairLabel(keyBindings, 'main.moveDown', 'main.moveUp'), 'move row'],
+            [getActionPairLabel(keyBindings, 'main.pageUp', 'main.pageDown', { separator: ' / ' }), 'move page'],
+            [getActionLabel(keyBindings, 'main.inspect'), 'inspect row'],
+            [getActionLabel(keyBindings, 'main.toggleFocus'), 'details pane'],
+            [getActionLabel(keyBindings, 'main.openSearch'), 'search traffic'],
+            [getActionPairLabel(keyBindings, 'main.methodFilter', 'main.statusFilter', { separator: ' / ' }), 'method / status filters'],
+            [getActionLabel(keyBindings, 'main.openListDisplay'), 'list display'],
+            [getActionLabel(keyBindings, 'main.toggleFrameworkAssets'), 'show / hide framework']
+          ]
+        },
+        {
+          title: 'Traffic Actions',
+          rows: [
+            [getActionLabel(keyBindings, 'main.markDiffBase', { limit: 1 }), 'mark A'],
+            [getActionLabel(keyBindings, 'main.clearDiffBase', { limit: 1 }), 'unmark A'],
+            [getActionLabel(keyBindings, 'main.openDiff', { limit: 1 }), 'compare with A'],
+            [getActionPairLabel(keyBindings, 'main.copy', 'main.download', { separator: ' / ' }), 'copy / download'],
+            [getActionLabel(keyBindings, 'main.followLatest'), 'follow latest']
+          ]
+        }
+      ];
+    case 'details':
+      return [
+        {
+          title: 'Details',
+          rows: [
+            [getActionPairLabel(keyBindings, 'main.moveDown', 'main.moveUp'), 'scroll'],
+            [getActionPairLabel(keyBindings, 'main.pageUp', 'main.pageDown', { separator: ' / ' }), 'page'],
+            [getActionLabel(keyBindings, 'main.toggleDetailTab', { limit: 1 }), 'request / response'],
+            [getActionLabel(keyBindings, 'main.openSearch', { limit: 1 }), 'find details'],
+            [getActionPairLabel(keyBindings, 'main.nextMatch', 'main.previousMatch'), 'next / previous match'],
+            [getActionLabel(keyBindings, 'main.inspect', { limit: 1 }), 'collapse row'],
+            [getActionLabel(keyBindings, 'main.openDetailModal', { limit: 1 }), 'details modal'],
+            [getActionLabel(keyBindings, 'main.toggleFocus', { limit: 1 }), 'traffic pane']
+          ]
+        }
+      ];
+    case 'detailModal':
+      return [
+        {
+          title: 'Detail Modal',
+          rows: [
+            [getActionPairLabel(keyBindings, 'detail.scrollDown', 'detail.scrollUp'), 'scroll'],
+            [getActionPairLabel(keyBindings, 'detail.pageUp', 'detail.pageDown', { separator: ' / ' }), 'page'],
+            [getActionLabel(keyBindings, 'detail.toggleTab', { limit: 1 }), 'request / response'],
+            [getActionLabel(keyBindings, 'detail.openSearch', { limit: 1 }), 'find details'],
+            [getActionPairLabel(keyBindings, 'detail.nextMatch', 'detail.previousMatch'), 'next / previous match'],
+            [getActionLabel(keyBindings, 'detail.toggleNode', { limit: 1 }), 'collapse row'],
+            [getActionLabel(keyBindings, 'detail.close', { limit: 2 }), 'close']
+          ]
+        }
+      ];
+    case 'filter':
+      return [
+        {
+          title: 'Filter',
+          rows: [
+            [getActionPairLabel(keyBindings, 'filter.nextField', 'filter.previousField'), 'move field'],
+            [getActionPairLabel(keyBindings, 'filter.previousOption', 'filter.nextOption'), 'change option'],
+            [getActionLabel(keyBindings, 'filter.toggleOption', { limit: 1 }), 'toggle option'],
+            [getActionLabel(keyBindings, 'filter.clear', { limit: 1 }), 'clear filters'],
+            [getActionLabel(keyBindings, 'filter.close', { limit: 2 }), 'finish']
+          ]
+        }
+      ];
+    case 'detailSearch':
+      return [
+        {
+          title: 'Detail Search',
+          rows: [
+            [getActionLabel(keyBindings, 'detailSearch.backspace', { limit: 1 }), 'delete text'],
+            [getActionLabel(keyBindings, 'detailSearch.close', { limit: 2 }), 'finish'],
+            [getActionPairLabel(keyBindings, 'main.nextMatch', 'main.previousMatch'), 'next / previous match']
+          ]
+        }
+      ];
+    case 'diff':
+      return [
+        {
+          title: 'Diff',
+          rows: [
+            [getActionPairLabel(keyBindings, 'diff.nextChange', 'diff.previousChange'), 'next / previous change'],
+            [getActionPairLabel(keyBindings, 'diff.pageUp', 'diff.pageDown', { separator: ' / ' }), 'page'],
+            [getActionPairLabel(keyBindings, 'diff.top', 'diff.bottom'), 'top / bottom'],
+            [getActionLabel(keyBindings, 'diff.toggleLayout', { limit: 1 }), 'toggle layout'],
+            [getActionLabel(keyBindings, 'diff.openFilter', { limit: 1 }), 'filter rows'],
+            [getActionLabel(keyBindings, 'diff.openFocusedRow', { limit: 1 }), 'open full row'],
+            [getActionLabel(keyBindings, 'diff.close', { limit: 2 }), 'close diff']
+          ]
+        }
+      ];
+    case 'diffValue':
+      return [
+        {
+          title: 'Diff Row',
+          rows: [
+            [getActionPairLabel(keyBindings, 'diffValue.scrollDown', 'diffValue.scrollUp'), 'scroll'],
+            [getActionPairLabel(keyBindings, 'diffValue.pageUp', 'diffValue.pageDown', { separator: ' / ' }), 'page'],
+            [getActionPairLabel(keyBindings, 'diffValue.top', 'diffValue.bottom'), 'top / bottom'],
+            [getActionLabel(keyBindings, 'diffValue.close', { limit: 2 }), 'close full row']
+          ]
+        }
+      ];
+    case 'diffFilter':
+      return [
+        {
+          title: 'Diff Filter',
+          rows: [
+            [getActionPairLabel(keyBindings, 'filter.nextField', 'filter.previousField'), 'move field'],
+            [getActionPairLabel(keyBindings, 'filter.previousOption', 'filter.nextOption'), 'change option'],
+            [getActionLabel(keyBindings, 'filter.toggleOption', { limit: 1 }), 'toggle option'],
+            [getActionLabel(keyBindings, 'filter.clear', { limit: 1 }), 'clear filter'],
+            [getActionLabel(keyBindings, 'filter.close', { limit: 2 }), 'finish']
+          ]
+        }
+      ];
+    case 'composer':
+      return [
+        {
+          title: 'Composer',
+          rows: [
+            [getComposerTabLabel(keyBindings), 'jump sections'],
+            [getActionPairLabel(keyBindings, 'composer.previousField', 'composer.nextField'), 'move fields'],
+            [getActionPairLabel(keyBindings, 'composer.addRow', 'composer.deleteRow'), 'add / delete row'],
+            [getActionLabel(keyBindings, 'composer.toggleField', { limit: 1 }), 'enable / disable row'],
+            [getActionLabel(keyBindings, 'composer.save', { limit: 1 }), 'save request'],
+            [getActionLabel(keyBindings, 'composer.openLibrary', { limit: 1 }), 'saved requests'],
+            [getPreviewSendLabel(keyBindings), 'preview / send'],
+            [getActionLabel(keyBindings, 'composer.close', { limit: 1 }), 'close composer']
+          ]
+        }
+      ];
+    case 'composerText':
+      return [
+        {
+          title: 'Composer Text',
+          rows: [
+            [getActionLabel(keyBindings, 'composer.backspace', { limit: 1 }), 'backspace'],
+            [getActionLabel(keyBindings, 'composer.delete', { limit: 1 }), 'delete'],
+            [getActionPairLabel(keyBindings, 'composer.cursorStart', 'composer.cursorEnd'), 'start / end'],
+            [getActionPairLabel(keyBindings, 'composer.previousOption', 'composer.nextOption'), 'move cursor'],
+            [getActionLabel(keyBindings, 'composer.nextField', { limit: 1 }), 'next field'],
+            [getPreviewSendLabel(keyBindings), 'preview / send'],
+            [getActionLabel(keyBindings, 'composer.close', { limit: 1 }), 'close composer']
+          ]
+        }
+      ];
+    case 'composerBody':
+      return [
+        {
+          title: 'Body Editor',
+          rows: [
+            [getActionLabel(keyBindings, 'composerBody.newline', { limit: 1 }), 'new line'],
+            [getActionPairLabel(keyBindings, 'composerBody.cursorLeft', 'composerBody.cursorRight'), 'move cursor'],
+            [getActionPairLabel(keyBindings, 'composerBody.cursorStart', 'composerBody.cursorEnd'), 'start / end'],
+            [getActionLabel(keyBindings, 'composerBody.backspace', { limit: 1 }), 'backspace'],
+            [getActionLabel(keyBindings, 'composerBody.delete', { limit: 1 }), 'delete'],
+            [getActionLabel(keyBindings, 'composerBody.close', { limit: 1 }), 'close editor']
+          ]
+        }
+      ];
+    case 'composerConfirm':
+      return [
+        {
+          title: 'Send Preview',
+          rows: [
+            [getActionLabel(keyBindings, 'composerConfirm.confirm', { limit: 2 }), 'send request'],
+            [getActionLabel(keyBindings, 'composerConfirm.cancel', { limit: 2 }), 'return to editing']
+          ]
+        }
+      ];
+    case 'composerLibrary':
+      return [
+        {
+          title: 'Saved Requests',
+          rows: [
+            [getComposerTabLabel(keyBindings), 'jump sections'],
+            [getActionPairLabel(keyBindings, 'composerLibrary.moveDown', 'composerLibrary.moveUp'), 'move request'],
+            [getActionLabel(keyBindings, 'composerLibrary.open', { limit: 1 }), 'load request'],
+            [getActionLabel(keyBindings, 'composerLibrary.close', { limit: 2 }), 'close library']
+          ]
+        }
+      ];
+    case 'listDisplay':
+      return [
+        {
+          title: 'List Display',
+          rows: [
+            [getActionPairLabel(keyBindings, 'listDisplay.moveDown', 'listDisplay.moveUp'), 'select row'],
+            [getActionPairLabel(keyBindings, 'listDisplay.previousOption', 'listDisplay.nextOption'), 'change value'],
+            [getActionLabel(keyBindings, 'listDisplay.toggleOption', { limit: 1 }), 'show / hide'],
+            [getActionLabel(keyBindings, 'listDisplay.reset', { limit: 1 }), 'reset'],
+            [getActionLabel(keyBindings, 'listDisplay.close', { limit: 2 }), 'close']
+          ]
+        }
+      ];
+    case 'requestActivity':
+      return [
+        {
+          title: 'Sent Requests',
+          rows: [
+            [getActionPairLabel(keyBindings, 'main.moveDown', 'main.moveUp'), 'move request'],
+            [getActionPairLabel(keyBindings, 'main.pageUp', 'main.pageDown', { separator: ' / ' }), 'move page'],
+            [getActionPairLabel(keyBindings, 'main.top', 'main.bottom'), 'first / last'],
+            [getActionLabel(keyBindings, 'main.inspect', { limit: 1 }), 'inspect log'],
+            [closeRequestActivity, 'close']
+          ]
+        }
+      ];
+    case 'export':
+      return [
+        {
+          title: 'Export',
+          rows: [
+            [getActionLabel(keyBindings, 'export.masked', { limit: 1 }), 'masked values'],
+            [getActionLabel(keyBindings, 'export.raw', { limit: 1 }), 'raw values'],
+            [getActionLabel(keyBindings, 'export.cancel', { limit: 1 }), 'cancel export']
+          ]
+        }
+      ];
+    case 'resendConfirm':
+      return [
+        {
+          title: 'Resend',
+          rows: [
+            [getActionLabel(keyBindings, 'resend.confirm', { limit: 2 }), 'send request'],
+            [getActionLabel(keyBindings, 'resend.edit', { limit: 1 }), 'edit request'],
+            [getActionLabel(keyBindings, 'resend.cancel', { limit: 2 }), 'cancel resend']
+          ]
+        }
+      ];
+    default:
+      return getDefaultHelpSections(keyBindings);
+  }
+}
+
+export function getHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context = null) {
+  return normalizeHelpSurface(context)
+    ? getContextualHelpSections(keyBindings, context)
+    : getDefaultHelpSections(keyBindings);
+}
+
 export const HELP_SECTIONS = getHelpSections();
 
 const HELP_KEY_WIDTH = 10;
@@ -193,15 +468,23 @@ function renderHelpSections(sections, width) {
   ].filter(Boolean));
 }
 
-export function getCommandHelpRows(commands = COMMAND_DEFINITIONS) {
-  return commands.map((command) => ({
-    aliases: (command.aliases ?? []).map((alias) => `:${alias}`).join(', '),
-    command: `:${command.name}`,
-    description: command.description
-  }));
+export function getCommandHelpRows(commands = COMMAND_DEFINITIONS, commandContext = null) {
+  const activeCommands = Array.isArray(commands) ? commands : COMMAND_DEFINITIONS;
+  const activeCommandContext = Array.isArray(commands) ? commandContext : commands;
+  const availableCommandNames = activeCommandContext
+    ? new Set(getCommandMatches('', activeCommandContext).map((command) => command.name))
+    : null;
+
+  return activeCommands
+    .filter((command) => !availableCommandNames || availableCommandNames.has(command.name))
+    .map((command) => ({
+      aliases: (command.aliases ?? []).map((alias) => `:${alias}`).join(', '),
+      command: `:${command.name}`,
+      description: command.description
+    }));
 }
 
-function renderCommandHelpRows(width) {
+function renderCommandHelpRows(width, commandContext = null) {
   const useColumns = width >= COMMAND_HELP_COMMAND_WIDTH + COMMAND_HELP_ALIAS_WIDTH + 18;
   const descriptionWidth = Math.max(
     8,
@@ -210,7 +493,7 @@ function renderCommandHelpRows(width) {
 
   return [
     h(Text, { key: 'commands-title', bold: true, color: 'cyan' }, 'Commands'),
-    ...getCommandHelpRows().map((row) => (
+    ...getCommandHelpRows(COMMAND_DEFINITIONS, commandContext).map((row) => (
       useColumns
         ? h(
           Box,
@@ -230,6 +513,8 @@ function renderCommandHelpRows(width) {
 }
 
 export const HelpModal = React.memo(function HelpModal({
+  commandContext = null,
+  helpContext = null,
   keyBindings = DEFAULT_KEY_BINDINGS
 }) {
   const columns = Number.isFinite(process.stdout.columns) && process.stdout.columns > 0
@@ -239,7 +524,7 @@ export const HelpModal = React.memo(function HelpModal({
   const useColumns = width >= 68;
   const contentWidth = Math.max(26, width - 6);
   const columnWidth = useColumns ? Math.floor((contentWidth - HELP_COLUMN_GAP_WIDTH) / 2) : contentWidth;
-  const helpSections = getHelpSections(keyBindings);
+  const helpSections = getHelpSections(keyBindings, helpContext);
   const [leftSections, rightSections] = getHelpColumns(helpSections);
 
   return h(
@@ -272,7 +557,7 @@ export const HelpModal = React.memo(function HelpModal({
         )
         : h(Box, { flexDirection: 'column' }, ...renderHelpSections(helpSections, contentWidth)),
       h(Text, {}, ''),
-      h(Box, { flexDirection: 'column', width: contentWidth }, ...renderCommandHelpRows(contentWidth)),
+      h(Box, { flexDirection: 'column', width: contentWidth }, ...renderCommandHelpRows(contentWidth, commandContext)),
       h(Text, { color: 'gray' }, `${getActionLabel(keyBindings, 'help.close')} close`)
     )
   );
@@ -450,6 +735,7 @@ export function formatFooterText({
   const compareDiffAction = hasDiffBase
     ? [formatFooterBinding(getActionLabel(keyBindings, 'main.openDiff', { limit: 1 }), 'diff')]
     : [];
+  const requestActivityCloseKeys = getActionLabelExcluding(keyBindings, 'help.close', 'main.openHelp', { limit: 2 });
 
   if (!isRawModeSupported) {
     return 'keyboard input unavailable in this shell | Ctrl-C or SIGTERM quit';
@@ -457,6 +743,10 @@ export function formatFooterText({
 
   if (isCommandOpen) {
     return '';
+  }
+
+  if (isHelpOpen) {
+    return `help | ${getActionLabel(keyBindings, 'help.close')} close`;
   }
 
   if (isExportPromptOpen) {
@@ -483,11 +773,7 @@ export function formatFooterText({
   }
 
   if (isRequestActivityOpen) {
-    return `sent requests  ${getActionPairLabel(keyBindings, 'main.moveDown', 'main.moveUp')} move  ${getActionLabel(keyBindings, 'main.inspect', { limit: 1 })} inspect log  ${getActionLabel(keyBindings, 'help.close', { limit: 2 })} close`;
-  }
-
-  if (isHelpOpen) {
-    return `help | ${getActionLabel(keyBindings, 'help.close')} close`;
+    return `sent requests  ${getActionPairLabel(keyBindings, 'main.moveDown', 'main.moveUp')} move  ${getActionLabel(keyBindings, 'main.inspect', { limit: 1 })} inspect log  ${requestActivityCloseKeys} close  ${getActionLabel(keyBindings, 'main.openHelp', { limit: 1 })} help`;
   }
 
   if (isComposerOpen) {

@@ -333,6 +333,87 @@ function createCommandContext({
   };
 }
 
+function getActiveHelpContext({
+  isComposerBodyEditorOpen = false,
+  isComposerConfirmOpen = false,
+  isComposerLibraryOpen = false,
+  isComposerOpen = false,
+  isComposerTextFocused = false,
+  isDetailModalOpen = false,
+  isDetailSearchOpen = false,
+  isDiffFilterOpen = false,
+  isDiffOpen = false,
+  isDiffValueOpen = false,
+  isExportPromptOpen = false,
+  isFilterOpen = false,
+  isListDisplayOpen = false,
+  isListFocused = true,
+  isRequestActivityOpen = false,
+  isResendConfirmOpen = false
+} = {}) {
+  if (isExportPromptOpen) {
+    return { surface: 'export' };
+  }
+
+  if (isResendConfirmOpen) {
+    return { surface: 'resendConfirm' };
+  }
+
+  if (isListDisplayOpen) {
+    return { surface: 'listDisplay' };
+  }
+
+  if (isRequestActivityOpen) {
+    return { surface: 'requestActivity' };
+  }
+
+  if (isDiffOpen) {
+    if (isDiffValueOpen) {
+      return { surface: 'diffValue' };
+    }
+
+    if (isDiffFilterOpen) {
+      return { surface: 'diffFilter' };
+    }
+
+    return { surface: 'diff' };
+  }
+
+  if (isComposerOpen) {
+    if (isComposerConfirmOpen) {
+      return { surface: 'composerConfirm' };
+    }
+
+    if (isComposerLibraryOpen) {
+      return { surface: 'composerLibrary' };
+    }
+
+    if (isComposerBodyEditorOpen) {
+      return { surface: 'composerBody' };
+    }
+
+    if (isComposerTextFocused) {
+      return { surface: 'composerText' };
+    }
+
+    return { surface: 'composer' };
+  }
+
+  if (isDetailSearchOpen) {
+    return { surface: 'detailSearch' };
+  }
+
+  if (isFilterOpen) {
+    return { surface: 'filter' };
+  }
+
+  if (isDetailModalOpen) {
+    return { surface: 'detailModal' };
+  }
+
+  return { surface: isListFocused ? 'traffic' : 'details' };
+}
+
 export function App({
   stateStore,
   context = {},
@@ -1940,6 +2021,25 @@ export function App({
     valueScrollOffset: diffValueScrollOffset,
     visibleCount: diffVisibleCount
   });
+  const isComposerTextFocused = getFocusedComposerDescriptor(composer)?.kind === 'text';
+  const helpContext = getActiveHelpContext({
+    isComposerBodyEditorOpen: composer.isBodyEditorOpen,
+    isComposerConfirmOpen: composer.isConfirmOpen,
+    isComposerLibraryOpen: composer.isLibraryOpen,
+    isComposerOpen: composer.isOpen,
+    isComposerTextFocused,
+    isDetailModalOpen,
+    isDetailSearchOpen,
+    isDiffFilterOpen,
+    isDiffOpen,
+    isDiffValueOpen,
+    isExportPromptOpen: Boolean(pendingExport),
+    isFilterOpen,
+    isListDisplayOpen,
+    isListFocused: isDetailModalOpen ? false : isListFocused,
+    isRequestActivityOpen,
+    isResendConfirmOpen: Boolean(pendingResend)
+  });
   const footerNode = h(Footer, {
     commandStatus: footerCommandStatus,
     exportStatus,
@@ -1947,7 +2047,7 @@ export function App({
     resendStatus,
     isComposerConfirmOpen: composer.isConfirmOpen,
     isComposerOpen: composer.isOpen,
-    isComposerTextFocused: getFocusedComposerDescriptor(composer)?.kind === 'text',
+    isComposerTextFocused,
     isCommandOpen: commandState.isOpen,
     isDiffOpen,
     isDetailModalOpen,
@@ -1997,7 +2097,7 @@ export function App({
         isComposerConfirmOpen: composer.isConfirmOpen,
         isComposerBodyEditorOpen: composer.isBodyEditorOpen,
         isComposerLibraryOpen: composer.isLibraryOpen,
-        isComposerTextFocused: getFocusedComposerDescriptor(composer)?.kind === 'text',
+        isComposerTextFocused,
         keyBindings,
         diffPageSize: diffVisibleCount,
         diffValuePageSize: diffVisibleCount,
@@ -2214,10 +2314,7 @@ export function App({
           setDiffFilterFocus('query');
         },
         onOpenDiffValue: openDiffValue,
-        onOpenHelp: () => {
-          setIsRequestActivityOpen(false);
-          setIsHelpOpen(true);
-        },
+        onOpenHelp: () => setIsHelpOpen(true),
         onOpenListDisplay: openListDisplay,
         onInspectRequestActivity: inspectRequestActivity,
         onMarkDiffBase: markDiffBase,
@@ -2339,6 +2436,8 @@ export function App({
         })
         : (isHelpOpen
         ? h(HelpModal, {
+          commandContext,
+          helpContext,
           keyBindings
         })
         : (isListDisplayOpen

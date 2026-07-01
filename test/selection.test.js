@@ -1227,6 +1227,14 @@ test('keyboard action helper supports colon command mode for careful actions', (
     { type: 'appendCommandText', value: 'w' }
   );
   assert.deepEqual(
+    getKeyboardAction(':', {}, { isCommandOpen: true }),
+    { type: 'appendCommandText', value: ':' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('h', {}, { isCommandOpen: true }),
+    { type: 'appendCommandText', value: 'h' }
+  );
+  assert.deepEqual(
     getKeyboardAction('', { backspace: true }, { isCommandOpen: true }),
     { type: 'backspaceCommandText' }
   );
@@ -1257,6 +1265,10 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(
     getKeyboardAction('h', {}, { isDiffOpen: true }),
     { type: 'openHelp' }
+  );
+  assert.deepEqual(
+    getKeyboardAction(':', {}, { isDiffOpen: true }),
+    { type: 'openCommandPrompt' }
   );
   assert.deepEqual(
     getKeyboardAction('q', {}, { isDiffOpen: true }),
@@ -1295,6 +1307,14 @@ test('keyboard action helper supports colon command mode for careful actions', (
     { type: 'appendDiffFilter', value: 'p' }
   );
   assert.deepEqual(
+    getKeyboardAction(':', {}, { isDiffFilterOpen: true }),
+    { type: 'appendDiffFilter', value: ':' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('h', {}, { isDiffFilterOpen: true }),
+    { type: 'appendDiffFilter', value: 'h' }
+  );
+  assert.deepEqual(
     getKeyboardAction('', { tab: true }, { isDiffFilterOpen: true }),
     { type: 'cycleDiffFilterFocus', direction: 1 }
   );
@@ -1323,6 +1343,14 @@ test('keyboard action helper supports colon command mode for careful actions', (
     { type: 'none' }
   );
   assert.deepEqual(
+    getKeyboardAction(':', {}, { diffFilterFocus: 'mode', isDiffFilterOpen: true }),
+    { type: 'openCommandPrompt' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('h', {}, { diffFilterFocus: 'mode', isDiffFilterOpen: true }),
+    { type: 'openHelp' }
+  );
+  assert.deepEqual(
     getKeyboardAction('', { backspace: true }, { isDiffFilterOpen: true }),
     { type: 'backspaceDiffFilter' }
   );
@@ -1341,6 +1369,33 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(
     getKeyboardAction('C', {}, { isDiffOpen: true }),
     { type: 'none' }
+  );
+
+  const globalShortcutSurfaces = [
+    { isExportPromptOpen: true },
+    { isListDisplayOpen: true },
+    { isRequestActivityOpen: true },
+    { isDiffOpen: true },
+    { isDiffOpen: true, isDiffValueOpen: true },
+    { isDiffFilterOpen: true, diffFilterFocus: 'mode' },
+    { isResendConfirmOpen: true },
+    { isComposerOpen: true, isComposerTextFocused: false },
+    { isComposerOpen: true, isComposerConfirmOpen: true },
+    { isComposerOpen: true, isComposerConfirmOpen: true, isComposerTextFocused: true },
+    { isComposerOpen: true, isComposerLibraryOpen: true },
+    { isComposerOpen: true, isComposerLibraryOpen: true, isComposerTextFocused: true },
+    { isDetailModalOpen: true },
+    { isFilterOpen: true, filterFocus: 'method' }
+  ];
+
+  for (const options of globalShortcutSurfaces) {
+    assert.deepEqual(getKeyboardAction(':', {}, options), { type: 'openCommandPrompt' });
+    assert.deepEqual(getKeyboardAction('h', {}, options), { type: 'openHelp' });
+  }
+
+  assert.deepEqual(
+    getKeyboardAction(':', {}, { isHelpOpen: true }),
+    { type: 'openCommandPrompt' }
   );
 
   assert.deepEqual(getCommandHintForKey('R'), 'use :resend');
@@ -1466,6 +1521,10 @@ test('keyboard action helper supports request composer input', () => {
   assert.deepEqual(
     getKeyboardAction(':', {}, { isComposerOpen: true, isComposerTextFocused: true }),
     { type: 'insertComposerText', value: ':' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('h', {}, { isComposerOpen: true, isComposerTextFocused: true }),
+    { type: 'insertComposerText', value: 'h' }
   );
   assert.deepEqual(
     getKeyboardAction('w', {}, { isComposerOpen: true, isComposerTextFocused: true }),
@@ -1595,6 +1654,14 @@ test('keyboard action helper supports request composer input', () => {
     getKeyboardAction('', { return: true }, { isComposerOpen: true, isComposerBodyEditorOpen: true }),
     { type: 'insertComposerText', value: '\n' }
   );
+  assert.deepEqual(
+    getKeyboardAction(':', {}, { isComposerOpen: true, isComposerBodyEditorOpen: true }),
+    { type: 'insertComposerText', value: ':' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('h', {}, { isComposerOpen: true, isComposerBodyEditorOpen: true }),
+    { type: 'insertComposerText', value: 'h' }
+  );
 });
 
 test('keyboard action helper supports resend confirmation input', () => {
@@ -1664,12 +1731,24 @@ test('keyboard action helper gates help modal and preserves filter query input',
     { type: 'appendSearch', value: ':' }
   );
   assert.deepEqual(
+    getKeyboardAction('h', {}, { isFilterOpen: true, filterFocus: 'query' }),
+    { type: 'appendSearch', value: 'h' }
+  );
+  assert.deepEqual(
     getKeyboardAction('q', {}, { isFilterOpen: true, filterFocus: 'query' }),
     { type: 'appendSearch', value: 'q' }
   );
   assert.deepEqual(
     getKeyboardAction('?', {}, { isFilterOpen: true, filterFocus: 'method' }),
     { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction(':', {}, { isFilterOpen: true, filterFocus: 'method' }),
+    { type: 'openCommandPrompt' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('h', {}, { isFilterOpen: true, filterFocus: 'method' }),
+    { type: 'openHelp' }
   );
   assert.deepEqual(
     getKeyboardAction('', { rightArrow: true }, { isFilterOpen: true, filterFocus: 'mode' }),
@@ -1802,6 +1881,10 @@ test('keyboard action helper supports detail modal and detail search input', () 
     { type: 'appendDetailSearch', value: ':' }
   );
   assert.deepEqual(
+    getKeyboardAction('h', {}, { isDetailSearchOpen: true }),
+    { type: 'appendDetailSearch', value: 'h' }
+  );
+  assert.deepEqual(
     getKeyboardAction('R', {}, { isDetailSearchOpen: true }),
     { type: 'appendDetailSearch', value: 'R' }
   );
@@ -1820,6 +1903,28 @@ test('keyboard action helper supports detail modal and detail search input', () 
 });
 
 test('keyboard action helper supports custom key bindings without stealing text input', () => {
+  const globalBindings = getTestKeyBindings({
+    'global.openCommandPrompt': [';'],
+    'main.openHelp': ['?']
+  });
+
+  assert.deepEqual(
+    getKeyboardAction(';', {}, { isListDisplayOpen: true, keyBindings: globalBindings }),
+    { type: 'openCommandPrompt' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('?', {}, { isResendConfirmOpen: true, keyBindings: globalBindings }),
+    { type: 'openHelp' }
+  );
+  assert.deepEqual(
+    getKeyboardAction(';', {}, { filterFocus: 'query', isFilterOpen: true, keyBindings: globalBindings }),
+    { type: 'appendSearch', value: ';' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('?', {}, { filterFocus: 'query', isFilterOpen: true, keyBindings: globalBindings }),
+    { type: 'appendSearch', value: '?' }
+  );
+
   const movementBindings = getTestKeyBindings({
     'main.moveDown': ['z'],
     'main.moveUp': ['i']
@@ -2096,7 +2201,7 @@ test('footer text shows mode-aware essential keymaps', () => {
   );
   assert.equal(
     formatFooterText({ isRequestActivityOpen: true }),
-    'sent requests  j/k move  enter inspect log  esc/h close'
+    'sent requests  j/k move  enter inspect log  esc/q close  h help'
   );
   assert.equal(
     formatFooterText({ isDiffOpen: true }),
@@ -2280,6 +2385,46 @@ test('command help rows are generated from command definitions', () => {
     rows.find((row) => row.command === ':clear-logs').aliases,
     ':clear, :clear-traffic'
   );
+});
+
+test('contextual help sections focus the active surface and command availability', () => {
+  const trafficSections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'traffic' });
+  const diffSections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'diff' });
+  const requestActivitySections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'requestActivity' });
+
+  assert.deepEqual(
+    trafficSections.map((section) => section.title),
+    ['Traffic', 'Traffic Actions']
+  );
+  assert.equal(trafficSections.find((section) => section.title === 'Compose'), undefined);
+  assert.deepEqual(
+    trafficSections[0].rows.find((row) => row[1] === 'search traffic'),
+    ['/', 'search traffic']
+  );
+  assert.deepEqual(
+    diffSections.map((section) => section.title),
+    ['Diff']
+  );
+  assert.deepEqual(
+    diffSections[0].rows.find((row) => row[1] === 'filter rows'),
+    ['/', 'filter rows']
+  );
+  assert.deepEqual(
+    requestActivitySections[0].rows.find((row) => row[1] === 'close'),
+    ['esc/q', 'close']
+  );
+
+  const unavailableNextPageContext = {
+    availability: {
+      'next-page': { available: false, reason: 'no next page detected' },
+      'send-next-page': { available: false, reason: 'no next page detected' }
+    }
+  };
+  const commandRows = getCommandHelpRows(unavailableNextPageContext);
+
+  assert.equal(commandRows.find((row) => row.command === ':next-page'), undefined);
+  assert.equal(commandRows.find((row) => row.command === ':send-next-page'), undefined);
+  assert.equal(commandRows.find((row) => row.command === ':clear-logs').aliases, ':clear, :clear-traffic');
 });
 
 test('command modal renders command suggestions without missing constants', () => {
