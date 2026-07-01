@@ -808,7 +808,7 @@ export function App({
     setCommandState({
       input: '',
       isOpen: true,
-      selectedIndex: -1,
+      selectedIndex: 0,
       status: ''
     });
   };

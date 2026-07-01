@@ -84,6 +84,21 @@ test('key binding normalization warns for unknown and invalid entries', () => {
   assert.match(normalized.warnings.join('\n'), /unknown key binding action ignored: unknown\.action/);
 });
 
+test('key binding normalization accepts control punctuation tokens', () => {
+  const normalized = normalizeKeyBindings({
+    keyBindings: {
+      'global.openCommandPrompt': ['ctrl-:'],
+      'global.quit': ['ctrl-q'],
+      'main.openHelp': ['ctrl-/']
+    }
+  });
+
+  assert.deepEqual(normalized.bindings['global.openCommandPrompt'], ['ctrl-:']);
+  assert.deepEqual(normalized.bindings['global.quit'], ['ctrl-q']);
+  assert.deepEqual(normalized.bindings['main.openHelp'], ['ctrl-/']);
+  assert.deepEqual(normalized.warnings, []);
+});
+
 test('key binding normalization drops duplicate bindings in the same active context', () => {
   const normalized = normalizeKeyBindings({
     keyBindings: {

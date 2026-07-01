@@ -33,11 +33,11 @@ const NAMED_KEY_ALIASES = new Map([
   ['page down', 'pagedown']
 ]);
 
-const CONTROL_KEY_PATTERN = /^ctrl[-+][a-z]$/i;
+const CONTROL_KEY_PREFIXES = ['ctrl-', 'ctrl+'];
 
 export const DEFAULT_KEY_BINDINGS = Object.freeze({
-  'global.quit': Object.freeze(['ctrl-c']),
-  'global.openCommandPrompt': Object.freeze([':']),
+  'global.quit': Object.freeze(['ctrl-c', 'ctrl-q']),
+  'global.openCommandPrompt': Object.freeze([':', 'ctrl-:']),
 
   'command.close': Object.freeze(['escape']),
   'command.submit': Object.freeze(['enter']),
@@ -49,7 +49,7 @@ export const DEFAULT_KEY_BINDINGS = Object.freeze({
   'export.masked': Object.freeze(['m', 'M']),
   'export.raw': Object.freeze(['r', 'R']),
 
-  'help.close': Object.freeze(['escape', 'h', 'q']),
+  'help.close': Object.freeze(['escape', 'h', 'q', 'ctrl-/']),
 
   'diff.close': Object.freeze(['escape', 'q']),
   'diff.nextChange': Object.freeze(['n', 'down', 'j']),
@@ -166,7 +166,7 @@ export const DEFAULT_KEY_BINDINGS = Object.freeze({
   'filter.backspace': Object.freeze(['backspace']),
   'filter.delete': Object.freeze(['delete']),
 
-  'main.openHelp': Object.freeze(['h']),
+  'main.openHelp': Object.freeze(['h', 'ctrl-/']),
   'main.openListDisplay': Object.freeze(['L']),
   'main.cyclePathDisplay': Object.freeze(['t']),
   'main.cycleDensity': Object.freeze(['v']),
@@ -412,6 +412,26 @@ function cloneDefaultBindings() {
   return Object.fromEntries(Object.entries(DEFAULT_KEY_BINDINGS).map(([actionId, tokens]) => [actionId, [...tokens]]));
 }
 
+function normalizeControlKeyToken(token) {
+  const lowerToken = token.toLowerCase();
+  const prefix = CONTROL_KEY_PREFIXES.find((candidate) => lowerToken.startsWith(candidate));
+
+  if (!prefix) {
+    return null;
+  }
+
+  const rawControlKey = token.slice(prefix.length);
+  const controlKey = rawControlKey.length === 1
+    ? normalizeKeyToken(rawControlKey)
+    : NAMED_KEY_ALIASES.get(rawControlKey.toLowerCase());
+
+  if (!controlKey || controlKey.length !== 1) {
+    return null;
+  }
+
+  return `ctrl-${/^[A-Z]$/.test(controlKey) ? controlKey.toLowerCase() : controlKey}`;
+}
+
 export function normalizeKeyToken(token) {
   if (token === ' ') {
     return 'space';
@@ -429,8 +449,9 @@ export function normalizeKeyToken(token) {
   }
 
   const lowerToken = rawToken.toLowerCase();
-  if (CONTROL_KEY_PATTERN.test(lowerToken)) {
-    return lowerToken.replace('+', '-');
+  const controlToken = normalizeControlKeyToken(rawToken);
+  if (controlToken) {
+    return controlToken;
   }
 
   return NAMED_KEY_ALIASES.get(lowerToken) ?? null;
@@ -535,10 +556,69 @@ export function getInputKeyTokens(input = '', key = {}) {
     }
   };
 
+  if (typeof input === 'string') {
+    if (input === '\u001B[A') {
+      push('up');
+    }
+    if (input === '\u001BOA') {
+      push('up');
+    }
+    if (input === '\u001B[B') {
+      push('down');
+    }
+    if (input === '\u001BOB') {
+      push('down');
+    }
+    if (input === '\u001B[C') {
+      push('right');
+    }
+    if (input === '\u001BOC') {
+      push('right');
+    }
+    if (input === '\u001B[D') {
+      push('left');
+    }
+    if (input === '\u001BOD') {
+      push('left');
+    }
+    if (input === '\u001B[H') {
+      push('home');
+    }
+    if (input === '\u001BOH') {
+      push('home');
+    }
+    if (input === '\u001B[F') {
+      push('end');
+    }
+    if (input === '\u001BOF') {
+      push('end');
+    }
+    if (input === '\u001B[5~') {
+      push('pageup');
+    }
+    if (input === '\u001B[6~') {
+      push('pagedown');
+    }
+  }
+
+  if (typeof input === 'string' && input.length === 1) {
+    const code = input.charCodeAt(0);
+
+    if (code >= 1 && code <= 26) {
+      push(`ctrl-${String.fromCharCode(code + 96)}`);
+    }
+    if (code === 0x1f) {
+      push('ctrl-/');
+    }
+    if (code === 0x7f) {
+      push('ctrl-?');
+    }
+  }
+
   if (key.ctrl && typeof input === 'string' && input.length === 1) {
-    const lowerInput = input.toLowerCase();
-    if (/^[a-z]$/.test(lowerInput)) {
-      push(`ctrl-${lowerInput}`);
+    const normalizedToken = normalizeKeyToken(input);
+    if (normalizedToken?.length === 1) {
+      push(`ctrl-${/^[A-Z]$/.test(normalizedToken) ? normalizedToken.toLowerCase() : normalizedToken}`);
     }
   }
 

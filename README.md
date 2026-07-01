@@ -202,8 +202,9 @@ Main UI:
 - `D` downloads the focused traffic item or detail to `./.clinspect/exports/`.
 - `m`/`r` chooses masked or raw values after starting an export.
 - `m` opens method filters; `s` opens status filters; `x` clears filters.
-- `:` opens command mode for careful actions: `:resend`, `:next-page`, `:send-next-page`, `:requests`, `:record`, `:stop`, `:pause`, `:clear`, `:quit`, and `:help`.
-- `h` opens help.
+- `:` opens command mode for careful actions: `:resend`, `:next-page`, `:send-next-page`, `:requests`, `:record`, `:stop`, `:pause`, `:clear`, `:quit`, and `:help`. `Ctrl-:` is also accepted when the terminal reports it distinctly.
+- `h` or `Ctrl-/` opens help.
+- `Ctrl-C` or `Ctrl-Q` quits.
 
 Composer:
 
@@ -238,7 +239,7 @@ Example:
 
 The file is project-local only. Missing config preserves the built-in bindings. Partial config merges over defaults. Invalid JSON, unknown action IDs, invalid tokens, or duplicate bindings in the same active context are non-fatal; clinspect falls back for invalid entries and shows a warning in the UI.
 
-Use one-character printable tokens such as `j`, `K`, `/`, `[`, and `]`, or named tokens such as `ctrl-c`, `escape`, `enter`, `tab`, `shift-tab`, `backspace`, `delete`, `home`, `end`, `up`, `down`, `left`, `right`, `pageup`, and `pagedown`.
+Use one-character printable tokens such as `j`, `K`, `/`, `[`, and `]`, control tokens such as `ctrl-c`, `ctrl-q`, `ctrl-/`, and `ctrl-:`, or named tokens such as `escape`, `enter`, `tab`, `shift-tab`, `backspace`, `delete`, `home`, `end`, `up`, `down`, `left`, `right`, `pageup`, and `pagedown`.
 
 ## Project Layout
 

@@ -8,6 +8,7 @@ import { getPageStep } from './detail.js';
 import { getMouseWheelTarget } from './traffic.js';
 import {
   DEFAULT_KEY_BINDINGS,
+  getInputKeyTokens,
   matchesKeyBinding,
   normalizeKeyBindings
 } from './key-bindings.js';
@@ -114,6 +115,8 @@ const COMPOSER_LIBRARY_TAB_ACTIONS = [
   ['composerLibrary.selectTab.save', 'save']
 ];
 
+const TEXT_ENTRY_CONTROL_BLOCKLIST = new Set(['ctrl-?', 'ctrl-h']);
+
 function isBackspaceInput(value, keyState = {}) {
   return Boolean(keyState.backspace || keyState.delete || value === '\u007F' || value === '\b');
 }
@@ -190,15 +193,20 @@ function getCompactCommandAlias(command) {
 export function getCommandSuggestionRows(input = '', selectedIndex = -1, rowCount = COMMAND_MODAL_ROW_COUNT, commandContext = null) {
   const safeRowCount = typeof rowCount === 'number' ? rowCount : COMMAND_MODAL_ROW_COUNT;
   const safeCommandContext = typeof rowCount === 'number' ? commandContext : rowCount;
-  const matches = getCommandMatches(input, safeCommandContext).slice(0, safeRowCount);
+  const matches = getCommandMatches(input, safeCommandContext);
   const safeSelectedIndex = selectedIndex >= 0 && matches.length > 0
     ? selectedIndex % matches.length
     : -1;
-  const rows = matches.map((command, index) => ({
+  const maxStartIndex = Math.max(0, matches.length - safeRowCount);
+  const visibleStartIndex = safeSelectedIndex >= 0
+    ? Math.min(Math.max(0, safeSelectedIndex - safeRowCount + 1), maxStartIndex)
+    : 0;
+  const visibleMatches = matches.slice(visibleStartIndex, visibleStartIndex + safeRowCount);
+  const rows = visibleMatches.map((command, index) => ({
     aliases: command.aliases?.length ? command.aliases.join(', ') : '',
     command,
     description: command.description,
-    isSelected: index === safeSelectedIndex,
+    isSelected: visibleStartIndex + index === safeSelectedIndex,
     name: command.name,
     primaryAlias: getCompactCommandAlias(command)
   }));
@@ -279,6 +287,19 @@ export function resolveCommandInput(input = '', selectedIndex = -1, commandConte
   const value = normalizeCommandInput(input);
 
   if (!value) {
+    const matches = getCommandMatches(value, commandContext);
+
+    if (selectedIndex >= 0 && matches.length > 0) {
+      const safeIndex = selectedIndex % matches.length;
+      const command = matches[safeIndex];
+
+      return {
+        ok: true,
+        action: cloneCommandAction(command),
+        command
+      };
+    }
+
     return {
       ok: false,
       error: 'command required'
@@ -376,6 +397,16 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
   const keyState = key ?? {};
   const keyBindings = resolveActiveKeyBindings(configuredKeyBindings);
   const matches = (actionId) => matchesKeyBinding(value, keyState, keyBindings, actionId);
+  const pressedTokens = getInputKeyTokens(value, keyState);
+  const matchesControlBinding = (actionId) => {
+    const activeBindings = keyBindings?.[actionId] ?? DEFAULT_KEY_BINDINGS[actionId] ?? [];
+
+    return pressedTokens.some((token) => (
+      token.startsWith('ctrl-')
+        && !TEXT_ENTRY_CONTROL_BLOCKLIST.has(token)
+        && activeBindings.includes(token)
+    ));
+  };
   const textEntryContext = isTextEntryContext({
     diffFilterFocus,
     filterFocus,
@@ -389,16 +420,19 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     isDiffFilterOpen,
     isFilterOpen
   });
+  const textEntryControlShortcutsEnabled = textEntryContext && !isCommandOpen;
 
   if (matches('global.quit')) {
     return { type: 'quit' };
   }
 
-  if (!textEntryContext) {
+  if (!textEntryContext || (textEntryControlShortcutsEnabled && matchesControlBinding('global.openCommandPrompt'))) {
     if (matches('global.openCommandPrompt')) {
       return { type: 'openCommandPrompt' };
     }
+  }
 
+  if (!textEntryContext || (textEntryControlShortcutsEnabled && matchesControlBinding('main.openHelp'))) {
     if (matches('main.openHelp')) {
       return isHelpOpen ? { type: 'closeHelp' } : { type: 'openHelp' };
     }

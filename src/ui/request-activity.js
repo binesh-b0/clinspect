@@ -7,6 +7,7 @@ import {
 } from './shared.js';
 import {
   DEFAULT_KEY_BINDINGS,
+  formatKeyToken,
   getBindingLabel,
   getBindingPairLabel
 } from './key-bindings.js';
@@ -142,6 +143,18 @@ function rowColor(activity = {}, selected = false) {
   return 'green';
 }
 
+function getBindingTokens(bindings, actionId) {
+  return bindings?.[actionId] ?? DEFAULT_KEY_BINDINGS[actionId] ?? [];
+}
+
+function getCloseLabel(keyBindings) {
+  const helpTokens = new Set(getBindingTokens(keyBindings, 'main.openHelp'));
+  const closeTokens = getBindingTokens(keyBindings, 'help.close').filter((token) => !helpTokens.has(token));
+  const displayedTokens = closeTokens.length > 0 ? closeTokens : getBindingTokens(keyBindings, 'help.close');
+
+  return displayedTokens.slice(0, 2).map(formatKeyToken).join('/');
+}
+
 export const RequestActivityPage = React.memo(function RequestActivityPage({
   activities = [],
   selectedId = null,
@@ -190,7 +203,7 @@ export const RequestActivityPage = React.memo(function RequestActivityPage({
         );
       }),
     h(Text, {}, ''),
-    h(Text, { color: 'gray', wrap: 'truncate' }, `${getBindingPairLabel(keyBindings, 'main.moveDown', 'main.moveUp')} move | ${getBindingLabel(keyBindings, 'main.inspect', { limit: 1 })} inspect log | ${getBindingLabel(keyBindings, 'help.close', { limit: 2 })} close`)
+    h(Text, { color: 'gray', wrap: 'truncate' }, `${getBindingPairLabel(keyBindings, 'main.moveDown', 'main.moveUp')} move | ${getBindingLabel(keyBindings, 'main.inspect', { limit: 1 })} inspect log | ${getCloseLabel(keyBindings)} close | ${getBindingLabel(keyBindings, 'main.openHelp', { limit: 1 })} help`)
   );
 });
 

@@ -78,6 +78,7 @@ import {
   finishRequestActivity,
   formatRequestActivityRow,
   formatRequestActivityToast,
+  RequestActivityPage,
   resolveCommandInput,
   resolveSelectedLogId,
   selectComposerTab,
@@ -1187,6 +1188,26 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
 test('keyboard action helper supports colon command mode for careful actions', () => {
   assert.deepEqual(getKeyboardAction(':'), { type: 'openCommandPrompt' });
   assert.deepEqual(
+    getKeyboardAction(':', { ctrl: true }),
+    { type: 'openCommandPrompt' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('q', { ctrl: true }),
+    { type: 'quit' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('\u0011'),
+    { type: 'quit' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('/', { ctrl: true }),
+    { type: 'openHelp' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('\u001F'),
+    { type: 'openHelp' }
+  );
+  assert.deepEqual(
     getKeyboardAction(':', {}, { isDetailModalOpen: true }),
     { type: 'openCommandPrompt' }
   );
@@ -1235,6 +1256,10 @@ test('keyboard action helper supports colon command mode for careful actions', (
     { type: 'appendCommandText', value: 'h' }
   );
   assert.deepEqual(
+    getKeyboardAction('/', { ctrl: true }, { isCommandOpen: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
     getKeyboardAction('', { backspace: true }, { isCommandOpen: true }),
     { type: 'backspaceCommandText' }
   );
@@ -1243,7 +1268,23 @@ test('keyboard action helper supports colon command mode for careful actions', (
     { type: 'cycleCommandSuggestion', direction: 1 }
   );
   assert.deepEqual(
+    getKeyboardAction('', { downArrow: true }, { isCommandOpen: true }),
+    { type: 'cycleCommandSuggestion', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('\u001B[B', {}, { isCommandOpen: true }),
+    { type: 'cycleCommandSuggestion', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('\u001BOB', {}, { isCommandOpen: true }),
+    { type: 'cycleCommandSuggestion', direction: 1 }
+  );
+  assert.deepEqual(
     getKeyboardAction('', { upArrow: true }, { isCommandOpen: true }),
+    { type: 'cycleCommandSuggestion', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('\u001B[A', {}, { isCommandOpen: true }),
     { type: 'cycleCommandSuggestion', direction: -1 }
   );
   assert.deepEqual(
@@ -1311,8 +1352,16 @@ test('keyboard action helper supports colon command mode for careful actions', (
     { type: 'appendDiffFilter', value: ':' }
   );
   assert.deepEqual(
+    getKeyboardAction(':', { ctrl: true }, { isDiffFilterOpen: true }),
+    { type: 'openCommandPrompt' }
+  );
+  assert.deepEqual(
     getKeyboardAction('h', {}, { isDiffFilterOpen: true }),
     { type: 'appendDiffFilter', value: 'h' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('/', { ctrl: true }, { isDiffFilterOpen: true }),
+    { type: 'openHelp' }
   );
   assert.deepEqual(
     getKeyboardAction('', { tab: true }, { isDiffFilterOpen: true }),
@@ -1442,11 +1491,32 @@ test('keyboard action helper supports colon command mode for careful actions', (
     getCommandSuggestionRows('').map((row) => row.primaryAlias),
     ['q', 'rs', 'np', 'snp', 'rq', 'rec', 'stop']
   );
+  assert.deepEqual(
+    getCommandSuggestionRows('', 0).map((row) => row.isSelected),
+    [true, false, false, false, false, false, false]
+  );
+  assert.deepEqual(
+    getCommandSuggestionRows('', 8).map((row) => row.name),
+    ['next-page', 'send-next-page', 'requests', 'record', 'stop-recording', 'pause-capture', 'clear-logs']
+  );
+  assert.deepEqual(
+    getCommandSuggestionRows('', 8).map((row) => row.isSelected),
+    [false, false, false, false, false, false, true]
+  );
   assert.equal(
     formatCommandSelectionStatus(getCommandSuggestionRows('r', 2)[2]),
     'selected :record (rec)'
   );
   assert.equal(formatCommandSelectionStatus(getCommandSuggestionRows('wat')[0]), '');
+  assert.deepEqual(resolveCommandInput(''), {
+    ok: false,
+    error: 'command required'
+  });
+  assert.deepEqual(resolveCommandInput('', 0), {
+    ok: true,
+    action: { type: 'quit' },
+    command: COMMAND_DEFINITIONS[0]
+  });
   assert.deepEqual(resolveCommandInput('q'), {
     ok: true,
     action: { type: 'quit' },
@@ -1735,6 +1805,14 @@ test('keyboard action helper gates help modal and preserves filter query input',
     { type: 'appendSearch', value: 'h' }
   );
   assert.deepEqual(
+    getKeyboardAction(':', { ctrl: true }, { isFilterOpen: true, filterFocus: 'query' }),
+    { type: 'openCommandPrompt' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('\u001F', {}, { isFilterOpen: true, filterFocus: 'query' }),
+    { type: 'openHelp' }
+  );
+  assert.deepEqual(
     getKeyboardAction('q', {}, { isFilterOpen: true, filterFocus: 'query' }),
     { type: 'appendSearch', value: 'q' }
   );
@@ -1883,6 +1961,10 @@ test('keyboard action helper supports detail modal and detail search input', () 
   assert.deepEqual(
     getKeyboardAction('h', {}, { isDetailSearchOpen: true }),
     { type: 'appendDetailSearch', value: 'h' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('/', { ctrl: true }, { isDetailSearchOpen: true }),
+    { type: 'openHelp' }
   );
   assert.deepEqual(
     getKeyboardAction('R', {}, { isDetailSearchOpen: true }),
@@ -2227,7 +2309,7 @@ test('footer text shows mode-aware essential keymaps', () => {
     formatFooterText({ isCommandOpen: true }),
     ''
   );
-  assert.equal(formatFooterText({ isHelpOpen: true }), 'help | esc/h/q close');
+  assert.equal(formatFooterText({ isHelpOpen: true }), 'help | esc/h/q/Ctrl-/ close');
 });
 
 test('footer and help labels reflect custom key bindings', () => {
@@ -2340,6 +2422,14 @@ test('request activity helpers track sent request progress', () => {
   assert.equal(failure.state, 'error');
   assert.equal(failure.error, 'network down');
   assert.equal(formatRequestActivityToast(failure), 'send failed GET /api/items?page=3: network down');
+
+  const page = RequestActivityPage.type({
+    activities: [],
+    keyBindings: DEFAULT_KEY_BINDINGS,
+    selectedId: null
+  });
+
+  assert.match(getNodeText(page), /esc\/q close \| h help/);
 });
 
 test('command help rows are generated from command definitions', () => {
@@ -2453,7 +2543,7 @@ test('help sections keep colon commands in the dedicated command block', () => {
   assert.deepEqual(sectionCommandRows, []);
   assert.equal(composeSection.rows.find(([keys]) => keys === ':resend'), undefined);
   assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'f'), ['f', 'follow latest']);
-  assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'h'), ['h', 'help']);
+  assert.deepEqual(captureSection.rows.find(([keys]) => keys === 'h/Ctrl-/'), ['h/Ctrl-/', 'help']);
 });
 
 test('help sections describe copy and download exports', () => {
