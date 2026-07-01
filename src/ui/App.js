@@ -431,6 +431,10 @@ function getActiveHelpContext({
   return { surface: isListFocused ? 'traffic' : 'details' };
 }
 
+export function shouldOpenDetailModalForInspect({ paneLayout = {}, selectedLog = null } = {}) {
+  return Boolean(selectedLog) && paneLayout.showDetailPane === false;
+}
+
 export function App({
   stateStore,
   context = {},
@@ -2442,6 +2446,15 @@ export function App({
           setInspectedLogId(selectedLog?.id ?? null);
           setDetailScrollOffset(0);
           setFocusedDetailRow(0);
+          if (shouldOpenDetailModalForInspect({ paneLayout, selectedLog })) {
+            setIsDetailModalOpen(true);
+            setIsListFocused(true);
+            setIsFilterOpen(false);
+            setIsListDisplayOpen(false);
+            setIsRequestActivityOpen(false);
+            setIsEndpointGroupsOpen(false);
+            setIsDiffOpen(false);
+          }
           if (selectedLog) {
             const hydratedLog = hydrateLog(selectedLog);
 

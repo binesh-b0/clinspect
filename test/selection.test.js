@@ -86,6 +86,7 @@ import {
   resolveCommandInput,
   resolveSelectedLogId,
   selectComposerTab,
+  shouldOpenDetailModalForInspect,
   summarizeFrameworkAssets,
   toggleTrafficColumn,
   toggleFilterValue
@@ -362,6 +363,18 @@ test('traffic list display helpers format path modes and density presets', () =>
     showTrafficPane: false,
     trafficPaneWidth: 0
   });
+  assert.equal(shouldOpenDetailModalForInspect({
+    paneLayout: getPaneLayout({ widthMode: 'full', widthTarget: 'traffic' }, 120),
+    selectedLog: log
+  }), true);
+  assert.equal(shouldOpenDetailModalForInspect({
+    paneLayout: getPaneLayout({ widthMode: 'normal' }, 120),
+    selectedLog: log
+  }), false);
+  assert.equal(shouldOpenDetailModalForInspect({
+    paneLayout: getPaneLayout({ widthMode: 'full', widthTarget: 'traffic' }, 120),
+    selectedLog: null
+  }), false);
   assert.deepEqual(getPaneLayout({ widthMode: 'wide', widthTarget: 'details' }, 80), {
     availableWidth: 78,
     detailPaneWidth: 45,
