@@ -157,8 +157,12 @@ export {
 } from '../query-params.js';
 export {
   DEFAULT_TRAFFIC_LIST_DISPLAY,
+  DETAIL_TABS,
   getRenderHeight
 } from './shared.js';
+export {
+  detectAuthSecrets
+} from '../auth-secrets.js';
 export {
   applyTrafficDensity,
   classifyFrameworkAssetRequest,

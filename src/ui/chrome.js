@@ -108,7 +108,7 @@ function getDefaultHelpSections(keyBindings = DEFAULT_KEY_BINDINGS) {
       title: 'Inspect',
       rows: [
         [getActionLabel(keyBindings, 'main.inspect'), 'inspect row'],
-        [getActionLabel(keyBindings, 'main.toggleDetailTab'), 'request / response'],
+        [getActionLabel(keyBindings, 'main.toggleDetailTab'), 'request / response / auth'],
         [getActionLabel(keyBindings, 'main.openDetailModal'), 'details modal'],
         [getActionLabel(keyBindings, 'main.openSearch'), 'find details'],
         [getActionPairLabel(keyBindings, 'main.nextMatch', 'main.previousMatch', { separator: ' / ' }), 'next / previous match'],
@@ -216,7 +216,7 @@ function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context =
           rows: [
             [getActionPairLabel(keyBindings, 'main.moveDown', 'main.moveUp'), 'scroll'],
             [getActionPairLabel(keyBindings, 'main.pageUp', 'main.pageDown', { separator: ' / ' }), 'page'],
-            [getActionLabel(keyBindings, 'main.toggleDetailTab', { limit: 1 }), 'request / response'],
+            [getActionLabel(keyBindings, 'main.toggleDetailTab', { limit: 1 }), 'request / response / auth'],
             [getActionLabel(keyBindings, 'main.openSearch', { limit: 1 }), 'find details'],
             [getActionPairLabel(keyBindings, 'main.nextMatch', 'main.previousMatch'), 'next / previous match'],
             [getActionLabel(keyBindings, 'main.inspect', { limit: 1 }), 'collapse row'],
@@ -233,7 +233,7 @@ function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context =
           rows: [
             [getActionPairLabel(keyBindings, 'detail.scrollDown', 'detail.scrollUp'), 'scroll'],
             [getActionPairLabel(keyBindings, 'detail.pageUp', 'detail.pageDown', { separator: ' / ' }), 'page'],
-            [getActionLabel(keyBindings, 'detail.toggleTab', { limit: 1 }), 'request / response'],
+            [getActionLabel(keyBindings, 'detail.toggleTab', { limit: 1 }), 'request / response / auth'],
             [getActionLabel(keyBindings, 'detail.openSearch', { limit: 1 }), 'find details'],
             [getActionPairLabel(keyBindings, 'detail.nextMatch', 'detail.previousMatch'), 'next / previous match'],
             [getActionLabel(keyBindings, 'detail.toggleNode', { limit: 1 }), 'collapse row'],
@@ -870,7 +870,7 @@ export function formatFooterText({
     return withStatus(joinFooterParts([
       formatFooterBinding(getActionPairLabel(keyBindings, 'detail.scrollDown', 'detail.scrollUp'), 'scroll'),
       formatFooterBinding(getActionPairLabel(keyBindings, 'detail.pageUp', 'detail.pageDown', { separator: ' / ' }), 'page'),
-      formatFooterBinding(getActionLabel(keyBindings, 'detail.toggleTab', { limit: 1 }), 'req/res'),
+      formatFooterBinding(getActionLabel(keyBindings, 'detail.toggleTab', { limit: 1 }), 'tabs'),
       formatFooterBinding(getActionLabel(keyBindings, 'detail.openSearch', { limit: 1 }), 'find'),
       formatFooterBinding(getActionPairLabel(keyBindings, 'detail.nextMatch', 'detail.previousMatch'), 'match'),
       ...liveDetailModalActions,
@@ -902,7 +902,7 @@ export function formatFooterText({
   return withStatus(joinFooterParts([
     formatFooterBinding(moveKeys, 'scroll'),
     formatFooterBinding(pageKeys, 'page'),
-    formatFooterBinding(getActionLabel(keyBindings, 'main.toggleDetailTab', { limit: 1 }), 'req/res'),
+    formatFooterBinding(getActionLabel(keyBindings, 'main.toggleDetailTab', { limit: 1 }), 'tabs'),
     formatFooterBinding(getActionLabel(keyBindings, 'main.openSearch', { limit: 1 }), 'find'),
     formatFooterBinding(matchKeys, 'match'),
     formatFooterBinding(getActionLabel(keyBindings, 'main.markDiffBase', { limit: 1 }), 'mark A'),

@@ -2,6 +2,7 @@ import React from 'react';
 import { XMLParser } from 'fast-xml-parser';
 import { parseDocument } from 'htmlparser2';
 import { Box, Text } from 'ink';
+import { detectAuthSecrets } from '../auth-secrets.js';
 import { analyzePagination } from '../pagination.js';
 import { parseQueryParameters } from '../query-params.js';
 import {
@@ -41,6 +42,14 @@ function getReversedBindingLabel(keyBindings, actionId) {
   }
 
   return `${formatKeyToken(firstToken)}/${formatKeyToken(secondToken)}`;
+}
+
+function formatDetailTabLabel(detailTab = 'request') {
+  return [
+    ['request', 'Request'],
+    ['response', 'Response'],
+    ['auth', 'Auth']
+  ].map(([tab, label]) => (detailTab === tab ? `[${label}]` : label)).join(' ');
 }
 
 function hasEncodedBody(headers = {}) {
@@ -108,6 +117,48 @@ function formatHeaderDetailRows(headers, options = {}, idPrefix = 'headers') {
       });
     });
   });
+}
+
+function formatAuthSecretDetailRows(log) {
+  const findings = detectAuthSecrets(log);
+  const titleRow = createDetailRow({
+    id: 'auth-title',
+    segments: [{ text: 'Auth & secrets', color: 'cyan', bold: true }],
+    type: 'section'
+  });
+
+  if (findings.length === 0) {
+    return [
+      titleRow,
+      createDetailRow({
+        id: 'auth-empty',
+        segments: [{ text: 'No auth or secret candidates', color: 'gray' }],
+        text: 'No auth or secret candidates',
+        type: 'empty'
+      })
+    ];
+  }
+
+  return [
+    titleRow,
+    ...findings.map((finding) => {
+      const text = `[${finding.badge}] ${finding.location}`;
+
+      return createDetailRow({
+        id: `auth-${finding.id}`,
+        matchText: `${finding.badge} ${finding.type} ${finding.location}`,
+        searchText: `${finding.badge} ${finding.type} ${finding.location}`,
+        segments: [
+          { text: '[', color: 'gray' },
+          { text: finding.badge, color: 'yellow', bold: true },
+          { text: '] ', color: 'gray' },
+          { text: finding.location }
+        ],
+        text,
+        type: 'auth-secret'
+      });
+    })
+  ];
 }
 
 function formatPaginationDetailRows(log, detailTab) {
@@ -1054,6 +1105,10 @@ export function getDetailRows(log, detailTab = 'request', options = {}) {
     return [];
   }
 
+  if (detailTab === 'auth') {
+    return formatAuthSecretDetailRows(log);
+  }
+
   const payload = detailTab === 'response' ? log.response : log.request;
   const title = detailTab === 'response' ? 'Response' : 'Request';
   const bodyRows = formatStructuredPayloadRows(payload, options);
@@ -1362,7 +1417,7 @@ export const DetailPane = React.memo(function DetailPane({
   const visibleCount = getDetailVisibleCount(bottomOffset);
   const timing = `${log.statusCode ?? '---'} in ${log.responseTimeMs}ms`;
   const summary = `${log.method} ${log.path} | ${timing}`;
-  const tabLabel = `${detailTab === 'request' ? '[Request]' : ' Request '} ${detailTab === 'response' ? '[Response]' : ' Response '}`;
+  const tabLabel = formatDetailTabLabel(detailTab);
   const matchLabel = matchCount > 0 ? ` | match ${activeMatchIndex + 1}/${matchCount}` : '';
 
   return h(DetailViewport, {
@@ -1408,7 +1463,7 @@ export const DetailModal = React.memo(function DetailModal({
   const matchLabel = matchCount > 0 ? ` | match ${activeMatchIndex + 1}/${matchCount}` : '';
   const subtitle = [
     `${getDetailBindingLabel(keyBindings, 'detail.close', { limit: 2 })} close`,
-    `${getDetailBindingLabel(keyBindings, 'detail.toggleTab', { limit: 1 })} req/res`,
+    `${getDetailBindingLabel(keyBindings, 'detail.toggleTab', { limit: 1 })} tabs`,
     `${getDetailBindingLabel(keyBindings, 'detail.openSearch', { limit: 1 })} find`,
     `${getDetailBindingPairLabel(keyBindings, 'detail.nextMatch', 'detail.previousMatch')} next/prev`,
     `${getDetailBindingLabel(keyBindings, 'detail.toggleNode', { limit: 1 })} collapse`

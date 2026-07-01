@@ -4,7 +4,7 @@ export const h = React.createElement;
 
 export const METHOD_OPTIONS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 export const STATUS_OPTIONS = ['2xx', '3xx', '4xx', '5xx'];
-export const DETAIL_TABS = ['request', 'response'];
+export const DETAIL_TABS = ['request', 'response', 'auth'];
 export const SEARCH_FIELDS = ['all', 'path', 'status', 'method', 'time', 'host', 'port', 'headers', 'body'];
 export const SEARCH_MODES = ['words', 'pattern'];
 export const WORD_MATCH_MODES = ['and', 'or'];

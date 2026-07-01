@@ -134,6 +134,46 @@ test('focused query parameter rows export visible row text', () => {
   });
 });
 
+test('focused auth rows export only safe badge text', () => {
+  const log = createLog({
+    request: {
+      headers: {
+        authorization: 'Bearer opaque-secret-token',
+        cookie: 'sid=session-secret'
+      }
+    },
+    response: {
+      headers: {
+        'set-cookie': 'ts_refresh_token=response-refresh-secret; Path=/'
+      },
+      body: '',
+      truncated: false
+    }
+  });
+  const rows = getDetailRows(log, 'auth', { showCookieValues: true });
+  const authRowIndex = rows.findIndex((row) => row.text === '[token cookie] response cookie ts_refresh_token');
+  const target = resolveTrafficExportTarget({
+    detailRows: rows,
+    detailTab: 'auth',
+    focusedRow: authRowIndex,
+    isListFocused: false,
+    log
+  });
+  const exported = createTrafficExport({ log, target, secretPolicy: 'raw' });
+
+  assert.deepEqual(target, {
+    detailTab: 'auth',
+    filenamePart: 'auth-row',
+    kind: 'row',
+    label: 'auth row',
+    rowText: '[token cookie] response cookie ts_refresh_token'
+  });
+  assert.equal(exported.content, '[token cookie] response cookie ts_refresh_token');
+  assert.equal(exported.content.includes('opaque-secret-token'), false);
+  assert.equal(exported.content.includes('session-secret'), false);
+  assert.equal(exported.content.includes('response-refresh-secret'), false);
+});
+
 test('masked exports match UI masking and public target header display while raw exports keep captured values', () => {
   const log = createLog();
   const rows = getDetailRows(log, 'request', {

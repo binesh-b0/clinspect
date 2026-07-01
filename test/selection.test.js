@@ -15,6 +15,8 @@ import {
   createNextPageRequestDraftFromLog,
   createSchemaGroups,
   DEFAULT_KEY_BINDINGS,
+  DETAIL_TABS,
+  detectAuthSecrets,
   EndpointGroupsModal,
   cycleDetailWidthMode,
   cyclePaneWidthMode,
@@ -2854,7 +2856,7 @@ test('footer text shows mode-aware essential keymaps', () => {
   );
   assert.equal(
     formatFooterText({ isListFocused: false }),
-    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  : command  h: help'
+    'j/k: scroll  [ / ]: page  r: tabs  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  : command  h: help'
   );
   assert.equal(
     formatFooterText({ hideFrameworkAssets: false, isListFocused: true }),
@@ -2862,11 +2864,11 @@ test('footer text shows mode-aware essential keymaps', () => {
   );
   assert.equal(
     formatFooterText({ isDetailModalOpen: true }),
-    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  E: edit  a: mark A  enter: collapse  esc/q: close  A: candidates  : command'
+    'j/k: scroll  [ / ]: page  r: tabs  /: find  n/N: match  E: edit  a: mark A  enter: collapse  esc/q: close  A: candidates  : command'
   );
   assert.equal(
     formatFooterText({ isDetailModalOpen: true, hasDiffBase: true }),
-    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  E: edit  a: mark A  u: unmark  b: diff  enter: collapse  esc/q: close  A: candidates  : command'
+    'j/k: scroll  [ / ]: page  r: tabs  /: find  n/N: match  E: edit  a: mark A  u: unmark  b: diff  enter: collapse  esc/q: close  A: candidates  : command'
   );
   assert.equal(
     formatFooterText({ isListFocused: true, isLiveMode: false, isReplayMode: true }),
@@ -2884,7 +2886,7 @@ test('footer text shows mode-aware essential keymaps', () => {
       isListFocused: false,
       recordingStatus: { mode: 'partial', path: './capture.ndjson', state: 'paused', error: null }
     }),
-    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  : command  h: help'
+    'j/k: scroll  [ / ]: page  r: tabs  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  : command  h: help'
   );
   assert.equal(
     formatFooterText({ isComposerOpen: true }),
@@ -2936,7 +2938,7 @@ test('footer text shows mode-aware essential keymaps', () => {
   );
   assert.equal(
     formatFooterText({ exportStatus: 'copied response body', isListFocused: false }),
-    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  : command  h: help | copied response body'
+    'j/k: scroll  [ / ]: page  r: tabs  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  : command  h: help | copied response body'
   );
   assert.equal(
     formatFooterText({ isListFocused: true, resendStatus: 'resent GET /food' }),
@@ -4317,6 +4319,125 @@ test('search helpers expose scoped values', () => {
   assert.deepEqual(getSearchValues(log, 'status'), ['204']);
   assert.deepEqual(getSearchValues(log, 'port'), ['8080']);
   assert.equal(getSearchValues(log, 'headers').some((value) => value.includes('x-result: empty')), true);
+});
+
+test('auth secret detector classifies structured candidates without exposing values', () => {
+  const jwt = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjMifQ.signature';
+  const log = createDiffLog({
+    path: `/api/items?api_key=query-secret&csrf_token=query-csrf&visible=plain`,
+    request: {
+      headers: {
+        authorization: `Bearer ${jwt}`,
+        cookie: 'sid=session-secret; csrfToken=csrf-cookie; theme=dark',
+        'content-type': 'application/json',
+        'x-api-key': 'header-secret'
+      },
+      body: JSON.stringify({
+        auth: { token: 'body-token-secret' },
+        csrfToken: 'body-csrf-secret',
+        visible: 'plain'
+      })
+    },
+    response: {
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'set-cookie': [
+          'sessionid=response-session-secret; Path=/',
+          'ts_session_id=response-ts-session-secret; Path=/',
+          `ts_access_token=${jwt}; Path=/`,
+          'ts_refresh_token=response-refresh-secret; Path=/',
+          'csrf_token=response-csrf-cookie-secret; Path=/',
+          'theme=dark; Path=/'
+        ],
+        'x-csrf-token': 'response-csrf-secret'
+      },
+      body: 'access_token=response-token-secret&visible=plain'
+    }
+  });
+  const findings = detectAuthSecrets(log);
+  const keys = new Set(findings.map((finding) => `${finding.type}:${finding.side}:${finding.source}:${finding.name}`));
+  const serialized = JSON.stringify(findings);
+
+  assert.equal(keys.has('jwt:request:header:authorization'), true);
+  assert.equal(keys.has('api-key:request:header:x-api-key'), true);
+  assert.equal(keys.has('session-cookie:request:cookie:sid'), true);
+  assert.equal(keys.has('csrf:request:cookie:csrfToken'), true);
+  assert.equal(keys.has('api-key:request:query:api_key'), true);
+  assert.equal(keys.has('csrf:request:query:csrf_token'), true);
+  assert.equal(keys.has('api-key:request:body:auth.token'), true);
+  assert.equal(keys.has('csrf:request:body:csrfToken'), true);
+  assert.equal(keys.has('session-cookie:response:cookie:sessionid'), true);
+  assert.equal(keys.has('session-cookie:response:cookie:ts_session_id'), true);
+  assert.equal(keys.has('jwt:response:cookie:ts_access_token'), true);
+  assert.equal(keys.has('token-cookie:response:cookie:ts_refresh_token'), true);
+  assert.equal(keys.has('csrf:response:cookie:csrf_token'), true);
+  assert.equal(keys.has('csrf:response:header:x-csrf-token'), true);
+  assert.equal(keys.has('api-key:response:body:access_token'), true);
+  assert.equal([...keys].some((key) => key.includes('theme')), false);
+  assert.equal(serialized.includes('header-secret'), false);
+  assert.equal(serialized.includes('session-secret'), false);
+  assert.equal(serialized.includes('response-refresh-secret'), false);
+  assert.equal(serialized.includes('response-ts-session-secret'), false);
+  assert.equal(serialized.includes('response-csrf-cookie-secret'), false);
+  assert.equal(serialized.includes('body-token-secret'), false);
+  assert.equal(serialized.includes('response-token-secret'), false);
+
+  assert.deepEqual(
+    detectAuthSecrets(createDiffLog({ request: { headers: { authorization: 'Bearer opaque-token' } } })).map((finding) => finding.type),
+    ['bearer']
+  );
+  assert.deepEqual(
+    detectAuthSecrets(createDiffLog({ request: { headers: { authorization: 'Basic dXNlcjpwYXNz' } } })).map((finding) => finding.type),
+    ['basic-auth']
+  );
+  assert.deepEqual(
+    detectAuthSecrets(createDiffLog({ request: { headers: { 'x-trace-id': 'not-secret' }, body: 'visible=plain' } })),
+    []
+  );
+});
+
+test('auth detail tab renders safe badges and searchable source locations', () => {
+  const log = createDiffLog({
+    path: '/api/items?api_key=query-secret',
+    request: {
+      headers: {
+        authorization: 'Bearer opaque-secret',
+        cookie: 'sid=session-secret',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ csrfToken: 'csrf-secret' })
+    },
+    response: {
+      headers: {
+        'set-cookie': 'ts_refresh_token=response-refresh-secret; Path=/'
+      }
+    }
+  });
+  const rows = getDetailRows(log, 'auth', { showCookieValues: true });
+  const text = getDetailLines(log, 'auth', { showCookieValues: true }).join('\n');
+  const matches = findDetailMatches(rows, 'authorization');
+
+  assert.deepEqual(DETAIL_TABS, ['request', 'response', 'auth']);
+  assert.equal(cycleValue(DETAIL_TABS, 'request'), 'response');
+  assert.equal(cycleValue(DETAIL_TABS, 'response'), 'auth');
+  assert.equal(cycleValue(DETAIL_TABS, 'auth'), 'request');
+  assert.match(text, /Auth & secrets/);
+  assert.match(text, /\[bearer\] request header authorization/);
+  assert.match(text, /\[session cookie\] request cookie sid/);
+  assert.match(text, /\[token cookie\] response cookie ts_refresh_token/);
+  assert.match(text, /\[api key\] request query api_key/);
+  assert.match(text, /\[csrf\] request body csrfToken/);
+  assert.equal(text.includes('opaque-secret'), false);
+  assert.equal(text.includes('session-secret'), false);
+  assert.equal(text.includes('response-refresh-secret'), false);
+  assert.equal(text.includes('query-secret'), false);
+  assert.equal(text.includes('csrf-secret'), false);
+  assert.equal(matches.length, 1);
+  assert.equal(findDetailMatches(rows, 'opaque-secret').length, 0);
+  assert.deepEqual(getDetailLines(createDiffLog(), 'auth'), [
+    'Auth & secrets',
+    'No auth or secret candidates'
+  ]);
 });
 
 test('cookie headers are masked in details and search by default', () => {
