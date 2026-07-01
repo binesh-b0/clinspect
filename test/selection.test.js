@@ -1238,6 +1238,10 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
     { type: 'cancelExport' }
   );
   assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isExportPromptOpen: true }),
+    { type: 'cancelExport' }
+  );
+  assert.deepEqual(
     getKeyboardAction('t'),
     { type: 'cycleTrafficPathMode', direction: 1 }
   );
@@ -1406,6 +1410,10 @@ test('keyboard action helper supports colon command mode for careful actions', (
     { type: 'closeRequestActivity' }
   );
   assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isRequestActivityOpen: true }),
+    { type: 'closeRequestActivity' }
+  );
+  assert.deepEqual(
     getKeyboardAction(':', {}, { isRequestActivityOpen: true }),
     { type: 'openCommandPrompt' }
   );
@@ -1442,6 +1450,10 @@ test('keyboard action helper supports colon command mode for careful actions', (
     { type: 'closeEndpointGroups' }
   );
   assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isEndpointGroupsOpen: true }),
+    { type: 'closeEndpointGroups' }
+  );
+  assert.deepEqual(
     getKeyboardAction(':', {}, { isEndpointGroupsOpen: true }),
     { type: 'openCommandPrompt' }
   );
@@ -1459,6 +1471,10 @@ test('keyboard action helper supports colon command mode for careful actions', (
   );
   assert.deepEqual(
     getKeyboardAction('q', {}, { isDiffOpen: true }),
+    { type: 'closeDiff' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isDiffOpen: true }),
     { type: 'closeDiff' }
   );
   assert.deepEqual(
@@ -1563,6 +1579,14 @@ test('keyboard action helper supports colon command mode for careful actions', (
   );
   assert.deepEqual(
     getKeyboardAction('C', {}, { isDiffOpen: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { backspace: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isListFocused: false }),
     { type: 'none' }
   );
 
@@ -1845,6 +1869,10 @@ test('keyboard action helper supports request composer input', () => {
     { type: 'closeComposerPreview' }
   );
   assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isComposerOpen: true, isComposerConfirmOpen: true }),
+    { type: 'closeComposerPreview' }
+  );
+  assert.deepEqual(
     getKeyboardAction('a', {}, { isComposerOpen: true, isComposerConfirmOpen: true }),
     { type: 'none' }
   );
@@ -1873,6 +1901,10 @@ test('keyboard action helper supports request composer input', () => {
     { type: 'loadComposerLibraryRequest' }
   );
   assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isComposerOpen: true, isComposerLibraryOpen: true }),
+    { type: 'closeComposerLibrary' }
+  );
+  assert.deepEqual(
     getKeyboardAction('', { return: true }, { isComposerOpen: true, isComposerBodyEditorOpen: true }),
     { type: 'insertComposerText', value: '\n' }
   );
@@ -1883,6 +1915,10 @@ test('keyboard action helper supports request composer input', () => {
   assert.deepEqual(
     getKeyboardAction('h', {}, { isComposerOpen: true, isComposerBodyEditorOpen: true }),
     { type: 'insertComposerText', value: 'h' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isComposerOpen: true, isComposerBodyEditorOpen: true }),
+    { type: 'backspaceComposerText' }
   );
 });
 
@@ -1912,7 +1948,15 @@ test('keyboard action helper supports resend confirmation input', () => {
     { type: 'cancelResend' }
   );
   assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isResendConfirmOpen: true }),
+    { type: 'cancelResend' }
+  );
+  assert.deepEqual(
     getKeyboardAction('y', {}, { isResendConfirmOpen: true, isResending: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isResendConfirmOpen: true, isResending: true }),
     { type: 'none' }
   );
 });
@@ -1934,6 +1978,10 @@ test('keyboard action helper gates help modal and preserves filter query input',
   );
   assert.deepEqual(
     getKeyboardAction('', { escape: true }, { isHelpOpen: true }),
+    { type: 'closeHelp' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isHelpOpen: true }),
     { type: 'closeHelp' }
   );
   assert.deepEqual(
@@ -1969,7 +2017,15 @@ test('keyboard action helper gates help modal and preserves filter query input',
     { type: 'appendSearch', value: 'q' }
   );
   assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isFilterOpen: true, filterFocus: 'query' }),
+    { type: 'backspaceSearch' }
+  );
+  assert.deepEqual(
     getKeyboardAction('?', {}, { isFilterOpen: true, filterFocus: 'method' }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isFilterOpen: true, filterFocus: 'method' }),
     { type: 'none' }
   );
   assert.deepEqual(
@@ -2027,6 +2083,10 @@ test('keyboard action helper supports list display modal input', () => {
     getKeyboardAction('', { return: true }, { isListDisplayOpen: true }),
     { type: 'closeListDisplay' }
   );
+  assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isListDisplayOpen: true }),
+    { type: 'closeListDisplay' }
+  );
 });
 
 test('keyboard action helper toggles framework assets outside text inputs', () => {
@@ -2060,6 +2120,10 @@ test('keyboard action helper supports detail modal and detail search input', () 
   );
   assert.deepEqual(
     getKeyboardAction('', { escape: true }, { isDetailModalOpen: true }),
+    { type: 'closeDetailModal' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isDetailModalOpen: true }),
     { type: 'closeDetailModal' }
   );
   assert.deepEqual(
@@ -2327,6 +2391,10 @@ test('keyboard action helper supports custom key bindings without stealing text 
     { type: 'closeDiffValue' }
   );
   assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isDiffOpen: true, isDiffValueOpen: true }),
+    { type: 'closeDiffValue' }
+  );
+  assert.deepEqual(
     getKeyboardAction('/', {}, { isDiffOpen: true, keyBindings: diffBindings }),
     { type: 'none' }
   );
@@ -2465,7 +2533,7 @@ test('footer text shows mode-aware essential keymaps', () => {
     formatFooterText({ isCommandOpen: true }),
     ''
   );
-  assert.equal(formatFooterText({ isHelpOpen: true }), 'help | esc/h/q/Ctrl-/ close');
+  assert.equal(formatFooterText({ isHelpOpen: true }), 'help | esc, h, q, Ctrl-/, backspace close');
 });
 
 test('footer and help labels reflect custom key bindings', () => {

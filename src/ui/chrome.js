@@ -759,7 +759,7 @@ export function formatFooterText({
   }
 
   if (isHelpOpen) {
-    return `help | ${getActionLabel(keyBindings, 'help.close')} close`;
+    return `help | ${getActionLabel(keyBindings, 'help.close', { separator: ', ' })} close`;
   }
 
   if (isExportPromptOpen) {

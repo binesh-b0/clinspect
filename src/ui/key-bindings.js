@@ -45,13 +45,13 @@ export const DEFAULT_KEY_BINDINGS = Object.freeze({
   'command.nextSuggestion': Object.freeze(['tab', 'down']),
   'command.previousSuggestion': Object.freeze(['up']),
 
-  'export.cancel': Object.freeze(['escape']),
+  'export.cancel': Object.freeze(['escape', 'backspace']),
   'export.masked': Object.freeze(['m', 'M']),
   'export.raw': Object.freeze(['r', 'R']),
 
-  'help.close': Object.freeze(['escape', 'h', 'q', 'ctrl-/']),
+  'help.close': Object.freeze(['escape', 'h', 'q', 'ctrl-/', 'backspace']),
 
-  'diff.close': Object.freeze(['escape', 'q']),
+  'diff.close': Object.freeze(['escape', 'q', 'backspace']),
   'diff.nextChange': Object.freeze(['n', 'down', 'j']),
   'diff.previousChange': Object.freeze(['N', 'up', 'k']),
   'diff.pageDown': Object.freeze(['pagedown', ']']),
@@ -62,7 +62,7 @@ export const DEFAULT_KEY_BINDINGS = Object.freeze({
   'diff.openFilter': Object.freeze(['/']),
   'diff.openFocusedRow': Object.freeze(['enter']),
 
-  'diffValue.close': Object.freeze(['enter', 'escape', 'q']),
+  'diffValue.close': Object.freeze(['enter', 'escape', 'q', 'backspace']),
   'diffValue.scrollDown': Object.freeze(['j', 'down']),
   'diffValue.scrollUp': Object.freeze(['k', 'up']),
   'diffValue.pageDown': Object.freeze(['pagedown', ']']),
@@ -70,7 +70,7 @@ export const DEFAULT_KEY_BINDINGS = Object.freeze({
   'diffValue.top': Object.freeze(['g']),
   'diffValue.bottom': Object.freeze(['G']),
 
-  'listDisplay.close': Object.freeze(['escape', 'enter']),
+  'listDisplay.close': Object.freeze(['escape', 'enter', 'backspace']),
   'listDisplay.moveDown': Object.freeze(['j', 'down']),
   'listDisplay.moveUp': Object.freeze(['k', 'up']),
   'listDisplay.previousOption': Object.freeze(['left']),
@@ -78,7 +78,7 @@ export const DEFAULT_KEY_BINDINGS = Object.freeze({
   'listDisplay.toggleOption': Object.freeze(['space']),
   'listDisplay.reset': Object.freeze(['r']),
 
-  'endpointGroups.close': Object.freeze(['escape', 'q']),
+  'endpointGroups.close': Object.freeze(['escape', 'q', 'backspace']),
   'endpointGroups.moveDown': Object.freeze(['j', 'down']),
   'endpointGroups.moveUp': Object.freeze(['k', 'up']),
   'endpointGroups.pageDown': Object.freeze(['pagedown', ']']),
@@ -88,12 +88,12 @@ export const DEFAULT_KEY_BINDINGS = Object.freeze({
 
   'resend.confirm': Object.freeze(['enter', 'y', 'Y']),
   'resend.edit': Object.freeze(['E', 'e']),
-  'resend.cancel': Object.freeze(['escape', 'n', 'N']),
+  'resend.cancel': Object.freeze(['escape', 'n', 'N', 'backspace']),
 
   'composerConfirm.confirm': Object.freeze(['enter', 'y', 'Y']),
-  'composerConfirm.cancel': Object.freeze(['escape', 'n', 'N']),
+  'composerConfirm.cancel': Object.freeze(['escape', 'n', 'N', 'backspace']),
 
-  'composerLibrary.close': Object.freeze(['escape', 'l']),
+  'composerLibrary.close': Object.freeze(['escape', 'l', 'backspace']),
   'composerLibrary.open': Object.freeze(['enter']),
   'composerLibrary.moveDown': Object.freeze(['j', 'down']),
   'composerLibrary.moveUp': Object.freeze(['k', 'up']),
@@ -145,7 +145,7 @@ export const DEFAULT_KEY_BINDINGS = Object.freeze({
   'detailSearch.backspace': Object.freeze(['backspace']),
   'detailSearch.delete': Object.freeze(['delete']),
 
-  'detail.close': Object.freeze(['escape', 'q']),
+  'detail.close': Object.freeze(['escape', 'q', 'backspace']),
   'detail.copy': Object.freeze(['y']),
   'detail.download': Object.freeze(['D']),
   'detail.openSearch': Object.freeze(['/']),
