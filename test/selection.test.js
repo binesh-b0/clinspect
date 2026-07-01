@@ -3477,8 +3477,8 @@ test('filterLogs searches cold summary indexes without requiring full headers or
   }).map((log) => log.id), []);
   assert.deepEqual(classifyFrameworkAssetRequest(coldAssetSummary), {
     framework: null,
-    isAsset: true,
-    reason: 'content-type'
+    isAsset: false,
+    reason: null
   });
   assert.deepEqual(classifyFrameworkAssetRequest(coldRscSummary), {
     framework: 'Next.js',
@@ -3486,6 +3486,7 @@ test('filterLogs searches cold summary indexes without requiring full headers or
     reason: 'next-rsc'
   });
   assert.deepEqual(filterLogs([coldSummary, coldRscSummary]).map((log) => log.id), ['summary']);
+  assert.deepEqual(filterLogs([coldAssetSummary, coldRscSummary]).map((log) => log.id), ['asset']);
   assert.deepEqual(filterLogs([coldSummary, coldRscSummary], {
     hideFrameworkAssets: false
   }).map((log) => log.id), ['summary', 'rsc']);
@@ -3516,6 +3517,17 @@ test('filterLogs auto-hides common frontend framework static traffic by default'
       responseBody: '{"items":[]}',
       responseHeaders: { 'content-type': 'application/json' }
     }),
+    createTraffic('order-id', '/orders/80npap'),
+    createTraffic('order-dots', '/orders/80npap.....'),
+    createTraffic('order-js', '/orders/80npap.js', {
+      responseHeaders: { 'content-type': 'application/javascript' }
+    }),
+    createTraffic('order-css', '/orders/80npap.css', {
+      responseHeaders: { 'content-type': 'text/css' }
+    }),
+    createTraffic('order-svg', '/orders/80npap.svg', {
+      responseHeaders: { 'content-type': 'image/svg+xml' }
+    }),
     createTraffic('next', '/_next/static/chunks/app/layout.js?v=1'),
     createTraffic('next-rsc-query', '/b/bb56efed-5f5d-4db5-999a-73deb60a2f63?_rsc=3hbm4', {
       responseHeaders: { 'content-type': 'text/plain' }
@@ -3541,88 +3553,115 @@ test('filterLogs auto-hides common frontend framework static traffic by default'
     createTraffic('post', '/_next/static/upload.js', { method: 'POST', requestBody: 'payload', statusCode: 201 }),
     createTraffic('post-rsc', '/b/bb56efed-5f5d-4db5-999a-73deb60a2f63?_rsc=3hbm4', { method: 'POST', requestBody: 'payload', statusCode: 201 })
   ];
+  const trafficById = new Map(traffic.map((log) => [log.id, log]));
+  const classifyById = (id) => classifyFrameworkAssetRequest(trafficById.get(id));
+  const selectTraffic = (...ids) => ids.map((id) => trafficById.get(id));
 
-  assert.deepEqual(traffic.map(isFrameworkAssetRequest), [
-    false,
-    false,
-    true,
-    true,
-    true,
-    true,
-    true,
-    true,
-    true,
-    true,
-    true,
-    true,
-    true,
-    true,
-    true,
-    true,
-    false,
-    false
-  ]);
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[2]), {
+  assert.deepEqual(
+    traffic.filter(isFrameworkAssetRequest).map((log) => log.id),
+    [
+      'next',
+      'next-rsc-query',
+      'next-rsc-matched',
+      'next-rsc-content-type',
+      'next-rsc-header',
+      'vite',
+      'nuxt',
+      'astro',
+      'sveltekit',
+      'remix',
+      'gatsby',
+      'webpack',
+      'module'
+    ]
+  );
+  assert.deepEqual(
+    traffic.filter((log) => !isFrameworkAssetRequest(log)).map((log) => log.id),
+    [
+      'api',
+      'api-json',
+      'order-id',
+      'order-dots',
+      'order-js',
+      'order-css',
+      'order-svg',
+      'image',
+      'post',
+      'post-rsc'
+    ]
+  );
+  assert.deepEqual(classifyById('next'), {
     framework: 'Next.js',
     isAsset: true,
     reason: 'framework-path'
   });
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[3]), {
+  assert.deepEqual(classifyById('next-rsc-query'), {
     framework: 'Next.js',
     isAsset: true,
     reason: 'next-rsc'
   });
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[4]), {
+  assert.deepEqual(classifyById('next-rsc-matched'), {
     framework: 'Next.js',
     isAsset: true,
     reason: 'next-rsc'
   });
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[5]), {
+  assert.deepEqual(classifyById('next-rsc-content-type'), {
     framework: 'Next.js',
     isAsset: true,
     reason: 'next-rsc'
   });
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[6]), {
+  assert.deepEqual(classifyById('next-rsc-header'), {
     framework: 'Next.js',
     isAsset: true,
     reason: 'next-rsc'
   });
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[7]), {
+  assert.deepEqual(classifyById('vite'), {
     framework: 'Vite',
     isAsset: true,
     reason: 'framework-path'
   });
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[8]).framework, 'Nuxt');
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[9]).framework, 'Astro');
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[10]).framework, 'SvelteKit');
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[11]).framework, 'Remix');
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[12]).framework, 'Gatsby');
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[13]).framework, 'Webpack');
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[14]), {
+  assert.deepEqual(classifyById('nuxt').framework, 'Nuxt');
+  assert.deepEqual(classifyById('astro').framework, 'Astro');
+  assert.deepEqual(classifyById('sveltekit').framework, 'SvelteKit');
+  assert.deepEqual(classifyById('remix').framework, 'Remix');
+  assert.deepEqual(classifyById('gatsby').framework, 'Gatsby');
+  assert.deepEqual(classifyById('webpack').framework, 'Webpack');
+  assert.deepEqual(classifyById('module'), {
     framework: null,
     isAsset: true,
     reason: 'source-module'
   });
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[15]), {
-    framework: null,
-    isAsset: true,
-    reason: 'content-type'
-  });
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[16]), {
+  assert.deepEqual(classifyById('image'), {
     framework: null,
     isAsset: false,
     reason: null
   });
-  assert.deepEqual(classifyFrameworkAssetRequest(traffic[17]), {
+  assert.deepEqual(classifyById('post'), {
     framework: null,
     isAsset: false,
     reason: null
   });
-  assert.deepEqual(filterLogs(traffic).map((log) => log.id), ['api', 'api-json', 'post', 'post-rsc']);
+  assert.deepEqual(classifyById('post-rsc'), {
+    framework: null,
+    isAsset: false,
+    reason: null
+  });
+  assert.deepEqual(filterLogs(traffic).map((log) => log.id), [
+    'api',
+    'api-json',
+    'order-id',
+    'order-dots',
+    'order-js',
+    'order-css',
+    'order-svg',
+    'image',
+    'post',
+    'post-rsc'
+  ]);
   assert.deepEqual(filterLogs(traffic, { hideFrameworkAssets: false }).map((log) => log.id), traffic.map((log) => log.id));
   assert.deepEqual(summarizeFrameworkAssets(traffic), {
     additionalFrameworkCount: 7,
-    assetCount: 14,
+    assetCount: 13,
     framework: 'Next.js',
     frameworkCount: 5,
     frameworks: [
@@ -3636,7 +3675,7 @@ test('filterLogs auto-hides common frontend framework static traffic by default'
       { count: 1, framework: 'Webpack' }
     ]
   });
-  assert.deepEqual(summarizeFrameworkAssets([traffic[0], traffic[1], traffic[16], traffic[17]]), {
+  assert.deepEqual(summarizeFrameworkAssets(selectTraffic('api', 'api-json', 'order-id', 'order-dots', 'image', 'post', 'post-rsc')), {
     additionalFrameworkCount: 0,
     assetCount: 0,
     framework: null,

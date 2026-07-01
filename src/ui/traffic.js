@@ -18,9 +18,6 @@ import {
   ROOT_PADDING_X,
   SEARCH_FIELDS,
   SEARCH_MODES,
-  STATIC_ASSET_CONTENT_TYPE_PATTERNS,
-  STATIC_ASSET_EXTENSION_PATTERN,
-  STATIC_ASSET_FILE_PATTERN,
   STATUS_OPTIONS,
   TRAFFIC_COLUMN_WIDTHS,
   TRAFFIC_DENSITY_COLUMNS,
@@ -613,10 +610,6 @@ function hasQueryParam(log = {}, key = '') {
   }
 }
 
-function isStaticAssetContentType(contentType = '') {
-  return STATIC_ASSET_CONTENT_TYPE_PATTERNS.some((pattern) => pattern.test(contentType));
-}
-
 function getFrameworkPathMatch(pathname = '') {
   return FRAMEWORK_ASSET_PATH_MATCHERS.find((matcher) => (
     matcher.patterns.some((pattern) => pattern.test(pathname))
@@ -743,34 +736,6 @@ export function classifyFrameworkAssetRequest(log = {}) {
       framework: null,
       isAsset: true,
       reason: 'source-module'
-    };
-  }
-
-  if (STATIC_ASSET_FILE_PATTERN.test(pathname)) {
-    return {
-      framework: null,
-      isAsset: true,
-      reason: 'static-file'
-    };
-  }
-
-  if (STATIC_ASSET_EXTENSION_PATTERN.test(pathname)) {
-    return {
-      framework: null,
-      isAsset: true,
-      reason: 'extension'
-    };
-  }
-
-  const responseContentType = normalizeContentType(
-    log.search?.responseContentType ?? getHeaderValue(log.response?.headers ?? {}, 'content-type')
-  );
-
-  if (isStaticAssetContentType(responseContentType)) {
-    return {
-      framework: null,
-      isAsset: true,
-      reason: 'content-type'
     };
   }
 
