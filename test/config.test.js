@@ -46,14 +46,14 @@ test('project config loads valid partial key binding overrides', async () => {
       schemaVersion: 1,
       keyBindings: {
         'main.moveDown': ['z'],
-        'main.moveUp': ['a']
+        'main.moveUp': ['i']
       }
     }));
     const config = loadProjectConfig(configPath);
 
     assert.deepEqual(config.keyBindingWarnings, []);
     assert.deepEqual(config.keyBindings['main.moveDown'], ['z']);
-    assert.deepEqual(config.keyBindings['main.moveUp'], ['a']);
+    assert.deepEqual(config.keyBindings['main.moveUp'], ['i']);
     assert.deepEqual(config.keyBindings['main.openHelp'], DEFAULT_KEY_BINDINGS['main.openHelp']);
   });
 });
@@ -73,13 +73,13 @@ test('key binding normalization warns for unknown and invalid entries', () => {
   const normalized = normalizeKeyBindings({
     keyBindings: {
       'main.moveDown': 'z',
-      'main.moveUp': ['a'],
+      'main.moveUp': ['i'],
       'unknown.action': ['x']
     }
   });
 
   assert.deepEqual(normalized.bindings['main.moveDown'], DEFAULT_KEY_BINDINGS['main.moveDown']);
-  assert.deepEqual(normalized.bindings['main.moveUp'], ['a']);
+  assert.deepEqual(normalized.bindings['main.moveUp'], ['i']);
   assert.match(normalized.warnings.join('\n'), /invalid key binding for main\.moveDown/);
   assert.match(normalized.warnings.join('\n'), /unknown key binding action ignored: unknown\.action/);
 });
@@ -88,11 +88,11 @@ test('key binding normalization drops duplicate bindings in the same active cont
   const normalized = normalizeKeyBindings({
     keyBindings: {
       'main.moveDown': ['~'],
-      'main.moveUp': ['~', 'a']
+      'main.moveUp': ['~', 'i']
     }
   });
 
   assert.deepEqual(normalized.bindings['main.moveDown'], ['~']);
-  assert.deepEqual(normalized.bindings['main.moveUp'], ['a']);
+  assert.deepEqual(normalized.bindings['main.moveUp'], ['i']);
   assert.match(normalized.warnings.join('\n'), /duplicate key binding ~ for main\.moveUp; main\.moveDown keeps it/);
 });

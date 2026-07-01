@@ -27,7 +27,9 @@ import {
   RESEND_CONFIRM_BAR_HEIGHT,
   ROOT_PADDING_X,
   SEARCH_FIELDS,
+  SEARCH_MODES,
   STATUS_OPTIONS,
+  WORD_MATCH_MODES,
   getRenderHeight,
   h
 } from './shared.js';
@@ -104,6 +106,27 @@ import {
   formatRequestActivityToast
 } from './request-activity.js';
 import {
+  DIFF_FILTER_FOCUS_ORDER,
+  DiffFilterBar,
+  REQUEST_DIFF_LAYOUT_MODES,
+  RequestDiffModal,
+  clampRequestDiffRowIndex,
+  clampRequestDiffValueScrollOffset,
+  createRequestDiff,
+  filterRequestDiffRows,
+  getDiffCandidateLogIds,
+  getDiffEndpointShape,
+  getBoundaryRequestDiffRowIndex,
+  getNextRequestDiffRowIndex,
+  getRequestDiffBottomControlHeight,
+  getRequestDiffFrameWidth,
+  getRequestDiffFilterBoxHeight,
+  getRequestDiffRows,
+  getRequestDiffValueLines,
+  getRequestDiffVisibleCount,
+  shouldShowRequestDiffFilterBar
+} from './request-diff.js';
+import {
   KeyboardControls,
   getCommandSuggestionIndex,
   resolveCommandInput
@@ -140,6 +163,7 @@ export {
   formatRecordingLabel,
   formatTrafficHeader,
   formatTrafficRow,
+  getSearchQueryWarning,
   getMouseWheelTarget,
   getPaneLayout,
   getSearchValues,
@@ -148,7 +172,9 @@ export {
   getTrafficRowWidth,
   isFrameworkAssetRequest,
   moveSelectedLogId,
+  matchesSearchValues,
   normalizeTrafficListDisplay,
+  parseSearchTerms,
   resolveSelectedLogId,
   summarizeFrameworkAssets,
   toggleFilterValue,
@@ -206,6 +232,17 @@ export {
   formatRequestActivityRow,
   formatRequestActivityToast
 } from './request-activity.js';
+export {
+  createRequestDiff,
+  filterRequestDiffRows,
+  clampRequestDiffValueScrollOffset,
+  getDiffCandidateLogIds,
+  getDiffEndpointShape,
+  getRequestDiffFrameWidth,
+  getRequestDiffRows,
+  getRequestDiffValueLines,
+  getRequestDiffValueScrollLabel
+} from './request-diff.js';
 export {
   DEFAULT_KEY_BINDINGS,
   getBindingLabel,
@@ -328,6 +365,9 @@ export function App({
   const [statusFilters, setStatusFilters] = useState([]);
   const [searchField, setSearchField] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchMode, setSearchMode] = useState('words');
+  const [wordMatchMode, setWordMatchMode] = useState('and');
+  const [matchCase, setMatchCase] = useState(false);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
   const [filterFocus, setFilterFocus] = useState('query');
   const [methodOptionIndex, setMethodOptionIndex] = useState(0);
@@ -371,6 +411,20 @@ export function App({
   const [requestActivities, setRequestActivities] = useState([]);
   const [selectedRequestActivityId, setSelectedRequestActivityId] = useState(null);
   const [isRequestActivityOpen, setIsRequestActivityOpen] = useState(false);
+  const [diffBaseLogId, setDiffBaseLogId] = useState(null);
+  const [isDiffOpen, setIsDiffOpen] = useState(false);
+  const [focusedDiffIndex, setFocusedDiffIndex] = useState(0);
+  const [diffScrollOffset, setDiffScrollOffset] = useState(0);
+  const [diffLayoutMode, setDiffLayoutMode] = useState('auto');
+  const [diffStatus, setDiffStatus] = useState('');
+  const [isDiffValueOpen, setIsDiffValueOpen] = useState(false);
+  const [diffValueScrollOffset, setDiffValueScrollOffset] = useState(0);
+  const [isDiffFilterOpen, setIsDiffFilterOpen] = useState(false);
+  const [diffFilterFocus, setDiffFilterFocus] = useState('query');
+  const [diffFilterQuery, setDiffFilterQuery] = useState('');
+  const [diffSearchMode, setDiffSearchMode] = useState('words');
+  const [diffWordMatchMode, setDiffWordMatchMode] = useState('and');
+  const [diffMatchCase, setDiffMatchCase] = useState(false);
   const [toast, setToast] = useState(null);
   const isReplayMode = context.mode === 'replay';
   const isLiveMode = context.mode === 'live';
@@ -401,12 +455,15 @@ export function App({
 
   const filteredLogs = useMemo(() => filterLogs(logs, {
     hideFrameworkAssets,
+    matchCase,
     methodFilters,
     searchField,
+    searchMode,
     searchQuery,
     showCookieValues,
-    statusFilters
-  }), [hideFrameworkAssets, logs, methodFilters, searchField, searchQuery, showCookieValues, statusFilters]);
+    statusFilters,
+    wordMatchMode
+  }), [hideFrameworkAssets, logs, matchCase, methodFilters, searchField, searchMode, searchQuery, showCookieValues, statusFilters, wordMatchMode]);
 
   useEffect(() => {
     const handleUpdate = (updatedLogs) => setLogs(updatedLogs);
@@ -476,6 +533,13 @@ export function App({
     return hydrateLog(filteredLogs.find((log) => log.id === inspectedLogId) ?? selectedLog);
   }, [filteredLogs, inspectedLogId, selectedLog, stateStore]);
   const commandActionLog = isListFocused && !isDetailModalOpen ? hydrateLog(selectedLog) : inspectedLog;
+  const diffBaseLog = useMemo(() => {
+    if (!diffBaseLogId) {
+      return null;
+    }
+
+    return stateStore.getLogById?.(diffBaseLogId) ?? logs.find((log) => log.id === diffBaseLogId) ?? null;
+  }, [diffBaseLogId, logs, stateStore]);
   const commandContext = useMemo(() => createCommandContext({
     activeLog: commandActionLog,
     composerIsSending: composer.isSending,
@@ -509,7 +573,7 @@ export function App({
     [detailMatchIndex, detailMatches, rawDetailRows]
   );
   const bottomOffset = isFilterOpen
-    ? 19
+    ? 22
     : (pendingResend
       ? 13 + RESEND_CONFIRM_BAR_HEIGHT
       : (isDetailSearchOpen ? 13 + DETAIL_SEARCH_BAR_HEIGHT : 13));
@@ -518,12 +582,49 @@ export function App({
   const detailModalVisibleCount = getDetailModalVisibleCount(isDetailSearchOpen ? 11 + DETAIL_SEARCH_BAR_HEIGHT : 11);
   const activeDetailVisibleCount = isDetailModalOpen ? detailModalVisibleCount : detailVisibleCount;
   const maxDetailScrollOffset = getMaxScrollOffset(detailRows, activeDetailVisibleCount);
+  const requestDiff = useMemo(() => (
+    isDiffOpen && diffBaseLog && commandActionLog && diffBaseLog.id !== commandActionLog.id
+      ? createRequestDiff(diffBaseLog, commandActionLog, { showCookieValues })
+      : null
+  ), [commandActionLog, diffBaseLog, isDiffOpen, showCookieValues]);
+  const requestDiffRows = useMemo(() => getRequestDiffRows(requestDiff), [requestDiff]);
+  const filteredRequestDiffRows = useMemo(
+    () => filterRequestDiffRows(requestDiffRows, diffFilterQuery, {
+      matchCase: diffMatchCase,
+      searchMode: diffSearchMode,
+      wordMatchMode: diffWordMatchMode
+    }),
+    [diffFilterQuery, diffMatchCase, diffSearchMode, diffWordMatchMode, requestDiffRows]
+  );
+  const diffCandidateLogIds = useMemo(() => new Set(
+    diffBaseLog ? getDiffCandidateLogIds(diffBaseLog, filteredLogs) : []
+  ), [diffBaseLog, filteredLogs]);
+  const isDiffFilterVisible = shouldShowRequestDiffFilterBar({
+    filterQuery: diffFilterQuery,
+    isFilterOpen: isDiffFilterOpen
+  });
+  const diffBottomControlHeight = getRequestDiffBottomControlHeight({
+    filterQuery: diffFilterQuery,
+    isFilterOpen: isDiffFilterOpen
+  });
+  const diffVisibleCount = getRequestDiffVisibleCount(15 + diffBottomControlHeight);
+  const diffValueContentWidth = Math.max(34, getRequestDiffFrameWidth() - 4);
+  const diffValueLines = useMemo(
+    () => getRequestDiffValueLines(filteredRequestDiffRows[focusedDiffIndex], diffValueContentWidth),
+    [diffValueContentWidth, filteredRequestDiffRows, focusedDiffIndex]
+  );
+  const maxDiffScrollOffset = getMaxScrollOffset(filteredRequestDiffRows, diffVisibleCount);
+  const maxDiffValueScrollOffset = Math.max(0, diffValueLines.length - diffVisibleCount);
   const emptyText = context.mode === 'live'
     ? `Waiting for traffic at ${proxyOrigin}`
     : (isReplayMode ? 'No recorded traffic' : 'Waiting for traffic...');
   const keyBindingStatus = keyBindingWarnings.length > 0
     ? `key bindings: ${keyBindingWarnings[0]}${keyBindingWarnings.length > 1 ? ` (+${keyBindingWarnings.length - 1} more)` : ''}`
     : '';
+  const footerCommandStatus = [commandState.status, diffStatus, keyBindingStatus]
+    .map((item) => String(item ?? '').trim())
+    .filter(Boolean)
+    .join(' | ');
 
   useEffect(() => {
     setDetailScrollOffset((current) => Math.min(current, maxDetailScrollOffset));
@@ -538,6 +639,37 @@ export function App({
       ? 0
       : Math.min(current, detailMatches.length - 1));
   }, [detailMatches]);
+
+  useEffect(() => {
+    setDiffScrollOffset((current) => Math.min(current, maxDiffScrollOffset));
+  }, [maxDiffScrollOffset]);
+
+  useEffect(() => {
+    setDiffValueScrollOffset((current) => Math.min(current, maxDiffValueScrollOffset));
+  }, [maxDiffValueScrollOffset]);
+
+  useEffect(() => {
+    if (isDiffValueOpen && !filteredRequestDiffRows[focusedDiffIndex]?.isFocusable) {
+      setIsDiffValueOpen(false);
+      setDiffValueScrollOffset(0);
+    }
+  }, [filteredRequestDiffRows, focusedDiffIndex, isDiffValueOpen]);
+
+  useEffect(() => {
+    setFocusedDiffIndex((current) => {
+      const safeIndex = clampRequestDiffRowIndex(current, filteredRequestDiffRows);
+
+      return filteredRequestDiffRows[safeIndex]?.isFocusable
+        ? safeIndex
+        : getBoundaryRequestDiffRowIndex(filteredRequestDiffRows, 'top');
+    });
+  }, [filteredRequestDiffRows]);
+
+  useEffect(() => {
+    // Do not depend on filteredRequestDiffRows here; those rows can be recreated while moving focus.
+    setFocusedDiffIndex(getBoundaryRequestDiffRowIndex(filteredRequestDiffRows, 'top'));
+    setDiffScrollOffset(0);
+  }, [diffFilterQuery, diffMatchCase, diffSearchMode, diffWordMatchMode]);
 
   useEffect(() => {
     if (!detailSearchQuery.trim() || detailMatches.length === 0) {
@@ -560,6 +692,9 @@ export function App({
     setStatusFilters([]);
     setSearchField('all');
     setSearchQuery('');
+    setSearchMode('words');
+    setWordMatchMode('and');
+    setMatchCase(false);
     setFilterFocus('query');
     setMethodOptionIndex(0);
     setStatusOptionIndex(0);
@@ -639,6 +774,17 @@ export function App({
     setIsFollowingLatest(false);
     setDetailScrollOffset(0);
     setFocusedDetailRow(0);
+    setDiffBaseLogId(null);
+    setIsDiffOpen(false);
+    setFocusedDiffIndex(0);
+    setDiffScrollOffset(0);
+    setDiffStatus('');
+    setIsDiffFilterOpen(false);
+    setDiffFilterFocus('query');
+    setDiffFilterQuery('');
+    setDiffSearchMode('words');
+    setDiffWordMatchMode('and');
+    setDiffMatchCase(false);
   };
 
   const stopRecording = () => {
@@ -733,6 +879,7 @@ export function App({
     setIsDetailModalOpen(false);
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
+    setIsDiffOpen(false);
     setPendingExport(null);
     setPendingResend(null);
   };
@@ -967,16 +1114,222 @@ export function App({
     setIsDetailModalOpen(false);
     setIsHelpOpen(false);
     setIsRequestActivityOpen(false);
+    setIsDiffOpen(false);
     setPendingExport(null);
     setPendingResend(null);
   };
 
-  const getExportLog = () => {
+  const getActiveActionLog = () => {
     return isListFocused && !isDetailModalOpen ? hydrateLog(selectedLog) : inspectedLog;
   };
 
+  const getExportLog = () => {
+    return getActiveActionLog();
+  };
+
   const getManualActionLog = () => {
-    return isListFocused && !isDetailModalOpen ? hydrateLog(selectedLog) : inspectedLog;
+    return getActiveActionLog();
+  };
+
+  const getStoredDiffBaseLog = () => {
+    if (!diffBaseLogId) {
+      return null;
+    }
+
+    return stateStore.getLogById?.(diffBaseLogId) ?? logs.find((log) => log.id === diffBaseLogId) ?? null;
+  };
+
+  const formatDiffLogStatus = (log) => `${String(log?.method ?? 'GET').toUpperCase()} ${String(log?.path ?? '/')}`;
+
+  const markDiffBase = () => {
+    const activeLog = getActiveActionLog();
+
+    if (!activeLog?.id) {
+      const status = 'diff: no request selected';
+
+      setDiffStatus(status);
+      showToast(status, 'error');
+      return;
+    }
+
+    const status = `marked A ${formatDiffLogStatus(activeLog)}`;
+
+    setDiffBaseLogId(activeLog.id);
+    setIsDiffOpen(false);
+    setFocusedDiffIndex(0);
+    setDiffScrollOffset(0);
+    setDiffStatus(status);
+    showToast(status, 'info');
+  };
+
+  const clearDiffBase = () => {
+    if (!diffBaseLogId) {
+      const status = 'diff: no mark set';
+
+      setDiffStatus(status);
+      showToast(status, 'info');
+      return;
+    }
+
+    const status = 'diff mark cleared';
+
+    setDiffBaseLogId(null);
+    setIsDiffOpen(false);
+    setFocusedDiffIndex(0);
+    setDiffScrollOffset(0);
+    setIsDiffValueOpen(false);
+    setDiffValueScrollOffset(0);
+    setIsDiffFilterOpen(false);
+    setDiffFilterFocus('query');
+    setDiffFilterQuery('');
+    setDiffSearchMode('words');
+    setDiffWordMatchMode('and');
+    setDiffMatchCase(false);
+    setDiffStatus(status);
+    showToast(status, 'info');
+  };
+
+  const openDiff = () => {
+    const baseLog = getStoredDiffBaseLog();
+    const targetLog = getActiveActionLog();
+
+    if (!baseLog) {
+      const status = 'diff: mark A first';
+
+      setDiffStatus(status);
+      showToast(status, 'error');
+      return;
+    }
+
+    if (!targetLog?.id) {
+      const status = 'diff: no request selected';
+
+      setDiffStatus(status);
+      showToast(status, 'error');
+      return;
+    }
+
+    if (baseLog.id === targetLog.id) {
+      const status = 'diff: select another request';
+
+      setDiffStatus(status);
+      showToast(status, 'info');
+      return;
+    }
+
+    const nextRows = getRequestDiffRows(createRequestDiff(baseLog, targetLog, { showCookieValues }));
+
+    setIsDiffOpen(true);
+    setFocusedDiffIndex(getBoundaryRequestDiffRowIndex(nextRows, 'top'));
+    setDiffScrollOffset(0);
+    setIsDiffValueOpen(false);
+    setDiffValueScrollOffset(0);
+    setIsDiffFilterOpen(false);
+    setDiffFilterFocus('query');
+    setDiffFilterQuery('');
+    setDiffSearchMode('words');
+    setDiffWordMatchMode('and');
+    setDiffMatchCase(false);
+    setDiffStatus(`diff A -> B ${formatDiffLogStatus(targetLog)}`);
+    setIsFilterOpen(false);
+    setIsDetailSearchOpen(false);
+    setIsHelpOpen(false);
+    setIsListDisplayOpen(false);
+    setIsRequestActivityOpen(false);
+    setPendingExport(null);
+    setPendingResend(null);
+  };
+
+  const closeDiff = () => {
+    setIsDiffOpen(false);
+    setIsDiffValueOpen(false);
+    setDiffValueScrollOffset(0);
+    setIsDiffFilterOpen(false);
+    setDiffFilterFocus('query');
+    setDiffFilterQuery('');
+    setDiffSearchMode('words');
+    setDiffWordMatchMode('and');
+    setDiffMatchCase(false);
+  };
+
+  const focusDiffRowAt = (rowIndex) => {
+    const safeRowIndex = clampRequestDiffRowIndex(rowIndex, filteredRequestDiffRows);
+
+    setFocusedDiffIndex(safeRowIndex);
+    setDiffScrollOffset((current) => getScrollOffsetForFocusedRow(
+      safeRowIndex,
+      current,
+      diffVisibleCount,
+      maxDiffScrollOffset
+    ));
+  };
+
+  const moveDiffFocus = (direction) => {
+    focusDiffRowAt(getNextRequestDiffRowIndex(filteredRequestDiffRows, focusedDiffIndex, direction));
+  };
+
+  const moveDiffFocusTo = (boundary) => {
+    focusDiffRowAt(getBoundaryRequestDiffRowIndex(
+      filteredRequestDiffRows,
+      boundary === 'bottom' ? 'bottom' : 'top'
+    ));
+  };
+
+  const toggleDiffLayout = () => {
+    setDiffLayoutMode((current) => cycleValue(REQUEST_DIFF_LAYOUT_MODES, current));
+  };
+
+  const openDiffValue = () => {
+    if (!filteredRequestDiffRows[focusedDiffIndex]?.isFocusable) {
+      return;
+    }
+
+    setIsDiffValueOpen(true);
+    setDiffValueScrollOffset(0);
+    setIsDiffFilterOpen(false);
+  };
+
+  const closeDiffValue = () => {
+    setIsDiffValueOpen(false);
+    setDiffValueScrollOffset(0);
+  };
+
+  const moveDiffValueScroll = (direction) => {
+    setDiffValueScrollOffset((current) => clampRequestDiffValueScrollOffset(
+      diffValueLines,
+      current + direction,
+      diffVisibleCount
+    ));
+  };
+
+  const moveDiffValueScrollTo = (boundary) => {
+    setDiffValueScrollOffset(boundary === 'bottom' ? maxDiffValueScrollOffset : 0);
+  };
+
+  const cycleDiffFilterFocus = (direction) => {
+    setDiffFilterFocus((current) => cycleValue(DIFF_FILTER_FOCUS_ORDER, current, direction));
+  };
+
+  const moveDiffFilterOption = (direction = 1) => {
+    if (diffFilterFocus === 'mode') {
+      setDiffSearchMode((current) => cycleValue(SEARCH_MODES, current, direction));
+    }
+
+    if (diffFilterFocus === 'words') {
+      setDiffWordMatchMode((current) => cycleValue(WORD_MATCH_MODES, current, direction));
+    }
+
+    if (diffFilterFocus === 'case') {
+      setDiffMatchCase((current) => !current);
+    }
+  };
+
+  const clearDiffFilter = () => {
+    setDiffFilterFocus('query');
+    setDiffFilterQuery('');
+    setDiffSearchMode('words');
+    setDiffWordMatchMode('and');
+    setDiffMatchCase(false);
   };
 
   const attachResendMetadata = (logEntry, metadata) => {
@@ -1019,6 +1372,7 @@ export function App({
     }
 
     setIsRequestActivityOpen(false);
+    setIsDiffOpen(false);
     setPendingExport({
       action,
       log: exportLog,
@@ -1112,6 +1466,7 @@ export function App({
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
+    setIsDiffOpen(false);
   };
 
   const openComposerLibrary = () => {
@@ -1134,6 +1489,7 @@ export function App({
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
+    setIsDiffOpen(false);
   };
 
   const openNextPageComposer = () => {
@@ -1193,6 +1549,7 @@ export function App({
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
+    setIsDiffOpen(false);
   };
 
   const sendNextPageNow = () => {
@@ -1261,6 +1618,7 @@ export function App({
     setIsDetailModalOpen(false);
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
+    setIsDiffOpen(false);
 
     Promise.resolve()
       .then(() => manualRequestSender({
@@ -1359,6 +1717,7 @@ export function App({
       setIsHelpOpen(false);
       setIsListDisplayOpen(false);
       setIsRequestActivityOpen(false);
+      setIsDiffOpen(false);
       return;
     }
 
@@ -1397,6 +1756,7 @@ export function App({
     setIsHelpOpen(false);
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
+    setIsDiffOpen(false);
   };
 
   const cancelResend = () => {
@@ -1532,14 +1892,19 @@ export function App({
     frameworkSummary,
     historyStatus,
     hideFrameworkAssets,
+    matchCase,
     clinspectSentLogIds,
+    diffBaseLogId,
+    diffCandidateLogIds,
     listDisplay: trafficListDisplay,
     marginRight: paneLayout.showTrafficPane && paneLayout.showDetailPane ? paneLayout.gapWidth : 0,
     methodFilters,
     paneWidth: paneLayout.trafficPaneWidth,
     searchField,
+    searchMode,
     statusFilters,
-    searchQuery
+    searchQuery,
+    wordMatchMode
   });
 
   const detailPaneNode = h(DetailPane, {
@@ -1564,6 +1929,41 @@ export function App({
     keyBindings,
     selectedId: selectedRequestActivityId
   });
+  const requestDiffNode = h(RequestDiffModal, {
+    diff: requestDiff,
+    focusedRow: focusedDiffIndex,
+    isValueOpen: isDiffValueOpen,
+    keyBindings,
+    layoutMode: diffLayoutMode,
+    rows: filteredRequestDiffRows,
+    scrollOffset: diffScrollOffset,
+    valueScrollOffset: diffValueScrollOffset,
+    visibleCount: diffVisibleCount
+  });
+  const footerNode = h(Footer, {
+    commandStatus: footerCommandStatus,
+    exportStatus,
+    keyBindings,
+    resendStatus,
+    isComposerConfirmOpen: composer.isConfirmOpen,
+    isComposerOpen: composer.isOpen,
+    isComposerTextFocused: getFocusedComposerDescriptor(composer)?.kind === 'text',
+    isCommandOpen: commandState.isOpen,
+    isDiffOpen,
+    isDetailModalOpen,
+    isDetailSearchActive: detailSearchQuery.trim().length > 0,
+    isExportPromptOpen: Boolean(pendingExport),
+    hasDiffBase: Boolean(diffBaseLogId),
+    isHelpOpen,
+    hideFrameworkAssets,
+    isLiveMode,
+    isListDisplayOpen,
+    isRequestActivityOpen,
+    isListFocused: isDetailModalOpen ? false : isListFocused,
+    isRawModeSupported,
+    isReplayMode,
+    recordingStatus
+  });
 
   return h(
     Box,
@@ -1575,10 +1975,14 @@ export function App({
     isRawModeSupported
       ? h(KeyboardControls, {
         filterFocus,
+        diffFilterFocus,
         isListFocused,
         isHelpOpen,
         isListDisplayOpen,
         isRequestActivityOpen,
+        isDiffOpen,
+        isDiffFilterOpen,
+        isDiffValueOpen,
         isFilterOpen,
         isDetailSearchOpen,
         isDetailModalOpen,
@@ -1595,6 +1999,8 @@ export function App({
         isComposerLibraryOpen: composer.isLibraryOpen,
         isComposerTextFocused: getFocusedComposerDescriptor(composer)?.kind === 'text',
         keyBindings,
+        diffPageSize: diffVisibleCount,
+        diffValuePageSize: diffVisibleCount,
         detailPageSize: activeDetailVisibleCount,
         showTrafficPane: paneLayout.showTrafficPane,
         trafficPaneWidth,
@@ -1615,6 +2021,9 @@ export function App({
         },
         onBackspaceCommandText: backspaceCommandText,
         onBackspaceComposerText: () => setComposer(backspaceComposerText),
+        onBackspaceDiffFilter: () => {
+          setDiffFilterQuery((current) => current.slice(0, -1));
+        },
         onBackspaceSearch: () => {
           setSearchQuery((current) => current.slice(0, -1));
           setIsFollowingLatest(false);
@@ -1622,8 +2031,11 @@ export function App({
         onCancelExport: cancelTrafficExport,
         onCancelResend: cancelResend,
         onClearFilters: clearFilters,
+        onClearDiffFilter: clearDiffFilter,
+        onClearDiffBase: clearDiffBase,
         onClearLogs: clearLogs,
         onCloseDetailModal: () => setIsDetailModalOpen(false),
+        onCloseDiff: closeDiff,
         onCloseRequestActivity: () => setIsRequestActivityOpen(false),
         onCloseComposer: () => {
           setComposer((current) => ({
@@ -1642,6 +2054,7 @@ export function App({
           }));
         },
         onCloseCommandPrompt: closeCommandPrompt,
+        onCloseDiffValue: closeDiffValue,
         onCloseComposerLibrary: () => {
           setComposer((current) => ({
             ...current,
@@ -1659,6 +2072,7 @@ export function App({
         onCycleComposerFocus: (direction) => setComposer((current) => moveComposerFocus(current, direction)),
         onCycleComposerTab: (direction) => setComposer((current) => cycleComposerTab(current, direction)),
         onCycleCommandSuggestion: cycleCommandSuggestion,
+        onCycleDiffFilterFocus: cycleDiffFilterFocus,
         onCycleListDisplayOption: cycleFocusedListDisplayOption,
         onCyclePaneWidthMode: cyclePaneWidth,
         onCycleTrafficDensity: (direction) => setTrafficListDisplay((current) => cycleTrafficDensity(current, direction)),
@@ -1671,10 +2085,14 @@ export function App({
         },
         onFinishExport: finishTrafficExport,
         onFinishDetailSearch: () => setIsDetailSearchOpen(false),
+        onFinishDiffFilter: () => setIsDiffFilterOpen(false),
         onFinishSearch: () => setIsFilterOpen(false),
         onQuit,
         onEditPendingResend: editPendingResend,
         onInsertComposerText: (value) => setComposer((current) => insertComposerText(current, value)),
+        onAppendDiffFilter: (value) => {
+          setDiffFilterQuery((current) => `${current}${value}`);
+        },
         onLoadComposerLibraryRequest: loadComposerLibraryRequest,
         onToggleFocus: () => setIsListFocused((current) => {
           if (!paneLayout.showDetailPane) {
@@ -1690,6 +2108,18 @@ export function App({
         onMoveFilterOption: (direction) => {
           if (filterFocus === 'field') {
             setSearchField((current) => cycleValue(SEARCH_FIELDS, current, direction));
+          }
+
+          if (filterFocus === 'mode') {
+            setSearchMode((current) => cycleValue(SEARCH_MODES, current, direction));
+          }
+
+          if (filterFocus === 'words') {
+            setWordMatchMode((current) => cycleValue(WORD_MATCH_MODES, current, direction));
+          }
+
+          if (filterFocus === 'case') {
+            setMatchCase((current) => !current);
           }
 
           if (filterFocus === 'method') {
@@ -1720,6 +2150,11 @@ export function App({
           });
         },
         onMoveDetailMatch: moveDetailMatch,
+        onMoveDiffFilterOption: moveDiffFilterOption,
+        onMoveDiffFocus: moveDiffFocus,
+        onMoveDiffFocusTo: moveDiffFocusTo,
+        onMoveDiffValueScroll: moveDiffValueScroll,
+        onMoveDiffValueScrollTo: moveDiffValueScrollTo,
         onMoveSelection: (direction) => {
           setIsFollowingLatest(false);
           setSelectedLogId((currentId) => moveSelectedLogId(filteredLogs, currentId, direction));
@@ -1734,6 +2169,7 @@ export function App({
           setIsDetailSearchOpen(false);
           setIsListDisplayOpen(false);
           setIsRequestActivityOpen(false);
+          setIsDiffOpen(false);
           setIsFollowingLatest(false);
         },
         onOpenDetailModal: () => {
@@ -1743,6 +2179,7 @@ export function App({
             setIsFilterOpen(false);
             setIsListDisplayOpen(false);
             setIsRequestActivityOpen(false);
+            setIsDiffOpen(false);
           }
         },
         onOpenDetailSearch: () => {
@@ -1750,6 +2187,7 @@ export function App({
           setIsFilterOpen(false);
           setIsListDisplayOpen(false);
           setIsRequestActivityOpen(false);
+          setIsDiffOpen(false);
           setIsListFocused(false);
         },
         onOpenComposer: openComposer,
@@ -1770,12 +2208,19 @@ export function App({
         },
         onOpenComposerLibrary: openComposerLibrary,
         onOpenCommandPrompt: openCommandPrompt,
+        onOpenDiff: openDiff,
+        onOpenDiffFilter: () => {
+          setIsDiffFilterOpen(true);
+          setDiffFilterFocus('query');
+        },
+        onOpenDiffValue: openDiffValue,
         onOpenHelp: () => {
           setIsRequestActivityOpen(false);
           setIsHelpOpen(true);
         },
         onOpenListDisplay: openListDisplay,
         onInspectRequestActivity: inspectRequestActivity,
+        onMarkDiffBase: markDiffBase,
         onPreviewComposerSend: () => {
           setComposer((current) => ({
             ...current,
@@ -1829,6 +2274,18 @@ export function App({
             setSearchField((current) => cycleValue(SEARCH_FIELDS, current));
           }
 
+          if (filterFocus === 'mode') {
+            setSearchMode((current) => cycleValue(SEARCH_MODES, current));
+          }
+
+          if (filterFocus === 'words') {
+            setWordMatchMode((current) => cycleValue(WORD_MATCH_MODES, current));
+          }
+
+          if (filterFocus === 'case') {
+            setMatchCase((current) => !current);
+          }
+
           if (filterFocus === 'method') {
             const value = ['all', ...METHOD_OPTIONS][methodOptionIndex];
             setMethodFilters((current) => toggleFilterValue(current, value, METHOD_OPTIONS));
@@ -1853,6 +2310,8 @@ export function App({
           }));
         },
         onToggleDetailNode: toggleFocusedDetailNode,
+        onToggleDiffLayout: toggleDiffLayout,
+        onToggleDiffFilterOption: () => moveDiffFilterOption(1),
         onToggleFrameworkAssets: toggleFrameworkAssets,
         onTogglePause: toggleCapturePause,
         onToggleRecordingPause: toggleRecordingPause
@@ -1883,12 +2342,14 @@ export function App({
           keyBindings
         })
         : (isListDisplayOpen
-          ? h(ListDisplayModal, {
+        ? h(ListDisplayModal, {
             focusIndex: listDisplayFocusIndex,
             hideFrameworkAssets,
             keyBindings,
             listDisplay: trafficListDisplay
           })
+        : (isDiffOpen
+          ? requestDiffNode
         : (isRequestActivityOpen
           ? requestActivityNode
         : (composer.isOpen
@@ -1910,21 +2371,45 @@ export function App({
             scrollOffset: detailScrollOffset,
             visibleCount: detailModalVisibleCount
           })
-          : paneNodes)))))
+          : paneNodes))))))
     ),
     h(ToastNotification, { toast }),
-    isFilterOpen
+    isDiffOpen && !commandState.isOpen && !isHelpOpen && !isListDisplayOpen
+      ? (isDiffFilterVisible
+        ? h(
+          Box,
+          {
+            flexDirection: 'column',
+            height: getRequestDiffFilterBoxHeight()
+          },
+          h(DiffFilterBar, {
+            filterFocus: diffFilterFocus,
+            filterQuery: diffFilterQuery,
+            isFilterOpen: isDiffFilterOpen,
+            keyBindings,
+            matchCase: diffMatchCase,
+            rows: filteredRequestDiffRows,
+            searchMode: diffSearchMode,
+            totalRows: requestDiffRows,
+            wordMatchMode: diffWordMatchMode
+          })
+        )
+        : footerNode)
+      : (isFilterOpen
         ? h(FilterBar, {
         filterFocus,
         historyStatus,
         keyBindings,
         logsCount: logs.length,
+        matchCase,
         methodFilters,
         methodOptionIndex,
         searchField,
+        searchMode,
         searchQuery,
         statusFilters,
         statusOptionIndex,
+        wordMatchMode,
         visibleCount: filteredLogs.length
       })
         : (pendingResend
@@ -1940,27 +2425,6 @@ export function App({
           matchCount: detailMatches.length,
           query: detailSearchQuery
         })
-          : h(Footer, {
-          commandStatus: commandState.status || keyBindingStatus,
-          exportStatus,
-          keyBindings,
-          resendStatus,
-          isComposerConfirmOpen: composer.isConfirmOpen,
-          isComposerOpen: composer.isOpen,
-          isComposerTextFocused: getFocusedComposerDescriptor(composer)?.kind === 'text',
-          isCommandOpen: commandState.isOpen,
-          isDetailModalOpen,
-          isDetailSearchActive: detailSearchQuery.trim().length > 0,
-          isExportPromptOpen: Boolean(pendingExport),
-          isHelpOpen,
-          hideFrameworkAssets,
-          isLiveMode,
-          isListDisplayOpen,
-          isRequestActivityOpen,
-          isListFocused: isDetailModalOpen ? false : isListFocused,
-          isRawModeSupported,
-          isReplayMode,
-          recordingStatus
-        })))
+          : footerNode)))
   );
 }

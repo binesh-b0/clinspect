@@ -8,6 +8,7 @@ import {
   clampDetailRowIndex,
   clampScrollOffset,
   COMMAND_DEFINITIONS,
+  createRequestDiff,
   createBlankComposerState,
   createComposerStateFromLog,
   createNextPageRequestDraftFromLog,
@@ -22,6 +23,7 @@ import {
   extractPortFromHost,
   findDetailMatches,
   filterLogs,
+  filterRequestDiffRows,
   formatCommandSelectionStatus,
   formatFrameworkDetectionLabel,
   formatPaginationNextStatus,
@@ -34,6 +36,9 @@ import {
   formatTrafficHeader,
   formatTrafficRow,
   HELP_SECTIONS,
+  getDiffCandidateLogIds,
+  getDiffEndpointShape,
+  getRequestDiffRows,
   getBoundaryLogId,
   getCommandHelpRows,
   getCommandHintForKey,
@@ -53,6 +58,7 @@ import {
   getPageStep,
   getPaneLayout,
   getRenderHeight,
+  getSearchQueryWarning,
   getScrollOffsetForFocusedRow,
   getTrafficPaneWidth,
   getTrafficRowWidth,
@@ -61,9 +67,11 @@ import {
   getSelectedIndex,
   getSearchValues,
   getTrafficVisibleCount,
+  matchesSearchValues,
   moveSelectedLogId,
   normalizeKeyBindings,
   normalizeTrafficListDisplay,
+  parseSearchTerms,
   parseQueryParameters,
   createRequestActivity,
   failRequestActivity,
@@ -78,9 +86,91 @@ import {
   toggleFilterValue
 } from '../src/ui/App.js';
 import { CommandModal } from '../src/ui/chrome.js';
+import {
+  DiffFilterBar,
+  RequestDiffModal,
+  clampRequestDiffValueScrollOffset,
+  getRequestDiffFocusedExpansionLines,
+  getRequestDiffHeaderText,
+  getRequestDiffBottomControlHeight,
+  getRequestDiffFrameWidth,
+  getRequestDiffFilterBoxHeight,
+  getRequestDiffFilterBoxLines,
+  getRequestDiffPositionLabel,
+  getRequestDiffSideBySideColumns,
+  getRequestDiffValueLines,
+  getRequestDiffValueScrollLabel,
+  getRequestDiffVisibleCount,
+  getRequestDiffVisibleStart,
+  isRequestDiffStackedLayout,
+  shouldShowRequestDiffFilterBar
+} from '../src/ui/request-diff.js';
 
 function getTestKeyBindings(overrides = {}) {
   return normalizeKeyBindings({ keyBindings: overrides }).bindings;
+}
+
+function createDiffLog(overrides = {}) {
+  return {
+    id: overrides.id ?? 'log',
+    method: overrides.method ?? 'GET',
+    path: overrides.path ?? '/',
+    responseTimeMs: overrides.responseTimeMs ?? 0,
+    statusCode: overrides.statusCode ?? 200,
+    request: {
+      body: '',
+      headers: {},
+      truncated: false,
+      ...(overrides.request ?? {})
+    },
+    response: {
+      body: '',
+      headers: {},
+      truncated: false,
+      ...(overrides.response ?? {})
+    }
+  };
+}
+
+function getDiffChangeRows(left, right, options) {
+  return getRequestDiffRows(createRequestDiff(left, right, options))
+    .filter((row) => row.type === 'change' || row.type === 'warning');
+}
+
+function asArray(value) {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  return Array.isArray(value) ? value : [value];
+}
+
+function getRequestDiffModalRowAreaChildren(node) {
+  const modal = asArray(node.props.children)[0];
+  const modalChildren = asArray(modal.props.children);
+
+  return modalChildren.slice(6);
+}
+
+function getRenderedLineCount(node) {
+  const children = asArray(node?.props?.children);
+
+  return String(node?.key ?? '').endsWith(':expanded') && children.length > 0
+    ? children.length
+    : 1;
+}
+
+function getRequestDiffModalRowAreaLineCount(node) {
+  return getRequestDiffModalRowAreaChildren(node)
+    .reduce((count, child) => count + getRenderedLineCount(child), 0);
+}
+
+function getNodeText(node) {
+  if (typeof node === 'string') {
+    return node;
+  }
+
+  return asArray(node?.props?.children).map(getNodeText).join('');
 }
 
 const logs = [
@@ -300,6 +390,10 @@ test('traffic list display helpers format path modes and density presets', () =>
   assert.equal(formatTrafficRow(log, false, full, undefined, { isClinspectSent: true }).startsWith('* '), true);
   assert.equal(formatTrafficRow(log, false, full, undefined, { isClinspectSent: true }).length, 45);
   assert.equal(formatTrafficRow(log, true, full, undefined, { isClinspectSent: true }).startsWith('> '), true);
+  assert.equal(formatTrafficRow(log, false, full, undefined, { isDiffBase: true }).startsWith('m1 '), true);
+  assert.equal(formatTrafficRow(log, true, full, undefined, { isDiffBase: true }).startsWith('m1 '), true);
+  assert.equal(formatTrafficRow(log, false, full, undefined, { isDiffCandidate: true }).startsWith('sim '), true);
+  assert.equal(formatTrafficRow(log, true, full, undefined, { isDiffCandidate: true }).startsWith('sim '), true);
   assert.equal(formatTrafficHeader(full, wideRowWidth).length, wideRowWidth);
   assert.equal(formatTrafficRow(log, true, full, wideRowWidth).length, wideRowWidth);
   assert.equal(formatTrafficRow(log, false, compact).includes('GET'), true);
@@ -307,6 +401,622 @@ test('traffic list display helpers format path modes and density presets', () =>
   assert.equal(formatTrafficRow(log, false, pathOnly).includes('GET'), false);
   assert.equal(formatTrafficRow(log, false, pathOnly).includes('200'), false);
   assert.equal(formatFilterLabel([], [], 'all', '', { clinspectSentCount: 2 }), 'cli sent marked *');
+  assert.equal(formatFilterLabel([], [], 'all', '', { diffCandidateCount: 2 }), 'sim matches m1');
+});
+
+test('request diff compares request metadata, query params, headers, and status', () => {
+  const left = createDiffLog({
+    id: 'left',
+    method: 'GET',
+    path: '/api/users?page=1&sort=name',
+    responseTimeMs: 12,
+    statusCode: 200,
+    request: {
+      headers: {
+        Cookie: 'sid=left-secret; theme=dark',
+        'X-Trace': 'one'
+      }
+    },
+    response: {
+      headers: {
+        'Content-Type': 'application/json'
+      }
+    }
+  });
+  const right = createDiffLog({
+    id: 'right',
+    method: 'POST',
+    path: '/api/users?page=2&filter=active',
+    responseTimeMs: 99,
+    statusCode: 500,
+    request: {
+      headers: {
+        cookie: 'sid=right-secret; theme=dark',
+        'x-trace': 'two'
+      }
+    },
+    response: {
+      headers: {
+        'content-type': 'application/problem+json'
+      }
+    }
+  });
+  const diff = createRequestDiff(left, right);
+  const rows = getRequestDiffRows(diff);
+  const changes = rows.filter((row) => row.type === 'change');
+
+  assert.equal(diff.changeCount, changes.length);
+  assert.deepEqual(changes.find((row) => row.label === 'method').leftValue, 'GET');
+  assert.deepEqual(changes.find((row) => row.label === 'method').rightValue, 'POST');
+  assert.deepEqual(changes.find((row) => row.label === 'page').leftValue, '1');
+  assert.deepEqual(changes.find((row) => row.label === 'page').rightValue, '2');
+  assert.equal(changes.find((row) => row.label === 'sort').kind, 'removed');
+  assert.equal(changes.find((row) => row.label === 'filter').kind, 'added');
+  assert.deepEqual(changes.find((row) => row.label === 'x-trace').rightValue, 'two');
+  assert.deepEqual(changes.find((row) => row.label === 'status').rightValue, '500');
+  assert.equal(changes.some((row) => row.label === 'responseTimeMs'), false);
+  assert.equal(JSON.stringify(rows).includes('right-secret'), false);
+
+  const rawRows = getDiffChangeRows(left, right, { showCookieValues: true });
+  const cookieRow = rawRows.find((row) => row.label === 'cookie');
+
+  assert.equal(cookieRow.kind, 'changed');
+  assert.equal(cookieRow.leftValue.includes('left-secret'), true);
+  assert.equal(cookieRow.rightValue.includes('right-secret'), true);
+});
+
+test('request diff compares JSON body fields with nested paths and array indexes', () => {
+  const left = createDiffLog({
+    request: {
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        active: true,
+        user: {
+          email: 'old@example.com',
+          roles: ['user', 'beta']
+        }
+      })
+    },
+    response: {
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ok: true, count: 1 })
+    }
+  });
+  const right = createDiffLog({
+    request: {
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        user: {
+          email: 'new@example.com',
+          name: 'Ada',
+          roles: ['user', 'admin']
+        }
+      })
+    },
+    response: {
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ok: false, count: 1, error: 'denied' })
+    }
+  });
+  const rows = getDiffChangeRows(left, right);
+
+  assert.equal(rows.find((row) => row.label === '$.active').kind, 'removed');
+  assert.deepEqual(rows.find((row) => row.label === '$.user.email').leftValue, '"old@example.com"');
+  assert.deepEqual(rows.find((row) => row.label === '$.user.email').rightValue, '"new@example.com"');
+  assert.equal(rows.find((row) => row.label === '$.user.name').kind, 'added');
+  assert.deepEqual(rows.find((row) => row.label === '$.user.roles[1]').rightValue, '"admin"');
+  assert.deepEqual(rows.find((row) => row.label === '$.ok').rightValue, 'false');
+  assert.equal(rows.find((row) => row.label === '$.error').kind, 'added');
+});
+
+test('request diff compares URL-encoded form bodies by field', () => {
+  const left = createDiffLog({
+    request: {
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'token=abc&enabled=true'
+    }
+  });
+  const right = createDiffLog({
+    request: {
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'token=xyz&extra=1'
+    }
+  });
+  const rows = getDiffChangeRows(left, right);
+
+  assert.deepEqual(rows.find((row) => row.label === 'form.token').leftValue, '"abc"');
+  assert.deepEqual(rows.find((row) => row.label === 'form.token').rightValue, '"xyz"');
+  assert.equal(rows.find((row) => row.label === 'form.enabled').kind, 'removed');
+  assert.equal(rows.find((row) => row.label === 'form.extra').kind, 'added');
+});
+
+test('request diff uses honest summaries for text, binary, compressed, and truncated bodies', () => {
+  const textLeft = createDiffLog({
+    request: {
+      body: 'hello world',
+      headers: { 'content-type': 'text/plain' },
+      truncated: true
+    },
+    response: {
+      body: 'abc',
+      headers: { 'content-type': 'image/png' }
+    }
+  });
+  const textRight = createDiffLog({
+    request: {
+      body: 'hello there',
+      headers: { 'content-type': 'text/plain' }
+    },
+    response: {
+      body: 'def',
+      headers: { 'content-type': 'image/png' }
+    }
+  });
+  const rows = getDiffChangeRows(textLeft, textRight);
+
+  assert.equal(rows.find((row) => row.type === 'warning').label, 'partial diff');
+  assert.deepEqual(rows.find((row) => row.label === 'body summary').leftValue, 'hello world');
+  assert.equal(rows.some((row) => row.rightValue.includes('binary body not compared: image/png')), true);
+
+  const longHtml = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>readable full body</body></html>'.repeat(6);
+  const longRows = getDiffChangeRows(
+    createDiffLog({
+      response: {
+        body: longHtml,
+        headers: { 'content-type': 'text/html' }
+      }
+    }),
+    createDiffLog({
+      response: {
+        body: '{"user":null}',
+        headers: { 'content-type': 'application/json' }
+      }
+    })
+  );
+  const longBodySummary = longRows.find((row) => row.label === 'body summary');
+
+  assert.equal(longBodySummary.leftValue.endsWith('...'), true);
+  assert.equal(longBodySummary.fullLeftValue, longHtml);
+  assert.equal(getRequestDiffValueLines(longBodySummary, 40).some((line) => line.text.includes('...')), false);
+
+  const compressedRows = getDiffChangeRows(
+    createDiffLog({
+      request: {
+        body: 'compressed-a',
+        headers: { 'content-encoding': 'gzip', 'content-type': 'application/json' }
+      }
+    }),
+    createDiffLog({
+      request: {
+        body: 'compressed-b',
+        headers: { 'content-encoding': 'gzip', 'content-type': 'application/json' }
+      }
+    })
+  );
+
+  assert.equal(compressedRows.some((row) => row.leftValue.includes('compressed body not compared: gzip')), true);
+});
+
+test('request diff layout helper stacks rows on narrow terminals', () => {
+  assert.equal(isRequestDiffStackedLayout(80), true);
+  assert.equal(isRequestDiffStackedLayout(120), false);
+  assert.equal(isRequestDiffStackedLayout(80, 'side-by-side'), false);
+  assert.equal(isRequestDiffStackedLayout(120, 'stacked'), true);
+  assert.equal(isRequestDiffStackedLayout(80, 'unknown'), true);
+  assert.equal(getRequestDiffVisibleCount(undefined, 30), 15);
+  assert.equal(getRequestDiffFrameWidth(80), 76);
+  assert.equal(getRequestDiffFrameWidth(190), 186);
+});
+
+test('request diff modal helpers constrain side-by-side rows and expose position labels', () => {
+  const columns = getRequestDiffSideBySideColumns(34);
+
+  assert.equal(columns.totalWidth, 34);
+  assert.equal(columns.labelWidth + columns.leftWidth + columns.separatorWidth + columns.rightWidth, 34);
+
+  const rows = [
+    { id: 'section', isFocusable: false, type: 'section' },
+    { id: 'first', isFocusable: true, type: 'change' },
+    { id: 'second', isFocusable: true, type: 'change' }
+  ];
+
+  assert.equal(getRequestDiffPositionLabel(rows, 1), 'item 1/2');
+  assert.equal(getRequestDiffPositionLabel(rows, 2), 'item 2/2');
+  assert.equal(getRequestDiffPositionLabel([], 0), 'item 0/0');
+  assert.equal(
+    getRequestDiffHeaderText({ changeCount: 1299 }, rows, 2, 'side-by-side'),
+    'Request diff (experimental) | 1299 changes | item 2/2 | side-by-side layout'
+  );
+  assert.equal(
+    getRequestDiffHeaderText({ changeCount: 1299 }, rows, 2, 'side-by-side', { filterQuery: 'price' }),
+    'Request diff (experimental) | 1299 changes | item 2/2 | side-by-side layout'
+  );
+});
+
+test('request diff modal preserves row area height while filtering', () => {
+  const visibleCount = 6;
+  const createChangeRow = (index) => ({
+    id: `row-${index}`,
+    isFocusable: true,
+    label: `field-${index}`,
+    leftValue: `left-${index}`,
+    rightValue: `right-${index}`,
+    type: 'change'
+  });
+  const fullRows = Array.from({ length: 8 }, (_, index) => createChangeRow(index));
+  const noMatchRows = [{
+    id: 'diff-filter-empty',
+    isFocusable: false,
+    text: 'no diff matches for "aa"',
+    type: 'empty'
+  }];
+  const fullModal = RequestDiffModal.type({
+    diff: { changeCount: 8, leftSummary: 'GET /a', rightSummary: 'GET /b' },
+    layoutMode: 'side-by-side',
+    rows: fullRows,
+    visibleCount
+  });
+  const noMatchModal = RequestDiffModal.type({
+    diff: { changeCount: 8, leftSummary: 'GET /a', rightSummary: 'GET /b' },
+    layoutMode: 'side-by-side',
+    rows: noMatchRows,
+    visibleCount
+  });
+  const sparseModal = RequestDiffModal.type({
+    diff: { changeCount: 1, leftSummary: 'GET /a', rightSummary: 'GET /b' },
+    layoutMode: 'side-by-side',
+    rows: [createChangeRow(0)],
+    visibleCount
+  });
+  const sparseBodyChildren = getRequestDiffModalRowAreaChildren(sparseModal);
+  const sparseFillerRows = sparseBodyChildren
+    .filter((child) => String(child.key ?? '').startsWith('diff-filler:'));
+  const lastSparseChild = sparseBodyChildren[sparseBodyChildren.length - 1];
+
+  assert.equal(getRequestDiffModalRowAreaLineCount(fullModal), visibleCount);
+  assert.equal(getRequestDiffModalRowAreaLineCount(noMatchModal), visibleCount);
+  assert.equal(getRequestDiffModalRowAreaLineCount(sparseModal), visibleCount);
+  assert.equal(sparseFillerRows.length, visibleCount - 1);
+  assert.equal(String(lastSparseChild.key ?? '').startsWith('diff-filler:'), true);
+});
+
+test('request diff focused rows keep semantic value colors', () => {
+  const rows = [{
+    id: 'row-0',
+    isFocusable: true,
+    kind: 'removed',
+    label: 'cache-control',
+    leftValue: 'max-age=0',
+    rightValue: '(missing)',
+    type: 'change'
+  }];
+  const sideBySideModal = RequestDiffModal.type({
+    diff: { changeCount: 1, leftSummary: 'GET /a', rightSummary: 'GET /b' },
+    focusedRow: 0,
+    layoutMode: 'side-by-side',
+    rows,
+    visibleCount: 2
+  });
+  const sideBySideRow = getRequestDiffModalRowAreaChildren(sideBySideModal)
+    .find((child) => child.key === 'row-0');
+  const [labelCell, leftCell, separatorCell, rightCell] = asArray(sideBySideRow.props.children)
+    .map((cell) => asArray(cell.props.children)[0]);
+
+  assert.equal(sideBySideRow.props.backgroundColor, undefined);
+  assert.equal(labelCell.props.bold, true);
+  assert.equal(labelCell.props.color, 'cyan');
+  assert.equal(leftCell.props.color, 'red');
+  assert.equal(separatorCell.props.color, 'gray');
+  assert.equal(rightCell.props.color, 'gray');
+
+  const stackedModal = RequestDiffModal.type({
+    diff: { changeCount: 1, leftSummary: 'GET /a', rightSummary: 'GET /b' },
+    focusedRow: 0,
+    layoutMode: 'stacked',
+    rows,
+    visibleCount: 2
+  });
+  const stackedRow = getRequestDiffModalRowAreaChildren(stackedModal)
+    .find((child) => child.key === 'row-0');
+  const [stackedLabel, stackedLeft, stackedRight] = asArray(stackedRow.props.children);
+
+  assert.equal(stackedRow.props.backgroundColor, undefined);
+  assert.equal(stackedLabel.props.bold, true);
+  assert.equal(stackedLabel.props.color, 'cyan');
+  assert.equal(stackedLeft.props.color, 'red');
+  assert.equal(stackedRight.props.color, 'gray');
+});
+
+test('request diff filter bar helpers hide idle empty state and keep fixed active states', () => {
+  const totalRows = [
+    { id: 'section', isFocusable: false, type: 'section' },
+    { id: 'first', isFocusable: true, type: 'change' },
+    { id: 'second', isFocusable: true, type: 'change' },
+    { id: 'third', isFocusable: true, type: 'warning' }
+  ];
+  const filteredRows = [
+    { id: 'section', isFocusable: false, type: 'section' },
+    { id: 'second', isFocusable: true, type: 'change' }
+  ];
+
+  assert.equal(shouldShowRequestDiffFilterBar({
+    filterQuery: '',
+    isFilterOpen: false
+  }), false);
+  assert.equal(shouldShowRequestDiffFilterBar({
+    filterQuery: '   ',
+    isFilterOpen: false
+  }), false);
+  assert.equal(shouldShowRequestDiffFilterBar({
+    filterQuery: '',
+    isFilterOpen: true
+  }), true);
+  assert.equal(shouldShowRequestDiffFilterBar({
+    filterQuery: 'price',
+    isFilterOpen: false
+  }), true);
+  assert.equal(getRequestDiffBottomControlHeight({
+    filterQuery: '',
+    isFilterOpen: false
+  }), 0);
+  assert.equal(getRequestDiffBottomControlHeight({
+    filterQuery: '',
+    isFilterOpen: true
+  }), getRequestDiffFilterBoxHeight());
+  assert.equal(getRequestDiffBottomControlHeight({
+    filterQuery: 'price',
+    isFilterOpen: false
+  }), getRequestDiffFilterBoxHeight());
+  assert.deepEqual(getRequestDiffFilterBoxLines({
+    filterQuery: 'price',
+    filterFocus: 'mode',
+    isFilterOpen: true,
+    rows: filteredRows,
+    totalRows
+  }), [
+    'Diff filter | matches 1/3',
+    '  query price_',
+    '> mode [words] pattern',
+    '  words [and] or',
+    '  case [ignore] match',
+    'tab/down row  left/right/space change  enter/esc close  x clear'
+  ]);
+  assert.deepEqual(getRequestDiffFilterBoxLines({
+    filterQuery: 'price',
+    isFilterOpen: false,
+    matchCase: true,
+    rows: filteredRows,
+    searchMode: 'pattern',
+    totalRows,
+    wordMatchMode: 'or'
+  }), [
+    'Diff filter | matches 1/3',
+    '  query "price"',
+    '  mode words [pattern]',
+    '  words and [or]',
+    '  case ignore [match]',
+    '/ edit filter'
+  ]);
+  assert.equal(getRequestDiffFilterBoxHeight({
+    filterQuery: 'price',
+    isFilterOpen: false,
+    rows: filteredRows,
+    totalRows
+  }), 8);
+  assert.equal(getRequestDiffFilterBoxHeight({
+    filterQuery: '',
+    isFilterOpen: false,
+    rows: totalRows,
+    totalRows
+  }), 8);
+  assert.match(getRequestDiffFilterBoxLines({
+    filterQuery: '[',
+    isFilterOpen: true,
+    rows: [],
+    searchMode: 'pattern',
+    totalRows
+  }).join('\n'), /invalid pattern:/);
+
+  const constrainedLines = getRequestDiffFilterBoxLines({
+    filterQuery: 'very-long-filter-query-value',
+    isFilterOpen: true,
+    rows: filteredRows,
+    totalRows,
+    width: 18
+  });
+
+  assert.equal(constrainedLines.every((line) => line.length <= 18), true);
+  assert.match(constrainedLines[1], /\.\.\.$/);
+  assert.equal(DiffFilterBar.type({
+    filterQuery: '',
+    isFilterOpen: true,
+    rows: filteredRows,
+    totalRows
+  }).props.alignItems, 'flex-start');
+  assert.doesNotThrow(() => {
+    DiffFilterBar.type({
+      filterQuery: '[',
+      isFilterOpen: true,
+      rows: filteredRows,
+      searchMode: 'pattern',
+      totalRows
+    });
+  });
+  assert.doesNotThrow(() => {
+    RequestDiffModal.type({
+      diff: { changeCount: 2 },
+      filterQuery: '[',
+      isFilterOpen: true,
+      rows: filteredRows,
+      totalRows,
+      visibleCount: 4
+    });
+  });
+});
+
+test('request diff row filter narrows rows by field, values, and section title', () => {
+  const rows = [
+    { id: 'request:section', isFocusable: false, text: 'Request (1)', title: 'Request', type: 'section' },
+    { id: 'request:method', groupId: 'request', isFocusable: true, label: 'method', leftValue: 'GET', rightValue: 'POST', text: 'method: GET -> POST', type: 'change' },
+    { id: 'body:section', isFocusable: false, text: 'Response Body (2)', title: 'Response Body', type: 'section' },
+    { id: 'body:price', groupId: 'responseBody', isFocusable: true, label: '$.price', leftValue: '12.99', rightValue: '13.99', text: '$.price: 12.99 -> 13.99', type: 'change' },
+    { id: 'body:name', groupId: 'responseBody', isFocusable: true, label: '$.name', leftValue: 'Burger', rightValue: 'Pizza', text: '$.name: Burger -> Pizza', type: 'change' }
+  ];
+
+  assert.deepEqual(filterRequestDiffRows(rows, '').map((row) => row.id), rows.map((row) => row.id));
+  assert.deepEqual(filterRequestDiffRows(rows, 'PRICE').map((row) => row.id), [
+    'body:section:filter',
+    'body:price'
+  ]);
+  assert.deepEqual(filterRequestDiffRows(rows, 'pizza').map((row) => row.id), [
+    'body:section:filter',
+    'body:name'
+  ]);
+  assert.deepEqual(filterRequestDiffRows(rows, 'response body').map((row) => row.id), [
+    'body:section:filter',
+    'body:price',
+    'body:name'
+  ]);
+  assert.deepEqual(filterRequestDiffRows(rows, 'price 13.99').map((row) => row.id), [
+    'body:section:filter',
+    'body:price'
+  ]);
+  assert.deepEqual(filterRequestDiffRows(rows, 'price method', { wordMatchMode: 'or' }).map((row) => row.id), [
+    'request:section:filter',
+    'request:method',
+    'body:section:filter',
+    'body:price'
+  ]);
+  assert.deepEqual(filterRequestDiffRows(rows, '"Response Body"').map((row) => row.id), [
+    'body:section:filter',
+    'body:price',
+    'body:name'
+  ]);
+  assert.deepEqual(filterRequestDiffRows(rows, 'PRICE', { matchCase: true }).map((row) => row.id), [
+    'diff-filter-empty'
+  ]);
+  assert.deepEqual(filterRequestDiffRows(rows, '^\\$\\.p', { searchMode: 'pattern' }).map((row) => row.id), [
+    'body:section:filter',
+    'body:price'
+  ]);
+  assert.deepEqual(filterRequestDiffRows(rows, '[', { searchMode: 'pattern' }).map((row) => row.id), [
+    'diff-filter-empty'
+  ]);
+  assert.deepEqual(filterRequestDiffRows(rows, 'missing')[0], {
+    id: 'diff-filter-empty',
+    isFocusable: false,
+    text: 'no diff matches for "missing"',
+    type: 'empty'
+  });
+});
+
+test('request diff focused expansion wraps full row text inside the modal width', () => {
+  const row = {
+    isFocusable: true,
+    label: '$.menu[3].products[18].description',
+    leftValue: '"A simple yet delicious serving of plain cassava with sauce"',
+    rightValue: '(missing)',
+    type: 'change'
+  };
+  const width = 24;
+  const lines = getRequestDiffFocusedExpansionLines(row, width);
+  const collect = (side) => lines
+    .filter((line) => line.side === side)
+    .map((line) => line.text.slice(side === 'field' ? 'field: '.length : `${side === 'left' ? 'A' : 'B'}: `.length))
+    .join('');
+
+  assert.equal(lines.every((line) => line.text.length <= width), true);
+  assert.equal(collect('field'), row.label);
+  assert.equal(collect('left'), row.leftValue);
+  assert.equal(collect('right'), row.rightValue);
+  assert.deepEqual(getRequestDiffFocusedExpansionLines({ isFocusable: false }, width), []);
+});
+
+test('request diff full-row reader wraps untruncated text and tracks scroll position', () => {
+  const row = {
+    id: 'row-0',
+    isFocusable: true,
+    label: '$.very.long.path',
+    leftValue: 'left value '.repeat(12),
+    rightValue: 'right value '.repeat(12),
+    type: 'change'
+  };
+  const width = 20;
+  const valueLines = getRequestDiffValueLines(row, width);
+  const collect = (side) => valueLines
+    .filter((line) => line.side === side)
+    .map((line) => line.text.slice(side === 'field' ? 'field: '.length : `${side === 'left' ? 'A' : 'B'}: `.length))
+    .join('');
+  const modal = RequestDiffModal.type({
+    diff: { changeCount: 1, leftSummary: 'GET /a', rightSummary: 'GET /b' },
+    focusedRow: 0,
+    isValueOpen: true,
+    rows: [row],
+    valueScrollOffset: 1,
+    visibleCount: 4
+  });
+  const bodyChildren = getRequestDiffModalRowAreaChildren(modal);
+  const bodyText = bodyChildren.map(getNodeText).join('\n');
+  const rows = Array.from({ length: 20 }, (_, index) => ({
+    id: `row-${index}`,
+    isFocusable: true,
+    type: 'change'
+  }));
+
+  assert.equal(valueLines.every((line) => line.text.length <= width), true);
+  assert.equal(collect('field'), row.label);
+  assert.equal(collect('left'), row.leftValue);
+  assert.equal(collect('right'), row.rightValue);
+  assert.equal(clampRequestDiffValueScrollOffset(valueLines, 999, 4), valueLines.length - 4);
+  assert.equal(getRequestDiffValueScrollLabel(valueLines, 1, 4), `line 2/${valueLines.length}`);
+  assert.equal(getRequestDiffModalRowAreaLineCount(modal), 4);
+  assert.equal(bodyText.includes('... more lines'), false);
+  assert.equal(getRequestDiffVisibleStart(rows, 18, 0, 5), 14);
+  assert.equal(getRequestDiffVisibleStart(rows, 2, 10, 5), 2);
+  assert.equal(getRequestDiffVisibleStart(rows, 12, 10, 5), 10);
+});
+
+test('request diff endpoint shape normalizes ids and ignores query strings', () => {
+  assert.equal(
+    getDiffEndpointShape(createDiffLog({ method: 'get', path: '/api/users/123?include=roles' })),
+    'GET /api/users/:id'
+  );
+  assert.equal(
+    getDiffEndpointShape(createDiffLog({ method: 'GET', path: '/api/users/550e8400-e29b-41d4-a716-446655440000' })),
+    'GET /api/users/:id'
+  );
+  assert.equal(
+    getDiffEndpointShape(createDiffLog({ method: 'GET', path: '/api/assets/0123456789abcdef01234567' })),
+    'GET /api/assets/:id'
+  );
+  assert.equal(
+    getDiffEndpointShape(createDiffLog({ method: 'POST', path: '/api/orders/ord_1234567890ab' })),
+    'POST /api/orders/:id'
+  );
+  assert.equal(
+    getDiffEndpointShape(createDiffLog({ method: 'GET', path: '/api/users/current' })),
+    'GET /api/users/current'
+  );
+});
+
+test('request diff candidate helper returns same method and endpoint shape from supplied logs', () => {
+  const base = createDiffLog({ id: 'base', method: 'GET', path: '/api/users/123?include=roles' });
+  const candidates = [
+    base,
+    createDiffLog({ id: 'same-shape', method: 'GET', path: '/api/users/456?include=posts' }),
+    createDiffLog({ id: 'same-path-different-method', method: 'POST', path: '/api/users/789' }),
+    createDiffLog({ id: 'different-shape', method: 'GET', path: '/api/users/current' }),
+    createDiffLog({ id: 'filtered-out', method: 'GET', path: '/api/users/999' })
+  ];
+
+  assert.deepEqual(
+    getDiffCandidateLogIds(base, candidates.slice(0, 4)),
+    ['same-shape']
+  );
+  assert.deepEqual(
+    getDiffCandidateLogIds(base, candidates),
+    ['same-shape', 'filtered-out']
+  );
 });
 
 test('detail scroll helper clamps page-wise scrolling', () => {
@@ -387,6 +1097,18 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
   assert.deepEqual(
     getKeyboardAction('D', {}, { isListFocused: false }),
     { type: 'startExport', action: 'download' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('a', {}, { isListFocused: true }),
+    { type: 'markDiffBase' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('u', {}, { isListFocused: true }),
+    { type: 'clearDiffBase' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('b', {}, { isListFocused: false }),
+    { type: 'openDiff' }
   );
   assert.deepEqual(
     getKeyboardAction('m', {}, { isExportPromptOpen: true }),
@@ -531,6 +1253,94 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(
     getKeyboardAction('', { return: true }, { isRequestActivityOpen: true }),
     { type: 'inspectRequestActivity' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('h', {}, { isDiffOpen: true }),
+    { type: 'openHelp' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('q', {}, { isDiffOpen: true }),
+    { type: 'closeDiff' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('j', {}, { isDiffOpen: true }),
+    { type: 'moveDiffFocus', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('N', {}, { isDiffOpen: true }),
+    { type: 'moveDiffFocus', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction(']', {}, { diffPageSize: 9, isDiffOpen: true }),
+    { type: 'moveDiffFocus', direction: 9 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('g', {}, { isDiffOpen: true }),
+    { type: 'moveDiffFocusTo', boundary: 'top' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('G', {}, { isDiffOpen: true }),
+    { type: 'moveDiffFocusTo', boundary: 'bottom' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('v', {}, { isDiffOpen: true }),
+    { type: 'toggleDiffLayout' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('/', {}, { isDiffOpen: true }),
+    { type: 'openDiffFilter' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('p', {}, { isDiffFilterOpen: true }),
+    { type: 'appendDiffFilter', value: 'p' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { tab: true }, { isDiffFilterOpen: true }),
+    { type: 'cycleDiffFilterFocus', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { downArrow: true }, { isDiffFilterOpen: true }),
+    { type: 'cycleDiffFilterFocus', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { upArrow: true }, { isDiffFilterOpen: true }),
+    { type: 'cycleDiffFilterFocus', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { rightArrow: true }, { diffFilterFocus: 'mode', isDiffFilterOpen: true }),
+    { type: 'moveDiffFilterOption', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { leftArrow: true }, { diffFilterFocus: 'words', isDiffFilterOpen: true }),
+    { type: 'moveDiffFilterOption', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction(' ', {}, { diffFilterFocus: 'case', isDiffFilterOpen: true }),
+    { type: 'toggleDiffFilterOption' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('p', {}, { diffFilterFocus: 'mode', isDiffFilterOpen: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { isDiffFilterOpen: true }),
+    { type: 'backspaceDiffFilter' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { backspace: true }, { diffFilterFocus: 'mode', isDiffFilterOpen: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('x', {}, { isDiffFilterOpen: true }),
+    { type: 'clearDiffFilter' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { return: true }, { isDiffFilterOpen: true }),
+    { type: 'finishDiffFilter' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('C', {}, { isDiffOpen: true }),
+    { type: 'none' }
   );
 
   assert.deepEqual(getCommandHintForKey('R'), 'use :resend');
@@ -861,6 +1671,18 @@ test('keyboard action helper gates help modal and preserves filter query input',
     getKeyboardAction('?', {}, { isFilterOpen: true, filterFocus: 'method' }),
     { type: 'none' }
   );
+  assert.deepEqual(
+    getKeyboardAction('', { rightArrow: true }, { isFilterOpen: true, filterFocus: 'mode' }),
+    { type: 'moveFilterOption', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { leftArrow: true }, { isFilterOpen: true, filterFocus: 'words' }),
+    { type: 'moveFilterOption', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction(' ', {}, { isFilterOpen: true, filterFocus: 'case' }),
+    { type: 'toggleFilterOption' }
+  );
 });
 
 test('keyboard action helper supports list display modal input', () => {
@@ -944,6 +1766,18 @@ test('keyboard action helper supports detail modal and detail search input', () 
     { type: 'startExport', action: 'download' }
   );
   assert.deepEqual(
+    getKeyboardAction('a', {}, { isDetailModalOpen: true }),
+    { type: 'markDiffBase' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('u', {}, { isDetailModalOpen: true }),
+    { type: 'clearDiffBase' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('b', {}, { isDetailModalOpen: true }),
+    { type: 'openDiff' }
+  );
+  assert.deepEqual(
     getKeyboardAction('j', {}, { isDetailModalOpen: true }),
     { type: 'scrollDetails', direction: 1 }
   );
@@ -988,7 +1822,7 @@ test('keyboard action helper supports detail modal and detail search input', () 
 test('keyboard action helper supports custom key bindings without stealing text input', () => {
   const movementBindings = getTestKeyBindings({
     'main.moveDown': ['z'],
-    'main.moveUp': ['a']
+    'main.moveUp': ['i']
   });
 
   assert.deepEqual(
@@ -996,7 +1830,7 @@ test('keyboard action helper supports custom key bindings without stealing text 
     { type: 'moveSelection', direction: 1 }
   );
   assert.deepEqual(
-    getKeyboardAction('a', {}, { isListFocused: false, keyBindings: movementBindings }),
+    getKeyboardAction('i', {}, { isListFocused: false, keyBindings: movementBindings }),
     { type: 'scrollDetails', direction: -1 }
   );
   assert.deepEqual(
@@ -1056,6 +1890,119 @@ test('keyboard action helper supports custom key bindings without stealing text 
     getKeyboardAction('o', {}, { isComposerOpen: true, isComposerLibraryOpen: true, keyBindings: composerBindings }),
     { type: 'loadComposerLibraryRequest' }
   );
+
+  const diffBindings = getTestKeyBindings({
+    'main.openHelp': ['?'],
+    'main.markDiffBase': ['B'],
+    'main.clearDiffBase': ['U'],
+    'main.openDiff': ['Q'],
+    'diff.close': ['c'],
+    'diff.nextChange': ['>'],
+    'diff.previousChange': ['<'],
+    'diff.toggleLayout': ['T'],
+    'diff.openFilter': ['F'],
+    'diff.openFocusedRow': ['O'],
+    'diffValue.close': ['X'],
+    'diffValue.scrollDown': ['J'],
+    'diffValue.scrollUp': ['K'],
+    'diffValue.pageDown': ['R'],
+    'diffValue.pageUp': ['L'],
+    'diffValue.top': ['H'],
+    'diffValue.bottom': ['E']
+  });
+
+  assert.deepEqual(
+    getKeyboardAction('B', {}, { keyBindings: diffBindings }),
+    { type: 'markDiffBase' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('U', {}, { keyBindings: diffBindings }),
+    { type: 'clearDiffBase' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('Q', {}, { keyBindings: diffBindings }),
+    { type: 'openDiff' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('c', {}, { isDiffOpen: true, keyBindings: diffBindings }),
+    { type: 'closeDiff' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('>', {}, { isDiffOpen: true, keyBindings: diffBindings }),
+    { type: 'moveDiffFocus', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('<', {}, { isDiffOpen: true, keyBindings: diffBindings }),
+    { type: 'moveDiffFocus', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('T', {}, { isDiffOpen: true, keyBindings: diffBindings }),
+    { type: 'toggleDiffLayout' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('F', {}, { isDiffOpen: true, keyBindings: diffBindings }),
+    { type: 'openDiffFilter' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('O', {}, { isDiffOpen: true, keyBindings: diffBindings }),
+    { type: 'openDiffValue' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('U', {}, { isDiffOpen: true, keyBindings: diffBindings }),
+    { type: 'clearDiffBase' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { return: true }, { isDiffOpen: true }),
+    { type: 'openDiffValue' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('J', {}, { isDiffOpen: true, isDiffValueOpen: true, keyBindings: diffBindings }),
+    { type: 'moveDiffValueScroll', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('K', {}, { isDiffOpen: true, isDiffValueOpen: true, keyBindings: diffBindings }),
+    { type: 'moveDiffValueScroll', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('R', {}, { diffValuePageSize: 8, isDiffOpen: true, isDiffValueOpen: true, keyBindings: diffBindings }),
+    { type: 'moveDiffValueScroll', direction: getPageStep(8) }
+  );
+  assert.deepEqual(
+    getKeyboardAction('L', {}, { diffValuePageSize: 8, isDiffOpen: true, isDiffValueOpen: true, keyBindings: diffBindings }),
+    { type: 'moveDiffValueScroll', direction: -getPageStep(8) }
+  );
+  assert.deepEqual(
+    getKeyboardAction('H', {}, { isDiffOpen: true, isDiffValueOpen: true, keyBindings: diffBindings }),
+    { type: 'moveDiffValueScrollTo', boundary: 'top' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('E', {}, { isDiffOpen: true, isDiffValueOpen: true, keyBindings: diffBindings }),
+    { type: 'moveDiffValueScrollTo', boundary: 'bottom' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('X', {}, { isDiffOpen: true, isDiffValueOpen: true, keyBindings: diffBindings }),
+    { type: 'closeDiffValue' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { return: true }, { isDiffOpen: true, isDiffValueOpen: true }),
+    { type: 'closeDiffValue' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('/', {}, { isDiffOpen: true, keyBindings: diffBindings }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('?', {}, { isDiffOpen: true, keyBindings: diffBindings }),
+    { type: 'openHelp' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('>', {}, { isFilterOpen: true, filterFocus: 'query', keyBindings: diffBindings }),
+    { type: 'appendSearch', value: '>' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('v', {}, { isFilterOpen: true, filterFocus: 'query', keyBindings: diffBindings }),
+    { type: 'appendSearch', value: 'v' }
+  );
 });
 
 test('mouse wheel routing maps the active traffic pane by terminal column', () => {
@@ -1079,37 +2026,45 @@ test('getRenderHeight keeps one terminal row free for Ink updates', () => {
 test('footer text shows mode-aware essential keymaps', () => {
   assert.equal(
     formatFooterText({ isListFocused: true }),
-    'j/k: move  [ / ]: page  enter: inspect  tab: details  : command  h: help'
+    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  : command  h: help'
+  );
+  assert.equal(
+    formatFooterText({ isListFocused: true, hasDiffBase: true }),
+    'j/k: move  [ / ]: page  enter: inspect  a: mark A  u: unmark  b: diff  tab: details  : command  h: help'
   );
   assert.equal(
     formatFooterText({ isListFocused: false }),
-    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  tab: traffic  : command  h: help'
+    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  a: mark A  tab: traffic  : command  h: help'
   );
   assert.equal(
     formatFooterText({ hideFrameworkAssets: false, isListFocused: true }),
-    'j/k: move  [ / ]: page  enter: inspect  tab: details  : command  h: help'
+    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  : command  h: help'
   );
   assert.equal(
     formatFooterText({ isDetailModalOpen: true }),
-    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  E: edit  enter: collapse  esc/q: close  : command'
+    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  E: edit  a: mark A  enter: collapse  esc/q: close  : command'
+  );
+  assert.equal(
+    formatFooterText({ isDetailModalOpen: true, hasDiffBase: true }),
+    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  E: edit  a: mark A  u: unmark  b: diff  enter: collapse  esc/q: close  : command'
   );
   assert.equal(
     formatFooterText({ isListFocused: true, isLiveMode: false, isReplayMode: true }),
-    'j/k: move  [ / ]: page  enter: inspect  tab: details  : command  h: help'
+    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  : command  h: help'
   );
   assert.equal(
     formatFooterText({
       isListFocused: true,
       recordingStatus: { mode: 'full', path: './capture.ndjson', state: 'recording', error: null }
     }),
-    'j/k: move  [ / ]: page  enter: inspect  tab: details  : command  h: help'
+    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  : command  h: help'
   );
   assert.equal(
     formatFooterText({
       isListFocused: false,
       recordingStatus: { mode: 'partial', path: './capture.ndjson', state: 'paused', error: null }
     }),
-    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  tab: traffic  : command  h: help'
+    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  a: mark A  tab: traffic  : command  h: help'
   );
   assert.equal(
     formatFooterText({ isComposerOpen: true }),
@@ -1144,16 +2099,24 @@ test('footer text shows mode-aware essential keymaps', () => {
     'sent requests  j/k move  enter inspect log  esc/h close'
   );
   assert.equal(
+    formatFooterText({ isDiffOpen: true }),
+    'diff  n/N: change  [ / ]: page  g/G: top/bottom  v: layout  /: filter  enter: full row  esc/q: close  h: help'
+  );
+  assert.equal(
+    formatFooterText({ isDiffOpen: true, hasDiffBase: true }),
+    'diff  n/N: change  [ / ]: page  g/G: top/bottom  v: layout  /: filter  enter: full row  u: unmark  esc/q: close  h: help'
+  );
+  assert.equal(
     formatFooterText({ exportStatus: 'copied response body', isListFocused: false }),
-    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  tab: traffic  : command  h: help | copied response body'
+    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  a: mark A  tab: traffic  : command  h: help | copied response body'
   );
   assert.equal(
     formatFooterText({ isListFocused: true, resendStatus: 'resent GET /food' }),
-    'j/k: move  [ / ]: page  enter: inspect  tab: details  : command  h: help | resent GET /food'
+    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  : command  h: help | resent GET /food'
   );
   assert.equal(
     formatFooterText({ commandStatus: 'use :quit', isListFocused: true }),
-    'j/k: move  [ / ]: page  enter: inspect  tab: details  : command  h: help | use :quit'
+    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  : command  h: help | use :quit'
   );
   assert.equal(
     formatFooterText({ isCommandOpen: true }),
@@ -1169,26 +2132,55 @@ test('footer and help labels reflect custom key bindings', () => {
     'main.moveUp': ['a'],
     'main.openHelp': ['?'],
     'main.openSearch': ['.'],
+    'main.markDiffBase': ['B'],
+    'main.clearDiffBase': ['U'],
+    'main.openDiff': ['Q'],
+    'diff.close': ['c'],
+    'diff.nextChange': ['>'],
+    'diff.previousChange': ['<'],
+    'diff.toggleLayout': ['T'],
+    'diff.openFilter': ['F'],
+    'diff.openFocusedRow': ['O'],
     'export.masked': ['1'],
     'export.raw': ['2']
   });
 
   assert.equal(
     formatFooterText({ isListFocused: true, keyBindings }),
-    'z/a: move  [ / ]: page  enter: inspect  tab: details  ; command  ?: help'
+    'z/a: move  [ / ]: page  enter: inspect  B: mark A  tab: details  ; command  ?: help'
+  );
+  assert.equal(
+    formatFooterText({ isListFocused: true, hasDiffBase: true, keyBindings }),
+    'z/a: move  [ / ]: page  enter: inspect  B: mark A  U: unmark  Q: diff  tab: details  ; command  ?: help'
   );
   assert.equal(
     formatFooterText({ isExportPromptOpen: true, keyBindings }),
     'export  1 masked  2 raw  esc cancel'
   );
+  assert.equal(
+    formatFooterText({ isDiffOpen: true, keyBindings }),
+    'diff  >/<: change  [ / ]: page  g/G: top/bottom  T: layout  F: filter  O: full row  c: close  ?: help'
+  );
+  assert.equal(
+    formatFooterText({ isDiffOpen: true, hasDiffBase: true, keyBindings }),
+    'diff  >/<: change  [ / ]: page  g/G: top/bottom  T: layout  F: filter  O: full row  U: unmark  c: close  ?: help'
+  );
 
   const customSections = getHelpSections(keyBindings);
   const moveSection = customSections.find((section) => section.title === 'Move');
   const inspectSection = customSections.find((section) => section.title === 'Inspect');
+  const diffSection = customSections.find((section) => section.title === 'Diff');
   const exportSection = customSections.find((section) => section.title === 'Display / Export');
 
   assert.deepEqual(moveSection.rows.find((row) => row[1] === 'move line'), ['z/a', 'move line']);
   assert.deepEqual(inspectSection.rows.find((row) => row[1] === 'find details'), ['.', 'find details']);
+  assert.deepEqual(diffSection.rows.find((row) => row[1] === 'mark A'), ['B', 'mark A']);
+  assert.deepEqual(diffSection.rows.find((row) => row[1] === 'unmark A'), ['U', 'unmark A']);
+  assert.deepEqual(diffSection.rows.find((row) => row[1] === 'compare with A'), ['Q', 'compare with A']);
+  assert.deepEqual(diffSection.rows.find((row) => row[1] === 'next / previous change'), ['>/<', 'next / previous change']);
+  assert.deepEqual(diffSection.rows.find((row) => row[1] === 'toggle layout'), ['T', 'toggle layout']);
+  assert.deepEqual(diffSection.rows.find((row) => row[1] === 'filter rows'), ['F', 'filter rows']);
+  assert.deepEqual(diffSection.rows.find((row) => row[1] === 'open full row'), ['O', 'open full row']);
   assert.deepEqual(exportSection.rows.find((row) => row[1] === 'masked / raw export'), ['1 / 2', 'masked / raw export']);
   assert.equal(DEFAULT_KEY_BINDINGS['main.moveDown'][0], 'j');
 });
@@ -1325,6 +2317,20 @@ test('help sections describe copy and download exports', () => {
   assert.deepEqual(exportSection.rows.find(([keys]) => keys === 'y'), ['y', 'copy item']);
   assert.deepEqual(exportSection.rows.find(([keys]) => keys === 'D'), ['D', 'download item']);
   assert.deepEqual(exportSection.rows.find(([keys]) => keys === 'm / r'), ['m / r', 'masked / raw export']);
+});
+
+test('help sections describe request diff controls', () => {
+  const diffSection = HELP_SECTIONS.find((section) => section.title === 'Diff');
+
+  assert.deepEqual(diffSection.rows.find(([keys]) => keys === 'a'), ['a', 'mark A']);
+  assert.deepEqual(diffSection.rows.find(([keys]) => keys === 'u'), ['u', 'unmark A']);
+  assert.deepEqual(diffSection.rows.find(([keys]) => keys === 'b'), ['b', 'compare with A']);
+  assert.deepEqual(diffSection.rows.find(([keys]) => keys === 'n/N'), ['n/N', 'next / previous change']);
+  assert.deepEqual(diffSection.rows.find(([keys]) => keys === '[ / ]'), ['[ / ]', 'move page']);
+  assert.deepEqual(diffSection.rows.find(([keys]) => keys === 'v'), ['v', 'toggle layout']);
+  assert.deepEqual(diffSection.rows.find(([keys]) => keys === '/'), ['/', 'filter rows']);
+  assert.deepEqual(diffSection.rows.find(([keys]) => keys === 'enter'), ['enter', 'open full row']);
+  assert.deepEqual(diffSection.rows.find(([keys]) => keys === 'esc/q'), ['esc/q', 'close diff']);
 });
 
 test('help sections describe traffic list display controls', () => {
@@ -1944,6 +2950,68 @@ test('filterLogs narrows by method, status family, and search text', () => {
   assert.deepEqual(filterLogs(traffic, { statusFilters: ['2xx', '5xx'] }).map((log) => log.id), ['one', 'two']);
 });
 
+test('advanced traffic search parses terms and supports word modes, case, and patterns', () => {
+  const timestamp = 1700000000000;
+  const traffic = [
+    {
+      id: 'one',
+      method: 'GET',
+      path: '/users',
+      statusCode: 200,
+      timestamp,
+      request: { headers: { host: 'localhost:8080' }, body: '' },
+      response: { headers: { 'x-result': 'ok' }, body: 'Ada Lovelace' }
+    },
+    {
+      id: 'two',
+      method: 'POST',
+      path: '/sessions',
+      statusCode: 500,
+      timestamp,
+      request: { headers: { host: 'localhost:9090', 'x-token': 'demo' }, body: 'email=demo@example.com' },
+      response: { headers: { 'content-type': 'text/plain' }, body: 'Bad Gateway' }
+    }
+  ];
+
+  assert.deepEqual(parseSearchTerms('  ada   gateway  '), ['ada', 'gateway']);
+  assert.deepEqual(parseSearchTerms('"Bad Gateway" sessions'), ['Bad Gateway', 'sessions']);
+  assert.deepEqual(parseSearchTerms('"unclosed phrase'), ['unclosed phrase']);
+  assert.equal(matchesSearchValues(['Ada Lovelace', '/users'], 'ada users'), true);
+  assert.equal(matchesSearchValues(['Ada Lovelace', '/users'], 'ada gateway'), false);
+  assert.equal(matchesSearchValues(['Ada Lovelace', '/users'], 'ada gateway', { wordMatchMode: 'or' }), true);
+  assert.equal(matchesSearchValues(['Ada Lovelace'], 'ada', { matchCase: true }), false);
+  assert.equal(matchesSearchValues(['Ada Lovelace'], 'Ada', { matchCase: true }), true);
+  assert.equal(matchesSearchValues(['/sessions'], '^/sess', { searchMode: 'pattern' }), true);
+  assert.equal(matchesSearchValues(['Bad Gateway'], 'bad gateway', { searchMode: 'pattern' }), true);
+  assert.equal(matchesSearchValues(['Bad Gateway'], 'bad gateway', { matchCase: true, searchMode: 'pattern' }), false);
+  assert.equal(matchesSearchValues(['anything'], '[', { searchMode: 'pattern' }), false);
+  assert.match(getSearchQueryWarning('[', { searchMode: 'pattern' }), /^invalid pattern:/);
+
+  assert.deepEqual(filterLogs(traffic, { searchQuery: 'ada users' }).map((log) => log.id), ['one']);
+  assert.deepEqual(filterLogs(traffic, { searchQuery: 'ada sessions' }).map((log) => log.id), []);
+  assert.deepEqual(filterLogs(traffic, {
+    searchQuery: 'ada sessions',
+    wordMatchMode: 'or'
+  }).map((log) => log.id), ['one', 'two']);
+  assert.deepEqual(filterLogs(traffic, {
+    searchField: 'body',
+    searchQuery: '"Bad Gateway"'
+  }).map((log) => log.id), ['two']);
+  assert.deepEqual(filterLogs(traffic, {
+    matchCase: true,
+    searchQuery: 'ada'
+  }).map((log) => log.id), []);
+  assert.deepEqual(filterLogs(traffic, {
+    searchField: 'path',
+    searchMode: 'pattern',
+    searchQuery: '^/sess'
+  }).map((log) => log.id), ['two']);
+  assert.deepEqual(filterLogs(traffic, {
+    searchMode: 'pattern',
+    searchQuery: '['
+  }).map((log) => log.id), []);
+});
+
 test('filterLogs searches cold summary indexes without requiring full headers or bodies', () => {
   const timestamp = 1700000000000;
   const coldSummary = {
@@ -2200,8 +3268,12 @@ test('filter value helpers support multi-select and clearing', () => {
     statusFilters: [],
     searchQuery: ''
   }), 0);
-  assert.equal(formatFilterLabel([], [], 'all', 'id'), 'search "id" in all fields');
-  assert.equal(formatFilterLabel(['GET', 'POST'], ['2xx'], 'path', 'users'), 'method GET,POST | status 2xx | search "users" in path');
+  assert.equal(formatFilterLabel([], [], 'all', 'id'), 'search all words "id" in all fields');
+  assert.equal(formatFilterLabel(['GET', 'POST'], ['2xx'], 'path', 'users'), 'method GET,POST | status 2xx | search all words "users" in path');
+  assert.equal(formatFilterLabel([], [], 'all', 'users sessions', { wordMatchMode: 'or' }), 'search any word "users sessions" in all fields');
+  assert.equal(formatFilterLabel([], [], 'body', 'gateway.*timeout', { searchMode: 'pattern' }), 'pattern /gateway.*timeout/ in body');
+  assert.equal(formatFilterLabel([], [], 'headers', 'X-Token', { matchCase: true }), 'search all words "X-Token" in headers | match case');
+  assert.match(formatFilterLabel([], [], 'all', '[', { searchMode: 'pattern' }), /^pattern \/\[\/ in all fields \| invalid pattern:/);
   assert.equal(formatFilterLabel([], [], 'all', '', { hideFrameworkAssets: true }), 'framework hidden');
   assert.equal(formatFilterLabel([], [], 'all', '', {
     frameworkSummary: {
@@ -2225,7 +3297,7 @@ test('filter value helpers support multi-select and clearing', () => {
   }), '12 shown');
   assert.equal(formatFilterLabel([], [], 'body', 'secret', {
     coldEntryCount: 3
-  }), 'search "secret" in body | cold bodies load on inspect');
+  }), 'search all words "secret" in body | cold bodies load on inspect');
   assert.equal(formatFilterLabel([], [], 'all', ''), 'none');
 });
 

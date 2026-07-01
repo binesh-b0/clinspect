@@ -93,6 +93,21 @@ export function getHelpSections(keyBindings = DEFAULT_KEY_BINDINGS) {
       ]
     },
     {
+      title: 'Diff',
+      rows: [
+        [getActionLabel(keyBindings, 'main.markDiffBase', { limit: 1 }), 'mark A'],
+        [getActionLabel(keyBindings, 'main.clearDiffBase', { limit: 1 }), 'unmark A'],
+        [getActionLabel(keyBindings, 'main.openDiff', { limit: 1 }), 'compare with A'],
+        [getActionPairLabel(keyBindings, 'diff.nextChange', 'diff.previousChange'), 'next / previous change'],
+        [getActionPairLabel(keyBindings, 'diff.pageUp', 'diff.pageDown', { separator: ' / ' }), 'move page'],
+        [getActionPairLabel(keyBindings, 'diff.top', 'diff.bottom'), 'top / bottom'],
+        [getActionLabel(keyBindings, 'diff.toggleLayout', { limit: 1 }), 'toggle layout'],
+        [getActionLabel(keyBindings, 'diff.openFilter', { limit: 1 }), 'filter rows'],
+        [getActionLabel(keyBindings, 'diff.openFocusedRow', { limit: 1 }), 'open full row'],
+        [getActionLabel(keyBindings, 'diff.close', { limit: 2 }), 'close diff']
+      ]
+    },
+    {
       title: 'Filter',
       rows: [
         [getActionLabel(keyBindings, 'main.openSearch'), 'text search'],
@@ -399,9 +414,11 @@ export function formatFooterText({
   isComposerOpen = false,
   isComposerTextFocused = false,
   isCommandOpen = false,
+  isDiffOpen = false,
   isDetailModalOpen = false,
   isDetailSearchActive = false,
   isExportPromptOpen = false,
+  hasDiffBase = false,
   isHelpOpen = false,
   hideFrameworkAssets = true,
   isLiveMode = true,
@@ -427,6 +444,12 @@ export function formatFooterText({
   const detailEditKey = getActionLabel(keyBindings, 'detail.editRequest', { limit: 1 });
   const liveDetailActions = isLiveMode ? [`${detailEditKey} edit`] : [];
   const liveDetailModalActions = isLiveMode ? [formatFooterBinding(detailEditKey, 'edit')] : [];
+  const unmarkDiffAction = hasDiffBase
+    ? [formatFooterBinding(getActionLabel(keyBindings, 'main.clearDiffBase', { limit: 1 }), 'unmark')]
+    : [];
+  const compareDiffAction = hasDiffBase
+    ? [formatFooterBinding(getActionLabel(keyBindings, 'main.openDiff', { limit: 1 }), 'diff')]
+    : [];
 
   if (!isRawModeSupported) {
     return 'keyboard input unavailable in this shell | Ctrl-C or SIGTERM quit';
@@ -442,6 +465,21 @@ export function formatFooterText({
 
   if (isListDisplayOpen) {
     return `list display  ${getActionPairLabel(keyBindings, 'listDisplay.moveDown', 'listDisplay.moveUp')} select row  ${getActionPairLabel(keyBindings, 'listDisplay.previousOption', 'listDisplay.nextOption')} change value  ${getActionLabel(keyBindings, 'listDisplay.toggleOption', { limit: 1 })} show/hide  ${getActionLabel(keyBindings, 'listDisplay.reset', { limit: 1 })} reset  ${getNthActionLabel(keyBindings, 'listDisplay.close', 1)}/${getNthActionLabel(keyBindings, 'listDisplay.close', 0)} close`;
+  }
+
+  if (isDiffOpen) {
+    return withStatus(joinFooterParts([
+      'diff',
+      formatFooterBinding(getActionPairLabel(keyBindings, 'diff.nextChange', 'diff.previousChange'), 'change'),
+      formatFooterBinding(getActionPairLabel(keyBindings, 'diff.pageUp', 'diff.pageDown', { separator: ' / ' }), 'page'),
+      formatFooterBinding(getActionPairLabel(keyBindings, 'diff.top', 'diff.bottom'), 'top/bottom'),
+      formatFooterBinding(getActionLabel(keyBindings, 'diff.toggleLayout', { limit: 1 }), 'layout'),
+      formatFooterBinding(getActionLabel(keyBindings, 'diff.openFilter', { limit: 1 }), 'filter'),
+      formatFooterBinding(getActionLabel(keyBindings, 'diff.openFocusedRow', { limit: 1 }), 'full row'),
+      ...unmarkDiffAction,
+      formatFooterBinding(getActionLabel(keyBindings, 'diff.close', { limit: 2 }), 'close'),
+      formatFooterBinding(getActionLabel(keyBindings, 'main.openHelp', { limit: 1 }), 'help')
+    ]));
   }
 
   if (isRequestActivityOpen) {
@@ -495,6 +533,9 @@ export function formatFooterText({
       formatFooterBinding(getActionLabel(keyBindings, 'detail.openSearch', { limit: 1 }), 'find'),
       formatFooterBinding(getActionPairLabel(keyBindings, 'detail.nextMatch', 'detail.previousMatch'), 'match'),
       ...liveDetailModalActions,
+      formatFooterBinding(getActionLabel(keyBindings, 'main.markDiffBase', { limit: 1 }), 'mark A'),
+      ...unmarkDiffAction,
+      ...compareDiffAction,
       formatFooterBinding(getActionLabel(keyBindings, 'detail.toggleNode', { limit: 1 }), 'collapse'),
       formatFooterBinding(closeDetailKeys, 'close'),
       `${commandKey} command`
@@ -506,6 +547,9 @@ export function formatFooterText({
       formatFooterBinding(moveKeys, 'move'),
       formatFooterBinding(pageKeys, 'page'),
       formatFooterBinding(getActionLabel(keyBindings, 'main.inspect', { limit: 1 }), 'inspect'),
+      formatFooterBinding(getActionLabel(keyBindings, 'main.markDiffBase', { limit: 1 }), 'mark A'),
+      ...unmarkDiffAction,
+      ...compareDiffAction,
       formatFooterBinding(getActionLabel(keyBindings, 'main.toggleFocus', { limit: 1 }), 'details'),
       `${commandKey} command`,
       formatFooterBinding(getActionLabel(keyBindings, 'main.openHelp', { limit: 1 }), 'help')
@@ -518,6 +562,9 @@ export function formatFooterText({
     formatFooterBinding(getActionLabel(keyBindings, 'main.toggleDetailTab', { limit: 1 }), 'req/res'),
     formatFooterBinding(getActionLabel(keyBindings, 'main.openSearch', { limit: 1 }), 'find'),
     formatFooterBinding(matchKeys, 'match'),
+    formatFooterBinding(getActionLabel(keyBindings, 'main.markDiffBase', { limit: 1 }), 'mark A'),
+    ...unmarkDiffAction,
+    ...compareDiffAction,
     formatFooterBinding(getActionLabel(keyBindings, 'main.toggleFocus', { limit: 1 }), 'traffic'),
     `${commandKey} command`,
     formatFooterBinding(getActionLabel(keyBindings, 'main.openHelp', { limit: 1 }), 'help')
@@ -534,9 +581,11 @@ export const Footer = React.memo(function Footer({
   isComposerOpen,
   isComposerTextFocused,
   isCommandOpen,
+  isDiffOpen,
   isDetailModalOpen,
   isDetailSearchActive,
   isExportPromptOpen,
+  hasDiffBase,
   isHelpOpen,
   hideFrameworkAssets,
   isLiveMode,
@@ -562,9 +611,11 @@ export const Footer = React.memo(function Footer({
         isComposerOpen,
         isComposerTextFocused,
         isCommandOpen,
+        isDiffOpen,
         isDetailModalOpen,
         isDetailSearchActive,
         isExportPromptOpen,
+        hasDiffBase,
         isHelpOpen,
         hideFrameworkAssets,
         isLiveMode,

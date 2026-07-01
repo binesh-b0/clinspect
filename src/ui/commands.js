@@ -315,11 +315,15 @@ export function resolveCommandInput(input = '', selectedIndex = -1, commandConte
 
 export function getKeyboardAction(input = '', key = {}, options = {}) {
   const {
+    diffFilterFocus = 'query',
     filterFocus = 'query',
     isListFocused = true,
     isHelpOpen = false,
     isListDisplayOpen = false,
     isRequestActivityOpen = false,
+    isDiffOpen = false,
+    isDiffFilterOpen = false,
+    isDiffValueOpen = false,
     isFilterOpen = false,
     isDetailSearchOpen = false,
     isDetailModalOpen = false,
@@ -335,6 +339,8 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     isComposerBodyEditorOpen = false,
     isComposerLibraryOpen = false,
     isComposerTextFocused = false,
+    diffPageSize = 1,
+    diffValuePageSize = 1,
     detailPageSize = 1,
     keyBindings: configuredKeyBindings,
     showTrafficPane = true,
@@ -429,6 +435,136 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
 
     if (matches('listDisplay.reset')) {
       return { type: 'resetListDisplay' };
+    }
+
+    return { type: 'none' };
+  }
+
+  if (isDiffFilterOpen) {
+    if (matches('filter.close')) {
+      return { type: 'finishDiffFilter' };
+    }
+
+    if (matches('filter.clear')) {
+      return { type: 'clearDiffFilter' };
+    }
+
+    if (matches('filter.nextField')) {
+      return { type: 'cycleDiffFilterFocus', direction: 1 };
+    }
+
+    if (matches('filter.previousField')) {
+      return { type: 'cycleDiffFilterFocus', direction: -1 };
+    }
+
+    if (matches('filter.nextOption')) {
+      return { type: 'moveDiffFilterOption', direction: 1 };
+    }
+
+    if (matches('filter.previousOption')) {
+      return { type: 'moveDiffFilterOption', direction: -1 };
+    }
+
+    if (matches('filter.toggleOption') && diffFilterFocus !== 'query') {
+      return { type: 'toggleDiffFilterOption' };
+    }
+
+    if (matches('filter.delete') || matches('filter.backspace')) {
+      return diffFilterFocus === 'query'
+        ? { type: 'backspaceDiffFilter' }
+        : { type: 'none' };
+    }
+
+    if (value && !keyState.ctrl && !keyState.meta && diffFilterFocus === 'query' && !parseInkMouseInput(value) && !isInkMouseInput(value)) {
+      return { type: 'appendDiffFilter', value };
+    }
+
+    return { type: 'none' };
+  }
+
+  if (isDiffValueOpen) {
+    if (matches('main.openHelp')) {
+      return { type: 'openHelp' };
+    }
+
+    if (matches('diffValue.close')) {
+      return { type: 'closeDiffValue' };
+    }
+
+    if (matches('diffValue.scrollDown')) {
+      return { type: 'moveDiffValueScroll', direction: 1 };
+    }
+
+    if (matches('diffValue.scrollUp')) {
+      return { type: 'moveDiffValueScroll', direction: -1 };
+    }
+
+    if (matches('diffValue.pageDown')) {
+      return { type: 'moveDiffValueScroll', direction: getPageStep(diffValuePageSize) };
+    }
+
+    if (matches('diffValue.pageUp')) {
+      return { type: 'moveDiffValueScroll', direction: -getPageStep(diffValuePageSize) };
+    }
+
+    if (matches('diffValue.top')) {
+      return { type: 'moveDiffValueScrollTo', boundary: 'top' };
+    }
+
+    if (matches('diffValue.bottom')) {
+      return { type: 'moveDiffValueScrollTo', boundary: 'bottom' };
+    }
+
+    return { type: 'none' };
+  }
+
+  if (isDiffOpen) {
+    if (matches('main.openHelp')) {
+      return { type: 'openHelp' };
+    }
+
+    if (matches('diff.openFilter')) {
+      return { type: 'openDiffFilter' };
+    }
+
+    if (matches('diff.openFocusedRow')) {
+      return { type: 'openDiffValue' };
+    }
+
+    if (matches('main.clearDiffBase')) {
+      return { type: 'clearDiffBase' };
+    }
+
+    if (matches('diff.close')) {
+      return { type: 'closeDiff' };
+    }
+
+    if (matches('diff.nextChange')) {
+      return { type: 'moveDiffFocus', direction: 1 };
+    }
+
+    if (matches('diff.previousChange')) {
+      return { type: 'moveDiffFocus', direction: -1 };
+    }
+
+    if (matches('diff.pageDown')) {
+      return { type: 'moveDiffFocus', direction: getPageStep(diffPageSize) };
+    }
+
+    if (matches('diff.pageUp')) {
+      return { type: 'moveDiffFocus', direction: -getPageStep(diffPageSize) };
+    }
+
+    if (matches('diff.top')) {
+      return { type: 'moveDiffFocusTo', boundary: 'top' };
+    }
+
+    if (matches('diff.bottom')) {
+      return { type: 'moveDiffFocusTo', boundary: 'bottom' };
+    }
+
+    if (matches('diff.toggleLayout')) {
+      return { type: 'toggleDiffLayout' };
     }
 
     return { type: 'none' };
@@ -723,6 +859,18 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
       return { type: 'startExport', action: 'download' };
     }
 
+    if (matches('main.markDiffBase')) {
+      return { type: 'markDiffBase' };
+    }
+
+    if (matches('main.clearDiffBase')) {
+      return { type: 'clearDiffBase' };
+    }
+
+    if (matches('main.openDiff')) {
+      return { type: 'openDiff' };
+    }
+
     if (matches('detail.openSearch')) {
       return { type: 'openDetailSearch' };
     }
@@ -854,6 +1002,18 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
 
   if (matches('main.download')) {
     return { type: 'startExport', action: 'download' };
+  }
+
+  if (matches('main.markDiffBase')) {
+    return { type: 'markDiffBase' };
+  }
+
+  if (matches('main.clearDiffBase')) {
+    return { type: 'clearDiffBase' };
+  }
+
+  if (matches('main.openDiff')) {
+    return { type: 'openDiff' };
   }
 
   if (matches('main.openComposer') && isLiveMode && isListFocused) {
@@ -990,11 +1150,15 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
 }
 
 export function KeyboardControls({
+  diffFilterFocus,
   filterFocus,
   isListFocused,
   isHelpOpen,
   isListDisplayOpen,
   isRequestActivityOpen,
+  isDiffOpen,
+  isDiffFilterOpen,
+  isDiffValueOpen,
   isFilterOpen,
   isDetailSearchOpen,
   isDetailModalOpen,
@@ -1010,6 +1174,8 @@ export function KeyboardControls({
   isComposerBodyEditorOpen,
   isComposerLibraryOpen,
   isComposerTextFocused,
+  diffPageSize,
+  diffValuePageSize,
   detailPageSize,
   keyBindings,
   showTrafficPane,
@@ -1018,10 +1184,12 @@ export function KeyboardControls({
   onAddComposerRow,
   onAppendCommandText,
   onAppendSearch,
+  onAppendDiffFilter,
   onAppendDetailSearch,
   onBackspaceCommandText,
   onBackspaceComposerText,
   onBackspaceSearch,
+  onBackspaceDiffFilter,
   onBackspaceDetailSearch,
   onCancelExport,
   onCancelResend,
@@ -1029,16 +1197,21 @@ export function KeyboardControls({
   onCloseComposerLibrary,
   onCloseComposerPreview,
   onClearFilters,
+  onClearDiffFilter,
+  onClearDiffBase,
   onClearLogs,
   onCloseDetailModal,
   onCloseRequestActivity,
   onCloseComposer,
   onCloseCommandPrompt,
+  onCloseDiff,
+  onCloseDiffValue,
   onCloseHelp,
   onCloseListDisplay,
   onCycleComposerFocus,
   onCycleComposerTab,
   onCycleCommandSuggestion,
+  onCycleDiffFilterFocus,
   onDeleteComposerRow,
   onDeleteComposerText,
   onCycleFilterFocus,
@@ -1048,6 +1221,7 @@ export function KeyboardControls({
   onCycleTrafficPathMode,
   onFinishExport,
   onFinishDetailSearch,
+  onFinishDiffFilter,
   onFinishSearch,
   onFollowLatest,
   onInsertComposerText,
@@ -1055,6 +1229,11 @@ export function KeyboardControls({
   onInspectSelected,
   onLoadComposerLibraryRequest,
   onMoveDetailMatch,
+  onMoveDiffFilterOption,
+  onMoveDiffFocus,
+  onMoveDiffFocusTo,
+  onMoveDiffValueScroll,
+  onMoveDiffValueScrollTo,
   onMoveSelectionTo,
   onMoveFilterOption,
   onMoveSelection,
@@ -1071,10 +1250,14 @@ export function KeyboardControls({
   onOpenComposerBodyEditor,
   onOpenComposerLibrary,
   onOpenCommandPrompt,
+  onOpenDiff,
+  onOpenDiffFilter,
+  onOpenDiffValue,
   onOpenFilter,
   onOpenHelp,
   onOpenListDisplay,
   onInspectRequestActivity,
+  onMarkDiffBase,
   onPreviewComposerSend,
   onQuit,
   onResetListDisplay,
@@ -1092,6 +1275,8 @@ export function KeyboardControls({
   onToggleComposerField,
   onToggleComposerReveal,
   onToggleDetailNode,
+  onToggleDiffLayout,
+  onToggleDiffFilterOption,
   onToggleFilterOption,
   onToggleFrameworkAssets,
   onToggleListDisplayColumn,
@@ -1103,10 +1288,14 @@ export function KeyboardControls({
   useInput((input, key) => {
     const action = getKeyboardAction(input, key, {
       filterFocus,
+      diffFilterFocus,
       isListFocused,
       isHelpOpen,
       isListDisplayOpen,
       isRequestActivityOpen,
+      isDiffOpen,
+      isDiffFilterOpen,
+      isDiffValueOpen,
       isFilterOpen,
       isDetailSearchOpen,
       isDetailModalOpen,
@@ -1122,6 +1311,8 @@ export function KeyboardControls({
       isComposerBodyEditorOpen,
       isComposerLibraryOpen,
       isComposerTextFocused,
+      diffPageSize,
+      diffValuePageSize,
       detailPageSize,
       keyBindings,
       showTrafficPane,
@@ -1145,11 +1336,17 @@ export function KeyboardControls({
       case 'appendSearch':
         onAppendSearch(action.value);
         break;
+      case 'appendDiffFilter':
+        onAppendDiffFilter(action.value);
+        break;
       case 'appendDetailSearch':
         onAppendDetailSearch(action.value);
         break;
       case 'backspaceSearch':
         onBackspaceSearch();
+        break;
+      case 'backspaceDiffFilter':
+        onBackspaceDiffFilter();
         break;
       case 'backspaceDetailSearch':
         onBackspaceDetailSearch();
@@ -1172,6 +1369,12 @@ export function KeyboardControls({
       case 'clearFilters':
         onClearFilters();
         break;
+      case 'clearDiffFilter':
+        onClearDiffFilter();
+        break;
+      case 'clearDiffBase':
+        onClearDiffBase();
+        break;
       case 'clearLogs':
         onClearLogs();
         break;
@@ -1183,6 +1386,12 @@ export function KeyboardControls({
         break;
       case 'closeCommandPrompt':
         onCloseCommandPrompt();
+        break;
+      case 'closeDiff':
+        onCloseDiff();
+        break;
+      case 'closeDiffValue':
+        onCloseDiffValue();
         break;
       case 'closeHelp':
         onCloseHelp();
@@ -1201,6 +1410,9 @@ export function KeyboardControls({
         break;
       case 'cycleCommandSuggestion':
         onCycleCommandSuggestion(action.direction);
+        break;
+      case 'cycleDiffFilterFocus':
+        onCycleDiffFilterFocus(action.direction);
         break;
       case 'cycleListDisplayOption':
         onCycleListDisplayOption(action.direction);
@@ -1232,6 +1444,9 @@ export function KeyboardControls({
       case 'finishDetailSearch':
         onFinishDetailSearch();
         break;
+      case 'finishDiffFilter':
+        onFinishDiffFilter();
+        break;
       case 'followLatest':
         onFollowLatest();
         break;
@@ -1247,11 +1462,29 @@ export function KeyboardControls({
       case 'loadComposerLibraryRequest':
         onLoadComposerLibraryRequest();
         break;
+      case 'markDiffBase':
+        onMarkDiffBase();
+        break;
       case 'moveFilterOption':
         onMoveFilterOption(action.direction);
         break;
       case 'moveDetailMatch':
         onMoveDetailMatch(action.direction);
+        break;
+      case 'moveDiffFilterOption':
+        onMoveDiffFilterOption(action.direction);
+        break;
+      case 'moveDiffFocus':
+        onMoveDiffFocus(action.direction);
+        break;
+      case 'moveDiffFocusTo':
+        onMoveDiffFocusTo(action.boundary);
+        break;
+      case 'moveDiffValueScroll':
+        onMoveDiffValueScroll(action.direction);
+        break;
+      case 'moveDiffValueScrollTo':
+        onMoveDiffValueScrollTo(action.boundary);
         break;
       case 'moveSelection':
         onMoveSelection(action.direction);
@@ -1300,6 +1533,15 @@ export function KeyboardControls({
         break;
       case 'openCommandPrompt':
         onOpenCommandPrompt();
+        break;
+      case 'openDiff':
+        onOpenDiff();
+        break;
+      case 'openDiffFilter':
+        onOpenDiffFilter();
+        break;
+      case 'openDiffValue':
+        onOpenDiffValue();
         break;
       case 'openHelp':
         onOpenHelp();
@@ -1363,6 +1605,12 @@ export function KeyboardControls({
         break;
       case 'toggleDetailNode':
         onToggleDetailNode();
+        break;
+      case 'toggleDiffLayout':
+        onToggleDiffLayout();
+        break;
+      case 'toggleDiffFilterOption':
+        onToggleDiffFilterOption();
         break;
       case 'toggleFilterOption':
         onToggleFilterOption();

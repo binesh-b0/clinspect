@@ -17,6 +17,7 @@ import {
   PANE_WIDTH_TARGETS,
   ROOT_PADDING_X,
   SEARCH_FIELDS,
+  SEARCH_MODES,
   STATIC_ASSET_CONTENT_TYPE_PATTERNS,
   STATIC_ASSET_EXTENSION_PATTERN,
   STATIC_ASSET_FILE_PATTERN,
@@ -29,6 +30,7 @@ import {
   TRAFFIC_PATH_MODES,
   TRAFFIC_ROW_WIDTH,
   TRAFFIC_WIDTH_MODES,
+  WORD_MATCH_MODES,
   formatOptionToken,
   getTrafficVisibleCount,
   pad,
@@ -40,6 +42,8 @@ import {
   getBindingLabel,
   getBindingPairLabel
 } from './key-bindings.js';
+
+const TRAFFIC_ROW_MARKER_WIDTH = 3;
 
 function formatTime(timestamp) {
   return new Date(timestamp).toLocaleTimeString('en-US', {
@@ -70,7 +74,11 @@ function statusColor(statusCode) {
   return 'gray';
 }
 
-function rowColor(log, isClinspectSent = false) {
+function rowColor(log, isClinspectSent = false, isDiffMarked = false) {
+  if (isDiffMarked) {
+    return 'black';
+  }
+
   if (log.statusCode >= 400) {
     return statusColor(log.statusCode);
   }
@@ -353,7 +361,7 @@ export function getTrafficRowWidth(paneWidth = TRAFFIC_LIST_WIDTH) {
 
 function getTrafficPathWidth(display = {}, rowWidth = TRAFFIC_ROW_WIDTH) {
   const { columns } = normalizeTrafficListDisplay(display);
-  const nonPathWidth = 1 +
+  const nonPathWidth = TRAFFIC_ROW_MARKER_WIDTH +
     (columns.time ? TRAFFIC_COLUMN_WIDTHS.time : 0) +
     (columns.method ? TRAFFIC_COLUMN_WIDTHS.method : 0) +
     (columns.status ? TRAFFIC_COLUMN_WIDTHS.status : 0) +
@@ -372,7 +380,7 @@ export function formatTrafficHeader(display = {}, rowWidth = TRAFFIC_ROW_WIDTH) 
   const normalized = normalizeTrafficListDisplay(display);
   const { columns } = normalized;
   const pathWidth = getTrafficPathWidth(normalized, rowWidth);
-  const tokens = [' '];
+  const tokens = [pad('', TRAFFIC_ROW_MARKER_WIDTH)];
 
   if (columns.time) {
     tokens.push(pad('time', TRAFFIC_COLUMN_WIDTHS.time));
@@ -399,7 +407,11 @@ export function formatTrafficRow(log, selected = false, display = {}, rowWidth =
   const normalized = normalizeTrafficListDisplay(display);
   const { columns } = normalized;
   const pathWidth = getTrafficPathWidth(normalized, rowWidth);
-  const marker = selected ? '>' : (options.isClinspectSent ? '*' : ' ');
+  const marker = options.isDiffBase
+    ? pad('m1', TRAFFIC_ROW_MARKER_WIDTH)
+    : (options.isDiffCandidate
+      ? pad('sim', TRAFFIC_ROW_MARKER_WIDTH)
+      : pad(selected ? '>' : (options.isClinspectSent ? '*' : ''), TRAFFIC_ROW_MARKER_WIDTH));
   const tokens = [marker];
 
   if (columns.time) {
@@ -889,6 +901,124 @@ export function countActiveFilters(options = {}) {
   return methodFilters.length + statusFilters.length + (hasSearch ? 1 : 0);
 }
 
+function normalizeSearchMode(value) {
+  return SEARCH_MODES.includes(value) ? value : SEARCH_MODES[0];
+}
+
+function normalizeWordMatchMode(value) {
+  return WORD_MATCH_MODES.includes(value) ? value : WORD_MATCH_MODES[0];
+}
+
+export function parseSearchTerms(query = '') {
+  const input = String(query ?? '');
+  const terms = [];
+  let current = '';
+  let inQuote = false;
+  let escaping = false;
+
+  const pushCurrent = () => {
+    if (current.length > 0) {
+      terms.push(current);
+      current = '';
+    }
+  };
+
+  for (const char of input) {
+    if (escaping) {
+      current += char;
+      escaping = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaping = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inQuote = !inQuote;
+      continue;
+    }
+
+    if (!inQuote && /\s/.test(char)) {
+      pushCurrent();
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (escaping) {
+    current += '\\';
+  }
+
+  pushCurrent();
+  return terms;
+}
+
+function normalizeSearchText(value, matchCase = false) {
+  const text = String(value ?? '');
+
+  return matchCase ? text : text.toLowerCase();
+}
+
+function createSearchPattern(query, options = {}) {
+  try {
+    return {
+      pattern: new RegExp(String(query ?? ''), options.matchCase ? '' : 'i'),
+      warning: ''
+    };
+  } catch (error) {
+    return {
+      pattern: null,
+      warning: `invalid pattern: ${error?.message ?? String(error)}`
+    };
+  }
+}
+
+export function getSearchQueryWarning(searchQuery = '', options = {}) {
+  const query = String(searchQuery ?? '').trim();
+
+  if (!query || normalizeSearchMode(options.searchMode) !== 'pattern') {
+    return '';
+  }
+
+  return createSearchPattern(query, options).warning;
+}
+
+export function matchesSearchValues(values = [], searchQuery = '', options = {}) {
+  const query = String(searchQuery ?? '').trim();
+
+  if (!query) {
+    return true;
+  }
+
+  const searchMode = normalizeSearchMode(options.searchMode);
+  const matchCase = Boolean(options.matchCase);
+  const normalizedValues = (values ?? []).map((value) => normalizeSearchText(value, matchCase));
+
+  if (searchMode === 'pattern') {
+    const { pattern } = createSearchPattern(query, { matchCase });
+
+    return pattern
+      ? normalizedValues.some((value) => pattern.test(value))
+      : false;
+  }
+
+  const terms = parseSearchTerms(query).map((term) => normalizeSearchText(term, matchCase));
+  const wordMatchMode = normalizeWordMatchMode(options.wordMatchMode);
+
+  if (terms.length === 0) {
+    return true;
+  }
+
+  const termMatches = (term) => normalizedValues.some((value) => value.includes(term));
+
+  return wordMatchMode === 'or'
+    ? terms.some(termMatches)
+    : terms.every(termMatches);
+}
+
 export function extractPortFromHost(host = '') {
   const value = String(host ?? '');
 
@@ -968,14 +1098,7 @@ export function getSearchValues(log, searchField = 'all', options = {}) {
 }
 
 function matchesSearch(log, searchQuery, searchField = 'all', options = {}) {
-  const query = searchQuery.trim().toLowerCase();
-
-  if (!query) {
-    return true;
-  }
-
-  return getSearchValues(log, searchField, options)
-    .some((value) => String(value ?? '').toLowerCase().includes(query));
+  return matchesSearchValues(getSearchValues(log, searchField, options), searchQuery, options);
 }
 
 export function filterLogs(logs, options = {}) {
@@ -983,6 +1106,9 @@ export function filterLogs(logs, options = {}) {
   const statusFilters = normalizeFilterValues(options.statusFilters ?? options.statusFilter, STATUS_OPTIONS);
   const searchQuery = options.searchQuery ?? '';
   const searchField = options.searchField ?? 'all';
+  const searchMode = normalizeSearchMode(options.searchMode);
+  const wordMatchMode = normalizeWordMatchMode(options.wordMatchMode);
+  const matchCase = Boolean(options.matchCase);
   const showCookieValues = Boolean(options.showCookieValues);
   const hideFrameworkAssets = options.hideFrameworkAssets !== false;
 
@@ -990,7 +1116,12 @@ export function filterLogs(logs, options = {}) {
     return (!hideFrameworkAssets || !isFrameworkAssetRequest(log)) &&
       matchesMethodFilters(log, methodFilters) &&
       matchesStatusFilters(log, statusFilters) &&
-      matchesSearch(log, searchQuery, searchField, { showCookieValues });
+      matchesSearch(log, searchQuery, searchField, {
+        matchCase,
+        searchMode,
+        showCookieValues,
+        wordMatchMode
+      });
   });
 }
 
@@ -1119,6 +1250,10 @@ export const Header = React.memo(function Header({
 
 export function formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery, options = {}) {
   const parts = [];
+  const query = String(searchQuery ?? '').trim();
+  const searchMode = normalizeSearchMode(options.searchMode);
+  const wordMatchMode = normalizeWordMatchMode(options.wordMatchMode);
+  const matchCase = Boolean(options.matchCase);
 
   if (methodFilters.length > 0) {
     parts.push(`method ${formatSelectedValues(methodFilters)}`);
@@ -1128,8 +1263,24 @@ export function formatFilterLabel(methodFilters, statusFilters, searchField, sea
     parts.push(`status ${formatSelectedValues(statusFilters)}`);
   }
 
-  if (searchQuery.trim()) {
-    parts.push(`search "${truncate(searchQuery, 16)}" in ${formatSearchFieldLabel(searchField)}`);
+  if (query) {
+    if (searchMode === 'pattern') {
+      parts.push(`pattern /${truncate(query, 16)}/ in ${formatSearchFieldLabel(searchField)}`);
+    } else {
+      const wordLabel = wordMatchMode === 'or' ? 'any word' : 'all words';
+
+      parts.push(`search ${wordLabel} "${truncate(query, 16)}" in ${formatSearchFieldLabel(searchField)}`);
+    }
+
+    if (matchCase) {
+      parts.push('match case');
+    }
+
+    const warning = getSearchQueryWarning(query, { matchCase, searchMode });
+
+    if (warning) {
+      parts.push(warning);
+    }
   }
 
   if (options.hideFrameworkAssets !== undefined) {
@@ -1140,7 +1291,11 @@ export function formatFilterLabel(methodFilters, statusFilters, searchField, sea
     parts.push('cli sent marked *');
   }
 
-  if (searchField === 'body' && searchQuery.trim() && Number(options.coldEntryCount ?? 0) > 0) {
+  if (Number(options.diffCandidateCount ?? 0) > 0) {
+    parts.push('sim matches m1');
+  }
+
+  if (searchField === 'body' && query && Number(options.coldEntryCount ?? 0) > 0) {
     parts.push('cold bodies load on inspect');
   }
 
@@ -1163,8 +1318,13 @@ export const TrafficList = React.memo(function TrafficList({
   marginRight = TRAFFIC_PANE_GAP,
   paneWidth = TRAFFIC_LIST_WIDTH,
   clinspectSentLogIds,
+  diffBaseLogId,
+  diffCandidateLogIds,
   statusFilters,
   searchField,
+  searchMode,
+  matchCase,
+  wordMatchMode,
   searchQuery
 }) {
   const normalizedDisplay = normalizeTrafficListDisplay(listDisplay);
@@ -1178,14 +1338,24 @@ export const TrafficList = React.memo(function TrafficList({
   const clinspectSentIds = clinspectSentLogIds instanceof Set
     ? clinspectSentLogIds
     : new Set(clinspectSentLogIds ?? []);
+  const diffCandidateIds = diffCandidateLogIds instanceof Set
+    ? diffCandidateLogIds
+    : new Set(diffCandidateLogIds ?? []);
   const clinspectSentCount = logs.reduce((count, log) => (
     clinspectSentIds.has(log.id) ? count + 1 : count
+  ), 0);
+  const diffCandidateCount = logs.reduce((count, log) => (
+    diffCandidateIds.has(log.id) ? count + 1 : count
   ), 0);
   const filterLabel = formatFilterLabel(methodFilters, statusFilters, searchField, searchQuery, {
     coldEntryCount: historyStatus?.coldEntries ?? 0,
     clinspectSentCount,
+    diffCandidateCount,
     frameworkSummary,
-    hideFrameworkAssets
+    hideFrameworkAssets,
+    matchCase,
+    searchMode,
+    wordMatchMode
   });
   const displayLabel = `${normalizedDisplay.density}/${normalizedDisplay.pathMode}`;
   const noRowsText = totalCount === 0 ? emptyText : 'No matching traffic';
@@ -1210,8 +1380,13 @@ export const TrafficList = React.memo(function TrafficList({
         const absoluteIndex = startIndex + offset;
         const selected = absoluteIndex === selectedIndex;
         const isClinspectSent = clinspectSentIds.has(log.id);
+        const isDiffBase = Boolean(diffBaseLogId) && log.id === diffBaseLogId;
+        const isDiffCandidate = diffCandidateIds.has(log.id);
+        const isDiffMarked = isDiffBase || isDiffCandidate;
         const row = formatTrafficRow(log, selected, normalizedDisplay, rowWidth, {
-          isClinspectSent
+          isClinspectSent,
+          isDiffBase,
+          isDiffCandidate
         });
 
         return h(
@@ -1219,8 +1394,8 @@ export const TrafficList = React.memo(function TrafficList({
           {
             key: log.id,
             bold: selected,
-            backgroundColor: selected ? 'cyan' : undefined,
-            color: selected ? 'black' : rowColor(log, isClinspectSent),
+            backgroundColor: selected ? 'cyan' : (isDiffMarked ? 'white' : undefined),
+            color: selected ? 'black' : rowColor(log, isClinspectSent, isDiffMarked),
             wrap: 'truncate'
           },
           row
@@ -1250,6 +1425,39 @@ function formatFieldLine(searchField, isFocused) {
     .join(' ');
 }
 
+function formatSearchModeLine(searchMode, isFocused) {
+  return SEARCH_MODES
+    .map((value) => formatOptionToken(value, {
+      cursor: isFocused && value === searchMode,
+      label: value,
+      selected: value === searchMode
+    }))
+    .join(' ');
+}
+
+function formatWordMatchModeLine(wordMatchMode, isFocused) {
+  return WORD_MATCH_MODES
+    .map((value) => formatOptionToken(value, {
+      cursor: isFocused && value === wordMatchMode,
+      label: value,
+      selected: value === wordMatchMode
+    }))
+    .join(' ');
+}
+
+function formatCaseLine(matchCase, isFocused) {
+  return [
+    ['ignore', !matchCase],
+    ['match', matchCase]
+  ]
+    .map(([value, selected]) => formatOptionToken(value, {
+      cursor: isFocused && selected,
+      label: value,
+      selected
+    }))
+    .join(' ');
+}
+
 
 function focusedMarker(row, filterFocus) {
   return row === filterFocus ? '>' : ' ';
@@ -1262,23 +1470,30 @@ export const FilterBar = React.memo(function FilterBar({
   logsCount,
   methodFilters,
   methodOptionIndex,
+  matchCase,
   searchField,
+  searchMode,
   searchQuery,
   statusFilters,
   statusOptionIndex,
+  wordMatchMode,
   visibleCount
 }) {
   const query = searchQuery.length > 0 ? searchQuery : '(empty)';
   const activeFilters = countActiveFilters({
     methodFilters,
+    matchCase,
     statusFilters,
-    searchQuery
+    searchMode,
+    searchQuery,
+    wordMatchMode
   });
   const bodySearchColdHint = searchField === 'body' &&
     searchQuery.trim() &&
     Number(historyStatus?.coldEntries ?? 0) > 0
     ? `${historyStatus.coldEntries} cold entries: body text loads when inspected`
     : '';
+  const searchWarning = getSearchQueryWarning(searchQuery, { matchCase, searchMode });
 
   return h(
     Box,
@@ -1299,6 +1514,21 @@ export const FilterBar = React.memo(function FilterBar({
     h(
       Text,
       { wrap: 'truncate' },
+      `${focusedMarker('mode', filterFocus)} mode ${formatSearchModeLine(normalizeSearchMode(searchMode), filterFocus === 'mode')}`
+    ),
+    h(
+      Text,
+      { wrap: 'truncate' },
+      `${focusedMarker('words', filterFocus)} words ${formatWordMatchModeLine(normalizeWordMatchMode(wordMatchMode), filterFocus === 'words')}`
+    ),
+    h(
+      Text,
+      { wrap: 'truncate' },
+      `${focusedMarker('case', filterFocus)} case ${formatCaseLine(Boolean(matchCase), filterFocus === 'case')}`
+    ),
+    h(
+      Text,
+      { wrap: 'truncate' },
       `${focusedMarker('method', filterFocus)} method ${formatOptionsLine(METHOD_OPTIONS, methodFilters, methodOptionIndex, filterFocus === 'method')}`
     ),
     h(
@@ -1308,6 +1538,9 @@ export const FilterBar = React.memo(function FilterBar({
     ),
     bodySearchColdHint
       ? h(Text, { color: 'yellow', wrap: 'truncate' }, bodySearchColdHint)
+      : null,
+    searchWarning
+      ? h(Text, { color: 'yellow', wrap: 'truncate' }, searchWarning)
       : null,
     h(Text, { color: 'gray', wrap: 'truncate' }, `${getBindingPairLabel(keyBindings, 'filter.previousField', 'filter.nextField')} row | ${getBindingPairLabel(keyBindings, 'filter.previousOption', 'filter.nextOption')} option | ${getBindingLabel(keyBindings, 'filter.toggleOption', { limit: 1 })} select | ${getBindingLabel(keyBindings, 'filter.clear', { limit: 1 })} clear filters | ${getBindingLabel(keyBindings, 'filter.close', { limit: 2 })} close`)
   );

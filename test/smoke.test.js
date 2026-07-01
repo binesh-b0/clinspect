@@ -140,7 +140,7 @@ test('startInspector loads project key binding config and passes it into App', a
   const keyBindingConfig = normalizeKeyBindings({
     keyBindings: {
       'main.moveDown': ['z'],
-      'main.moveUp': ['a']
+      'main.moveUp': ['z', 'i']
     }
   });
   const calls = [];
@@ -187,7 +187,7 @@ test('startInspector loads project key binding config and passes it into App', a
   );
 
   assert.deepEqual(appProps.keyBindings['main.moveDown'], ['z']);
-  assert.deepEqual(appProps.keyBindings['main.moveUp'], ['a']);
+  assert.deepEqual(appProps.keyBindings['main.moveUp'], ['i']);
   assert.deepEqual(appProps.keyBindingWarnings, ['duplicate key binding z for main.moveUp; main.moveDown keeps it']);
 
   await inspector.stop();
