@@ -212,7 +212,8 @@ export const DEFAULT_KEY_BINDINGS = Object.freeze({
   'main.halfPageUp': Object.freeze(['ctrl-u']),
   'main.top': Object.freeze(['g']),
   'main.bottom': Object.freeze(['G']),
-  'main.toggleFrameworkAssets': Object.freeze(['F'])
+  'main.toggleFrameworkAssets': Object.freeze(['F']),
+  'main.toggleAnomalies': Object.freeze(['A'])
 });
 
 const ACTION_CONTEXT_GROUPS = [
@@ -381,7 +382,8 @@ const ACTION_CONTEXT_GROUPS = [
     'main.halfPageUp',
     'main.top',
     'main.bottom',
-    'main.toggleFrameworkAssets'
+    'main.toggleFrameworkAssets',
+    'main.toggleAnomalies'
   ],
   [
     'main.openHelp',
@@ -421,7 +423,8 @@ const ACTION_CONTEXT_GROUPS = [
     'main.halfPageUp',
     'main.top',
     'main.bottom',
-    'main.toggleFrameworkAssets'
+    'main.toggleFrameworkAssets',
+    'main.toggleAnomalies'
   ]
 ];
 

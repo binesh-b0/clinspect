@@ -39,8 +39,21 @@ import {
   getBindingLabel,
   getBindingPairLabel
 } from './key-bindings.js';
+import { getEndpointRoutePattern } from './endpoints.js';
 
 const TRAFFIC_ROW_MARKER_WIDTH = 3;
+const DEFAULT_SLOW_REQUEST_MS = 1000;
+const DEFAULT_LARGE_BODY_BYTES = 100 * 1024;
+const DEFAULT_REPEATED_ERROR_COUNT = 3;
+const VALID_EMPTY_RESPONSE_STATUSES = new Set([204, 205, 304]);
+const TRAFFIC_ANOMALY_LABELS = Object.freeze({
+  'empty-response': 'empty response',
+  'large-body': 'large body',
+  'missing-content-type': 'missing content-type',
+  'repeated-4xx': 'repeated 4xx',
+  'repeated-5xx': 'repeated 5xx',
+  slow: 'slow'
+});
 
 function formatTime(timestamp) {
   return new Date(timestamp).toLocaleTimeString('en-US', {
@@ -85,6 +98,149 @@ function rowColor(log, isClinspectSent = false, isDiffMarked = false) {
   }
 
   return METHOD_COLORS[log.method] ?? 'white';
+}
+
+function getContentLength(headers = {}) {
+  const rawValue = getHeaderValue(headers, 'content-length').split(',', 1)[0]?.trim() ?? '';
+  const length = Number(rawValue);
+
+  return Number.isFinite(length) && length >= 0 ? length : 0;
+}
+
+function getBodyByteLength(value = '') {
+  return Buffer.byteLength(String(value ?? ''), 'utf8');
+}
+
+function getStatusFamily(statusCode) {
+  const status = Number(statusCode);
+
+  if (!Number.isInteger(status)) {
+    return null;
+  }
+
+  if (status >= 400 && status < 500) {
+    return '4xx';
+  }
+
+  if (status >= 500 && status < 600) {
+    return '5xx';
+  }
+
+  return null;
+}
+
+function getRepeatedErrorKey(log = {}) {
+  const method = String(log.method ?? 'GET').toUpperCase();
+  const routePattern = getEndpointRoutePattern(log.path ?? '/');
+  const statusFamily = getStatusFamily(log.statusCode);
+
+  return statusFamily ? `${method} ${routePattern} ${statusFamily}` : '';
+}
+
+function getTrafficAnomalyThresholds(options = {}) {
+  return {
+    largeBodyBytes: Number.isFinite(options.largeBodyBytes) ? options.largeBodyBytes : DEFAULT_LARGE_BODY_BYTES,
+    repeatedErrorCount: Number.isFinite(options.repeatedErrorCount) ? options.repeatedErrorCount : DEFAULT_REPEATED_ERROR_COUNT,
+    slowRequestMs: Number.isFinite(options.slowRequestMs) ? options.slowRequestMs : DEFAULT_SLOW_REQUEST_MS
+  };
+}
+
+function getRepeatedErrorCounts(logs = []) {
+  const counts = new Map();
+
+  for (const log of logs ?? []) {
+    const key = getRepeatedErrorKey(log);
+
+    if (key) {
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+
+  return counts;
+}
+
+function hasLargePayload(payload = {}, thresholdBytes = DEFAULT_LARGE_BODY_BYTES) {
+  return Boolean(payload?.truncated) ||
+    getBodyByteLength(payload?.body ?? '') >= thresholdBytes ||
+    getContentLength(payload?.headers ?? {}) >= thresholdBytes;
+}
+
+function isSuspiciousEmptyResponse(log = {}) {
+  const method = String(log.method ?? '').toUpperCase();
+  const status = Number(log.statusCode);
+  const response = log.response ?? {};
+  const responseBody = String(response.body ?? '');
+
+  if (method === 'HEAD' || VALID_EMPTY_RESPONSE_STATUSES.has(status) || responseBody.length > 0) {
+    return false;
+  }
+
+  if (status === 200 || status >= 400) {
+    return true;
+  }
+
+  return getContentLength(response.headers ?? {}) > 0;
+}
+
+export function getTrafficAnomalyReasons(log = {}, context = {}) {
+  const thresholds = getTrafficAnomalyThresholds(context);
+  const repeatedErrorCounts = context.repeatedErrorCounts instanceof Map
+    ? context.repeatedErrorCounts
+    : getRepeatedErrorCounts(context.logs ?? []);
+  const reasons = [];
+  const responseTimeMs = Number(log.responseTimeMs);
+  const responseBody = String(log.response?.body ?? '');
+
+  if (Number.isFinite(responseTimeMs) && responseTimeMs >= thresholds.slowRequestMs) {
+    reasons.push('slow');
+  }
+
+  if (hasLargePayload(log.request, thresholds.largeBodyBytes) || hasLargePayload(log.response, thresholds.largeBodyBytes)) {
+    reasons.push('large-body');
+  }
+
+  const repeatedErrorKey = getRepeatedErrorKey(log);
+  const statusFamily = getStatusFamily(log.statusCode);
+
+  if (repeatedErrorKey && statusFamily && (repeatedErrorCounts.get(repeatedErrorKey) ?? 0) >= thresholds.repeatedErrorCount) {
+    reasons.push(`repeated-${statusFamily}`);
+  }
+
+  if (responseBody.length > 0 && !getHeaderValue(log.response?.headers ?? {}, 'content-type')) {
+    reasons.push('missing-content-type');
+  }
+
+  if (isSuspiciousEmptyResponse(log)) {
+    reasons.push('empty-response');
+  }
+
+  return reasons;
+}
+
+export function getTrafficAnomalyMap(logs = [], options = {}) {
+  const thresholds = getTrafficAnomalyThresholds(options);
+  const repeatedErrorCounts = getRepeatedErrorCounts(logs);
+  const anomalyMap = new Map();
+
+  for (const log of logs ?? []) {
+    const reasons = getTrafficAnomalyReasons(log, {
+      ...thresholds,
+      repeatedErrorCounts
+    });
+
+    if (reasons.length > 0) {
+      anomalyMap.set(String(log.id), reasons);
+    }
+  }
+
+  return anomalyMap;
+}
+
+export function formatAnomalyReasons(reasons = []) {
+  return [...new Set(reasons)]
+    .map((reason) => TRAFFIC_ANOMALY_LABELS[reason] ?? String(reason ?? ''))
+    .filter(Boolean)
+    .join(', ');
 }
 
 function normalizeTrafficColumns(columns = {}) {
@@ -408,7 +564,7 @@ export function formatTrafficRow(log, selected = false, display = {}, rowWidth =
     ? pad('m1', TRAFFIC_ROW_MARKER_WIDTH)
     : (options.isDiffCandidate
       ? pad('sim', TRAFFIC_ROW_MARKER_WIDTH)
-      : pad(selected ? '>' : (options.isClinspectSent ? '*' : ''), TRAFFIC_ROW_MARKER_WIDTH));
+      : pad(selected ? '>' : (options.isAnomaly ? '!' : (options.isClinspectSent ? '*' : '')), TRAFFIC_ROW_MARKER_WIDTH));
   const tokens = [marker];
 
   if (columns.time) {
@@ -1268,29 +1424,31 @@ export function formatFilterLabel(methodFilters, statusFilters, searchField, sea
 }
 
 export const TrafficList = React.memo(function TrafficList({
+  anomalyMap,
   bottomOffset,
   emptyText,
-  logs,
-  totalCount,
-  selectedIndex,
-  isFocused,
-  isFollowingLatest,
+  highlightAnomalies = false,
+  logs = [],
+  totalCount = 0,
+  selectedIndex = 0,
+  isFocused = false,
+  isFollowingLatest = false,
   frameworkSummary,
   historyStatus,
-  hideFrameworkAssets,
+  hideFrameworkAssets = true,
   listDisplay,
-  methodFilters,
+  methodFilters = [],
   marginRight = TRAFFIC_PANE_GAP,
   paneWidth = TRAFFIC_LIST_WIDTH,
   clinspectSentLogIds,
   diffBaseLogId,
   diffCandidateLogIds,
-  statusFilters,
-  searchField,
-  searchMode,
-  matchCase,
-  wordMatchMode,
-  searchQuery
+  statusFilters = [],
+  searchField = 'all',
+  searchMode = 'words',
+  matchCase = false,
+  wordMatchMode = 'and',
+  searchQuery = ''
 }) {
   const normalizedDisplay = normalizeTrafficListDisplay(listDisplay);
   const rowWidth = getTrafficRowWidth(paneWidth);
@@ -1306,6 +1464,7 @@ export const TrafficList = React.memo(function TrafficList({
   const diffCandidateIds = diffCandidateLogIds instanceof Set
     ? diffCandidateLogIds
     : new Set(diffCandidateLogIds ?? []);
+  const activeAnomalyMap = anomalyMap instanceof Map ? anomalyMap : new Map();
   const clinspectSentCount = logs.reduce((count, log) => (
     clinspectSentIds.has(log.id) ? count + 1 : count
   ), 0);
@@ -1322,6 +1481,15 @@ export const TrafficList = React.memo(function TrafficList({
     searchMode,
     wordMatchMode
   });
+  const selectedAnomalyReasons = highlightAnomalies
+    ? activeAnomalyMap.get(String(logs[selectedIndex]?.id)) ?? []
+    : [];
+  const anomalyStatus = highlightAnomalies
+    ? [
+      `experimental highlights on: ${activeAnomalyMap.size} ${activeAnomalyMap.size === 1 ? 'candidate' : 'candidates'}`,
+      selectedAnomalyReasons.length > 0 ? `selected hints: ${formatAnomalyReasons(selectedAnomalyReasons)}` : ''
+    ].filter(Boolean).join(' | ')
+    : '';
   const displayLabel = `${normalizedDisplay.density}/${normalizedDisplay.pathMode}`;
   const noRowsText = totalCount === 0 ? emptyText : 'No matching traffic';
 
@@ -1337,7 +1505,11 @@ export const TrafficList = React.memo(function TrafficList({
       marginRight
     },
     h(Text, { bold: true }, `Traffic ${isFocused ? 'focused' : 'idle'} | ${isFollowingLatest ? 'follow' : 'hold'}`),
-    h(Text, { color: 'gray', wrap: 'truncate' }, `filters ${filterLabel} | view ${displayLabel}`),
+    h(Text, { color: 'gray', wrap: 'truncate' }, [
+      `filters ${filterLabel}`,
+      `view ${displayLabel}`,
+      anomalyStatus
+    ].filter(Boolean).join(' | ')),
     h(Text, { color: 'gray' }, formatTrafficHeader(normalizedDisplay, rowWidth)),
     logs.length === 0
       ? h(Text, { color: 'gray', wrap: 'truncate' }, noRowsText)
@@ -1348,7 +1520,9 @@ export const TrafficList = React.memo(function TrafficList({
         const isDiffBase = Boolean(diffBaseLogId) && log.id === diffBaseLogId;
         const isDiffCandidate = diffCandidateIds.has(log.id);
         const isDiffMarked = isDiffBase || isDiffCandidate;
+        const isAnomaly = highlightAnomalies && activeAnomalyMap.has(String(log.id));
         const row = formatTrafficRow(log, selected, normalizedDisplay, rowWidth, {
+          isAnomaly,
           isClinspectSent,
           isDiffBase,
           isDiffCandidate
@@ -1359,8 +1533,8 @@ export const TrafficList = React.memo(function TrafficList({
           {
             key: log.id,
             bold: selected,
-            backgroundColor: selected ? 'cyan' : (isDiffMarked ? 'white' : undefined),
-            color: selected ? 'black' : rowColor(log, isClinspectSent, isDiffMarked),
+            backgroundColor: selected ? 'cyan' : (isDiffMarked ? 'white' : (isAnomaly ? 'yellow' : undefined)),
+            color: selected || isAnomaly ? 'black' : rowColor(log, isClinspectSent, isDiffMarked),
             wrap: 'truncate'
           },
           row

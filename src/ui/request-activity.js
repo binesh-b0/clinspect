@@ -216,7 +216,7 @@ export const ToastNotification = React.memo(function ToastNotification({
 
   const color = toast.kind === 'error'
     ? 'red'
-    : (toast.kind === 'success' ? 'green' : 'cyan');
+    : (toast.kind === 'success' ? 'green' : (toast.kind === 'warning' ? 'yellow' : 'cyan'));
 
   return h(
     Box,

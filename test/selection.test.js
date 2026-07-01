@@ -25,6 +25,7 @@ import {
   extractPortFromHost,
   findDetailMatches,
   filterLogs,
+  formatAnomalyReasons,
   filterRequestDiffRows,
   formatCommandSelectionStatus,
   formatEndpointGroupRow,
@@ -63,6 +64,8 @@ import {
   getPaneLayout,
   getRenderHeight,
   getSearchQueryWarning,
+  getTrafficAnomalyMap,
+  getTrafficAnomalyReasons,
   getScrollOffsetForFocusedRow,
   getTrafficPaneWidth,
   getTrafficRowWidth,
@@ -83,6 +86,7 @@ import {
   formatRequestActivityRow,
   formatRequestActivityToast,
   RequestActivityPage,
+  ToastNotification,
   resolveCommandInput,
   resolveSelectedLogId,
   selectComposerTab,
@@ -92,6 +96,7 @@ import {
   toggleFilterValue
 } from '../src/ui/App.js';
 import { CommandModal } from '../src/ui/chrome.js';
+import { TrafficList } from '../src/ui/traffic.js';
 import {
   DiffFilterBar,
   RequestDiffModal,
@@ -172,11 +177,27 @@ function getRequestDiffModalRowAreaLineCount(node) {
 }
 
 function getNodeText(node) {
+  if (Array.isArray(node)) {
+    return node.map(getNodeText).join('');
+  }
+
   if (typeof node === 'string') {
     return node;
   }
 
   return asArray(node?.props?.children).map(getNodeText).join('');
+}
+
+function collectNodes(node) {
+  if (Array.isArray(node)) {
+    return node.flatMap(collectNodes);
+  }
+
+  if (!node || typeof node === 'string') {
+    return [];
+  }
+
+  return [node, ...asArray(node.props?.children).flatMap(collectNodes)];
 }
 
 const logs = [
@@ -420,6 +441,121 @@ test('traffic list display helpers format path modes and density presets', () =>
   assert.equal(formatTrafficRow(log, false, pathOnly).includes('200'), false);
   assert.equal(formatFilterLabel([], [], 'all', '', { clinspectSentCount: 2 }), 'cli sent marked *');
   assert.equal(formatFilterLabel([], [], 'all', '', { diffCandidateCount: 2 }), 'sim matches m1');
+});
+
+test('traffic anomaly helpers detect balanced anomaly cases', () => {
+  const repeated4xxLogs = [
+    createDiffLog({ id: 'bad-1', path: '/api/users/123', statusCode: 404 }),
+    createDiffLog({ id: 'bad-2', path: '/api/users/456', statusCode: 429 }),
+    createDiffLog({ id: 'bad-3', path: '/api/users/789', statusCode: 400 })
+  ];
+  const repeated5xxLogs = [
+    createDiffLog({ id: 'err-1', path: '/api/reports/123', statusCode: 500 }),
+    createDiffLog({ id: 'err-2', path: '/api/reports/456', statusCode: 502 }),
+    createDiffLog({ id: 'err-3', path: '/api/reports/789', statusCode: 503 })
+  ];
+  const largeBody = createDiffLog({
+    id: 'large',
+    response: { body: 'x'.repeat(100 * 1024), headers: { 'content-type': 'text/plain' } }
+  });
+  const truncatedBody = createDiffLog({
+    id: 'truncated',
+    request: { body: 'partial', headers: {}, truncated: true }
+  });
+  const contentLengthBody = createDiffLog({
+    id: 'content-length',
+    response: { body: '', headers: { 'content-length': String(100 * 1024) } },
+    statusCode: 201
+  });
+  const slow = createDiffLog({ id: 'slow', responseTimeMs: 1000 });
+  const missingContentType = createDiffLog({
+    id: 'missing-content-type',
+    response: { body: 'hello', headers: {} }
+  });
+  const emptyOk = createDiffLog({
+    id: 'empty-ok',
+    response: { body: '', headers: { 'content-type': 'text/plain' } },
+    statusCode: 200
+  });
+  const emptyError = createDiffLog({
+    id: 'empty-error',
+    response: { body: '', headers: { 'content-type': 'text/plain' } },
+    statusCode: 500
+  });
+  const validEmpty = [
+    createDiffLog({ id: 'head', method: 'HEAD', response: { body: '', headers: {} }, statusCode: 200 }),
+    createDiffLog({ id: 'empty-204', response: { body: '', headers: {} }, statusCode: 204 }),
+    createDiffLog({ id: 'empty-304', response: { body: '', headers: {} }, statusCode: 304 })
+  ];
+
+  assert.deepEqual(getTrafficAnomalyMap(repeated4xxLogs).get('bad-1'), ['repeated-4xx', 'empty-response']);
+  assert.deepEqual(getTrafficAnomalyMap(repeated5xxLogs).get('err-1'), ['repeated-5xx', 'empty-response']);
+  assert.deepEqual(getTrafficAnomalyReasons(largeBody), ['large-body']);
+  assert.deepEqual(getTrafficAnomalyReasons(truncatedBody), ['large-body', 'empty-response']);
+  assert.deepEqual(getTrafficAnomalyReasons(contentLengthBody), ['large-body', 'empty-response']);
+  assert.deepEqual(getTrafficAnomalyReasons(slow), ['slow', 'empty-response']);
+  assert.deepEqual(getTrafficAnomalyReasons(missingContentType), ['missing-content-type']);
+  assert.deepEqual(getTrafficAnomalyReasons(emptyOk), ['empty-response']);
+  assert.deepEqual(getTrafficAnomalyReasons(emptyError), ['empty-response']);
+  assert.deepEqual(validEmpty.flatMap((item) => getTrafficAnomalyReasons(item)), []);
+  assert.equal(formatAnomalyReasons(['slow', 'large-body', 'missing-content-type']), 'slow, large body, missing content-type');
+});
+
+test('traffic list renders anomaly highlights without filtering normal rows', () => {
+  const anomalyLog = {
+    id: 'slow',
+    method: 'GET',
+    path: '/api/slow',
+    responseTimeMs: 1200,
+    statusCode: 200,
+    timestamp: 1700000000000,
+    request: { body: '', headers: {} },
+    response: { body: 'ok', headers: { 'content-type': 'text/plain' } }
+  };
+  const normalLog = {
+    id: 'normal',
+    method: 'GET',
+    path: '/api/normal',
+    responseTimeMs: 20,
+    statusCode: 200,
+    timestamp: 1700000000000,
+    request: { body: '', headers: {} },
+    response: { body: 'ok', headers: { 'content-type': 'text/plain' } }
+  };
+  const anomalyMap = getTrafficAnomalyMap([anomalyLog, normalLog]);
+  const node = TrafficList.type({
+    anomalyMap,
+    bottomOffset: 2,
+    emptyText: 'No traffic',
+    highlightAnomalies: true,
+    logs: [anomalyLog, normalLog],
+    totalCount: 2,
+    selectedIndex: 1,
+    isFocused: true,
+    isFollowingLatest: false
+  });
+  const text = getNodeText(node);
+  const anomalyRow = collectNodes(node)
+    .find((item) => item.props?.backgroundColor === 'yellow' && getNodeText(item).includes('/api/slow'));
+  const selectedAnomalyNode = TrafficList.type({
+    anomalyMap,
+    bottomOffset: 2,
+    emptyText: 'No traffic',
+    highlightAnomalies: true,
+    logs: [anomalyLog, normalLog],
+    totalCount: 2,
+    selectedIndex: 0,
+    isFocused: true,
+    isFollowingLatest: false
+  });
+
+  assert.match(text, /experimental highlights on: 1 candidate/);
+  assert.match(text, /\/api\/normal/);
+  assert.equal(text.includes('selected hints: slow'), false);
+  assert.match(getNodeText(selectedAnomalyNode), /selected hints: slow/);
+  assert.equal(formatTrafficRow(anomalyLog, false, undefined, undefined, { isAnomaly: true }).startsWith('! '), true);
+  assert.equal(anomalyRow.props.backgroundColor, 'yellow');
+  assert.equal(anomalyRow.props.color, 'black');
 });
 
 test('request diff compares request metadata, query params, headers, and status', () => {
@@ -1630,6 +1766,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
     'stop-recording',
     'pause-capture',
     'clear-logs',
+    'anomalies',
     'help'
   ]);
   assert.deepEqual(getCommandMatches('res').map((command) => command.name), ['resend']);
@@ -1637,6 +1774,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(getCommandMatches('snp').map((command) => command.name), ['send-next-page']);
   assert.deepEqual(getCommandMatches('rq').map((command) => command.name), ['requests']);
   assert.deepEqual(getCommandMatches('ep').map((command) => command.name), ['endpoints']);
+  assert.deepEqual(getCommandMatches('anom').map((command) => command.name), ['anomalies']);
   assert.deepEqual(getCommandMatches('r').map((command) => command.name), ['resend', 'requests', 'record']);
   assert.deepEqual(resolveCommandInput('next-page').action, { type: 'openNextPage' });
   assert.deepEqual(resolveCommandInput('np').action, { type: 'openNextPage' });
@@ -1647,6 +1785,9 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(resolveCommandInput('endpoints').action, { type: 'openEndpointGroups' });
   assert.deepEqual(resolveCommandInput('endpoint-groups').action, { type: 'openEndpointGroups' });
   assert.deepEqual(resolveCommandInput('ep').action, { type: 'openEndpointGroups' });
+  assert.deepEqual(resolveCommandInput('anomalies').action, { type: 'toggleAnomalies' });
+  assert.deepEqual(resolveCommandInput('anomaly').action, { type: 'toggleAnomalies' });
+  assert.deepEqual(resolveCommandInput('anom').action, { type: 'toggleAnomalies' });
   assert.equal(getCommandSuggestionIndex('r', -1, 1), 0);
   assert.equal(getCommandSuggestionIndex('r', 0, 1), 1);
   assert.equal(getCommandSuggestionIndex('r', 0, -1), 2);
@@ -2091,13 +2232,22 @@ test('keyboard action helper supports list display modal input', () => {
 
 test('keyboard action helper toggles framework assets outside text inputs', () => {
   assert.deepEqual(getKeyboardAction('F'), { type: 'toggleFrameworkAssets' });
+  assert.deepEqual(getKeyboardAction('A'), { type: 'toggleAnomalies' });
   assert.deepEqual(
     getKeyboardAction('F', {}, { isDetailModalOpen: true }),
     { type: 'toggleFrameworkAssets' }
   );
   assert.deepEqual(
+    getKeyboardAction('A', {}, { isDetailModalOpen: true }),
+    { type: 'toggleAnomalies' }
+  );
+  assert.deepEqual(
     getKeyboardAction('F', {}, { isFilterOpen: true, filterFocus: 'query' }),
     { type: 'appendSearch', value: 'F' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('A', {}, { isFilterOpen: true, filterFocus: 'query' }),
+    { type: 'appendSearch', value: 'A' }
   );
   assert.deepEqual(
     getKeyboardAction('w', {}, { isFilterOpen: true, filterFocus: 'query' }),
@@ -2108,8 +2258,16 @@ test('keyboard action helper toggles framework assets outside text inputs', () =
     { type: 'appendDetailSearch', value: 'F' }
   );
   assert.deepEqual(
+    getKeyboardAction('A', {}, { isDetailSearchOpen: true }),
+    { type: 'appendDetailSearch', value: 'A' }
+  );
+  assert.deepEqual(
     getKeyboardAction('F', {}, { isComposerOpen: true, isComposerTextFocused: true }),
     { type: 'insertComposerText', value: 'F' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('A', {}, { isComposerOpen: true, isComposerTextFocused: true }),
+    { type: 'insertComposerText', value: 'A' }
   );
 });
 
@@ -2243,6 +2401,19 @@ test('keyboard action helper supports custom key bindings without stealing text 
   assert.deepEqual(
     getKeyboardAction('z', {}, { filterFocus: 'query', isFilterOpen: true, keyBindings: movementBindings }),
     { type: 'appendSearch', value: 'z' }
+  );
+
+  const anomalyBindings = getTestKeyBindings({
+    'main.toggleAnomalies': ['!']
+  });
+
+  assert.deepEqual(
+    getKeyboardAction('!', {}, { isListFocused: true, keyBindings: anomalyBindings }),
+    { type: 'toggleAnomalies' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('!', {}, { filterFocus: 'query', isFilterOpen: true, keyBindings: anomalyBindings }),
+    { type: 'appendSearch', value: '!' }
   );
 
   const exportBindings = getTestKeyBindings({
@@ -2433,45 +2604,45 @@ test('getRenderHeight keeps one terminal row free for Ink updates', () => {
 test('footer text shows mode-aware essential keymaps', () => {
   assert.equal(
     formatFooterText({ isListFocused: true }),
-    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  : command  h: help'
+    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  A: candidates  : command  h: help'
   );
   assert.equal(
     formatFooterText({ isListFocused: true, hasDiffBase: true }),
-    'j/k: move  [ / ]: page  enter: inspect  a: mark A  u: unmark  b: diff  tab: details  : command  h: help'
+    'j/k: move  [ / ]: page  enter: inspect  a: mark A  u: unmark  b: diff  tab: details  A: candidates  : command  h: help'
   );
   assert.equal(
     formatFooterText({ isListFocused: false }),
-    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  a: mark A  tab: traffic  : command  h: help'
+    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  : command  h: help'
   );
   assert.equal(
     formatFooterText({ hideFrameworkAssets: false, isListFocused: true }),
-    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  : command  h: help'
+    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  A: candidates  : command  h: help'
   );
   assert.equal(
     formatFooterText({ isDetailModalOpen: true }),
-    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  E: edit  a: mark A  enter: collapse  esc/q: close  : command'
+    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  E: edit  a: mark A  enter: collapse  esc/q: close  A: candidates  : command'
   );
   assert.equal(
     formatFooterText({ isDetailModalOpen: true, hasDiffBase: true }),
-    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  E: edit  a: mark A  u: unmark  b: diff  enter: collapse  esc/q: close  : command'
+    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  E: edit  a: mark A  u: unmark  b: diff  enter: collapse  esc/q: close  A: candidates  : command'
   );
   assert.equal(
     formatFooterText({ isListFocused: true, isLiveMode: false, isReplayMode: true }),
-    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  : command  h: help'
+    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  A: candidates  : command  h: help'
   );
   assert.equal(
     formatFooterText({
       isListFocused: true,
       recordingStatus: { mode: 'full', path: './capture.ndjson', state: 'recording', error: null }
     }),
-    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  : command  h: help'
+    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  A: candidates  : command  h: help'
   );
   assert.equal(
     formatFooterText({
       isListFocused: false,
       recordingStatus: { mode: 'partial', path: './capture.ndjson', state: 'paused', error: null }
     }),
-    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  a: mark A  tab: traffic  : command  h: help'
+    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  : command  h: help'
   );
   assert.equal(
     formatFooterText({ isComposerOpen: true }),
@@ -2519,15 +2690,15 @@ test('footer text shows mode-aware essential keymaps', () => {
   );
   assert.equal(
     formatFooterText({ exportStatus: 'copied response body', isListFocused: false }),
-    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  a: mark A  tab: traffic  : command  h: help | copied response body'
+    'j/k: scroll  [ / ]: page  r: req/res  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  : command  h: help | copied response body'
   );
   assert.equal(
     formatFooterText({ isListFocused: true, resendStatus: 'resent GET /food' }),
-    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  : command  h: help | resent GET /food'
+    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  A: candidates  : command  h: help | resent GET /food'
   );
   assert.equal(
     formatFooterText({ commandStatus: 'use :quit', isListFocused: true }),
-    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  : command  h: help | use :quit'
+    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  A: candidates  : command  h: help | use :quit'
   );
   assert.equal(
     formatFooterText({ isCommandOpen: true }),
@@ -2546,6 +2717,7 @@ test('footer and help labels reflect custom key bindings', () => {
     'main.markDiffBase': ['B'],
     'main.clearDiffBase': ['U'],
     'main.openDiff': ['Q'],
+    'main.toggleAnomalies': ['H'],
     'diff.close': ['c'],
     'diff.nextChange': ['>'],
     'diff.previousChange': ['<'],
@@ -2558,11 +2730,11 @@ test('footer and help labels reflect custom key bindings', () => {
 
   assert.equal(
     formatFooterText({ isListFocused: true, keyBindings }),
-    'z/a: move  [ / ]: page  enter: inspect  B: mark A  tab: details  ; command  ?: help'
+    'z/a: move  [ / ]: page  enter: inspect  B: mark A  tab: details  H: candidates  ; command  ?: help'
   );
   assert.equal(
     formatFooterText({ isListFocused: true, hasDiffBase: true, keyBindings }),
-    'z/a: move  [ / ]: page  enter: inspect  B: mark A  U: unmark  Q: diff  tab: details  ; command  ?: help'
+    'z/a: move  [ / ]: page  enter: inspect  B: mark A  U: unmark  Q: diff  tab: details  H: candidates  ; command  ?: help'
   );
   assert.equal(
     formatFooterText({ isExportPromptOpen: true, keyBindings }),
@@ -2593,6 +2765,7 @@ test('footer and help labels reflect custom key bindings', () => {
   assert.deepEqual(diffSection.rows.find((row) => row[1] === 'filter rows'), ['F', 'filter rows']);
   assert.deepEqual(diffSection.rows.find((row) => row[1] === 'open full row'), ['O', 'open full row']);
   assert.deepEqual(exportSection.rows.find((row) => row[1] === 'masked / raw export'), ['1 / 2', 'masked / raw export']);
+  assert.deepEqual(exportSection.rows.find((row) => row[1] === 'experimental highlights'), ['H', 'experimental highlights']);
   assert.equal(DEFAULT_KEY_BINDINGS['main.moveDown'][0], 'j');
 });
 
@@ -2652,8 +2825,16 @@ test('request activity helpers track sent request progress', () => {
     keyBindings: DEFAULT_KEY_BINDINGS,
     selectedId: null
   });
+  const warningToast = ToastNotification.type({
+    toast: {
+      kind: 'warning',
+      message: 'experimental highlights on: 1 candidate'
+    }
+  });
 
   assert.match(getNodeText(page), /esc\/q close \| h help/);
+  assert.equal(warningToast.props.borderColor, 'yellow');
+  assert.equal(collectNodes(warningToast).find((item) => item.props?.children === 'experimental highlights on: 1 candidate')?.props.color, 'yellow');
 });
 
 test('command help rows are generated from command definitions', () => {
@@ -2703,6 +2884,14 @@ test('command help rows are generated from command definitions', () => {
       description: 'open endpoint groups'
     }
   );
+  assert.deepEqual(
+    rows.find((row) => row.command === ':anomalies'),
+    {
+      aliases: ':anomaly, :anom',
+      command: ':anomalies',
+      description: 'toggle experimental highlights'
+    }
+  );
   assert.equal(
     rows.find((row) => row.command === ':clear-logs').aliases,
     ':clear, :clear-traffic'
@@ -2723,6 +2912,10 @@ test('contextual help sections focus the active surface and command availability
   assert.deepEqual(
     trafficSections[0].rows.find((row) => row[1] === 'search traffic'),
     ['/', 'search traffic']
+  );
+  assert.deepEqual(
+    trafficSections[0].rows.find((row) => row[1] === 'experimental highlights'),
+    ['A', 'experimental highlights']
   );
   assert.deepEqual(
     diffSections.map((section) => section.title),

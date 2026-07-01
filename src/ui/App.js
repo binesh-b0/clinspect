@@ -42,6 +42,7 @@ import {
   cycleTrafficPathMode,
   cycleValue,
   filterLogs,
+  getTrafficAnomalyMap,
   getPaneLayout,
   getRecordingStatus,
   getSelectedIndex,
@@ -163,6 +164,7 @@ export {
   cycleValue,
   extractPortFromHost,
   filterLogs,
+  formatAnomalyReasons,
   formatFilterLabel,
   formatFrameworkDetectionLabel,
   formatPathForMode,
@@ -170,6 +172,8 @@ export {
   formatTrafficHeader,
   formatTrafficRow,
   getSearchQueryWarning,
+  getTrafficAnomalyMap,
+  getTrafficAnomalyReasons,
   getMouseWheelTarget,
   getPaneLayout,
   getSearchValues,
@@ -486,6 +490,7 @@ export function App({
   const [isListDisplayOpen, setIsListDisplayOpen] = useState(false);
   const [listDisplayFocusIndex, setListDisplayFocusIndex] = useState(0);
   const [trafficListDisplay, setTrafficListDisplay] = useState(() => normalizeTrafficListDisplay(DEFAULT_TRAFFIC_LIST_DISPLAY));
+  const [highlightAnomalies, setHighlightAnomalies] = useState(false);
   const [hideFrameworkAssets, setHideFrameworkAssets] = useState(() => context.hideFrameworkAssets !== false);
   const [pendingExport, setPendingExport] = useState(null);
   const [exportStatus, setExportStatus] = useState('');
@@ -568,6 +573,7 @@ export function App({
     statusFilters,
     wordMatchMode
   }), [hideFrameworkAssets, logs, matchCase, methodFilters, searchField, searchMode, searchQuery, showCookieValues, statusFilters, wordMatchMode]);
+  const trafficAnomalyMap = useMemo(() => getTrafficAnomalyMap(filteredLogs), [filteredLogs]);
   const endpointGroups = useMemo(() => createEndpointGroups(filteredLogs), [filteredLogs]);
 
   useEffect(() => {
@@ -1120,6 +1126,9 @@ export function App({
         closeCompletedCommand('');
         openEndpointGroups();
         break;
+      case 'toggleAnomalies':
+        closeCompletedCommand(toggleAnomalies());
+        break;
       case 'stopRecording':
         if (isReplayMode) {
           closeCompletedCommand('recording unavailable in replay mode');
@@ -1232,6 +1241,23 @@ export function App({
   const toggleFrameworkAssets = () => {
     setHideFrameworkAssets((current) => !current);
     setIsFollowingLatest(false);
+  };
+
+  const toggleAnomalies = () => {
+    const nextHighlightAnomalies = !highlightAnomalies;
+    const anomalyCount = trafficAnomalyMap.size;
+    const candidateLabel = anomalyCount === 1 ? 'candidate' : 'candidates';
+    const status = nextHighlightAnomalies
+      ? `experimental highlights on: ${anomalyCount} ${candidateLabel}`
+      : 'experimental highlights off';
+
+    setHighlightAnomalies(nextHighlightAnomalies);
+    setCommandState((current) => (
+      current.isOpen ? current : { ...current, status }
+    ));
+    showToast(status, nextHighlightAnomalies && anomalyCount > 0 ? 'warning' : 'info');
+
+    return status;
   };
 
   const toggleFocusedListDisplayColumn = () => {
@@ -2035,8 +2061,10 @@ export function App({
 
   const trafficListNode = h(TrafficList, {
     key: 'traffic',
+    anomalyMap: trafficAnomalyMap,
     bottomOffset,
     emptyText,
+    highlightAnomalies,
     logs: filteredLogs,
     totalCount: logs.length,
     selectedIndex,
@@ -2507,6 +2535,7 @@ export function App({
         onToggleDiffLayout: toggleDiffLayout,
         onToggleDiffFilterOption: () => moveDiffFilterOption(1),
         onToggleFrameworkAssets: toggleFrameworkAssets,
+        onToggleAnomalies: toggleAnomalies,
         onTogglePause: toggleCapturePause,
         onToggleRecordingPause: toggleRecordingPause
       })

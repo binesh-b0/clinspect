@@ -160,6 +160,7 @@ function getDefaultHelpSections(keyBindings = DEFAULT_KEY_BINDINGS) {
         [getActionLabel(keyBindings, 'main.cycleDensity'), 'cycle list density'],
         [getActionLabel(keyBindings, 'main.cyclePaneWidth'), 'cycle pane width'],
         [getActionLabel(keyBindings, 'main.toggleFrameworkAssets'), 'show / hide framework'],
+        [getActionLabel(keyBindings, 'main.toggleAnomalies'), 'experimental highlights'],
         [getActionLabel(keyBindings, 'main.openListDisplay'), 'list display modal'],
         [getActionLabel(keyBindings, 'main.copy'), 'copy item'],
         [getActionLabel(keyBindings, 'main.download'), 'download item'],
@@ -193,7 +194,8 @@ function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context =
             [getActionLabel(keyBindings, 'main.openSearch'), 'search traffic'],
             [getActionPairLabel(keyBindings, 'main.methodFilter', 'main.statusFilter', { separator: ' / ' }), 'method / status filters'],
             [getActionLabel(keyBindings, 'main.openListDisplay'), 'list display'],
-            [getActionLabel(keyBindings, 'main.toggleFrameworkAssets'), 'show / hide framework']
+            [getActionLabel(keyBindings, 'main.toggleFrameworkAssets'), 'show / hide framework'],
+            [getActionLabel(keyBindings, 'main.toggleAnomalies'), 'experimental highlights']
           ]
         },
         {
@@ -219,7 +221,8 @@ function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context =
             [getActionPairLabel(keyBindings, 'main.nextMatch', 'main.previousMatch'), 'next / previous match'],
             [getActionLabel(keyBindings, 'main.inspect', { limit: 1 }), 'collapse row'],
             [getActionLabel(keyBindings, 'main.openDetailModal', { limit: 1 }), 'details modal'],
-            [getActionLabel(keyBindings, 'main.toggleFocus', { limit: 1 }), 'traffic pane']
+            [getActionLabel(keyBindings, 'main.toggleFocus', { limit: 1 }), 'traffic pane'],
+            [getActionLabel(keyBindings, 'main.toggleAnomalies', { limit: 1 }), 'experimental highlights']
           ]
         }
       ];
@@ -234,6 +237,7 @@ function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context =
             [getActionLabel(keyBindings, 'detail.openSearch', { limit: 1 }), 'find details'],
             [getActionPairLabel(keyBindings, 'detail.nextMatch', 'detail.previousMatch'), 'next / previous match'],
             [getActionLabel(keyBindings, 'detail.toggleNode', { limit: 1 }), 'collapse row'],
+            [getActionLabel(keyBindings, 'main.toggleAnomalies', { limit: 1 }), 'experimental highlights'],
             [getActionLabel(keyBindings, 'detail.close', { limit: 2 }), 'close']
           ]
         }
@@ -742,6 +746,7 @@ export function formatFooterText({
   const detailEditKey = getActionLabel(keyBindings, 'detail.editRequest', { limit: 1 });
   const liveDetailActions = isLiveMode ? [`${detailEditKey} edit`] : [];
   const liveDetailModalActions = isLiveMode ? [formatFooterBinding(detailEditKey, 'edit')] : [];
+  const anomalyAction = formatFooterBinding(getActionLabel(keyBindings, 'main.toggleAnomalies', { limit: 1 }), 'candidates');
   const unmarkDiffAction = hasDiffBase
     ? [formatFooterBinding(getActionLabel(keyBindings, 'main.clearDiffBase', { limit: 1 }), 'unmark')]
     : [];
@@ -848,6 +853,7 @@ export function formatFooterText({
       ...compareDiffAction,
       formatFooterBinding(getActionLabel(keyBindings, 'detail.toggleNode', { limit: 1 }), 'collapse'),
       formatFooterBinding(closeDetailKeys, 'close'),
+      anomalyAction,
       `${commandKey} command`
     ]));
   }
@@ -861,6 +867,7 @@ export function formatFooterText({
       ...unmarkDiffAction,
       ...compareDiffAction,
       formatFooterBinding(getActionLabel(keyBindings, 'main.toggleFocus', { limit: 1 }), 'details'),
+      anomalyAction,
       `${commandKey} command`,
       formatFooterBinding(getActionLabel(keyBindings, 'main.openHelp', { limit: 1 }), 'help')
     ]));
@@ -876,6 +883,7 @@ export function formatFooterText({
     ...unmarkDiffAction,
     ...compareDiffAction,
     formatFooterBinding(getActionLabel(keyBindings, 'main.toggleFocus', { limit: 1 }), 'traffic'),
+    anomalyAction,
     `${commandKey} command`,
     formatFooterBinding(getActionLabel(keyBindings, 'main.openHelp', { limit: 1 }), 'help')
   ]));

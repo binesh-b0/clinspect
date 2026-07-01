@@ -197,12 +197,13 @@ Main UI:
 - `v` cycles traffic-list density between full, compact, and path-only views.
 - `w` cycles the focused pane width between normal, half, wide, and full-width views.
 - `F` shows or hides framework/dev-server traffic.
+- `A` toggles experimental traffic highlights for heuristic candidates such as slow requests, repeated errors, large bodies, missing content types, and suspicious empty responses.
 - `L` opens traffic-list display settings; `j`/`k` selects a row, left/right changes path mode, density, or width, `space` shows/hides fields or framework traffic, `r` resets, `enter`/`esc` closes.
 - `y` copies the focused traffic item or detail.
 - `D` downloads the focused traffic item or detail to `./.clinspect/exports/`.
 - `m`/`r` chooses masked or raw values after starting an export.
 - `m` opens method filters; `s` opens status filters; `x` clears filters.
-- `:` opens command mode for careful actions: `:resend`, `:next-page`, `:send-next-page`, `:requests`, `:record`, `:stop`, `:pause`, `:clear`, `:quit`, and `:help`. `Ctrl-:` is also accepted when the terminal reports it distinctly.
+- `:` opens command mode for careful actions: `:resend`, `:next-page`, `:send-next-page`, `:requests`, `:anomalies`, `:record`, `:stop`, `:pause`, `:clear`, `:quit`, and `:help`. `Ctrl-:` is also accepted when the terminal reports it distinctly.
 - `h` or `Ctrl-/` opens help.
 - `Ctrl-C` or `Ctrl-Q` quits.
 

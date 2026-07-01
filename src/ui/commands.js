@@ -75,6 +75,12 @@ export const COMMAND_DEFINITIONS = [
     action: { type: 'clearLogs' }
   },
   {
+    name: 'anomalies',
+    aliases: ['anomaly', 'anom'],
+    description: 'toggle experimental highlights',
+    action: { type: 'toggleAnomalies' }
+  },
+  {
     name: 'help',
     aliases: ['h'],
     description: 'open help',
@@ -956,6 +962,10 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     return { type: 'toggleFrameworkAssets' };
   }
 
+  if (matches('main.toggleAnomalies') && !isFilterOpen) {
+    return { type: 'toggleAnomalies' };
+  }
+
   if (isDetailModalOpen) {
     if (matches('detail.close')) {
       return { type: 'closeDetailModal' };
@@ -1394,6 +1404,7 @@ export function KeyboardControls({
   onToggleDiffFilterOption,
   onToggleFilterOption,
   onToggleFrameworkAssets,
+  onToggleAnomalies,
   onToggleListDisplayColumn,
   onToggleDetailTab,
   onToggleFocus,
@@ -1743,6 +1754,9 @@ export function KeyboardControls({
         break;
       case 'toggleFrameworkAssets':
         onToggleFrameworkAssets();
+        break;
+      case 'toggleAnomalies':
+        onToggleAnomalies();
         break;
       case 'toggleListDisplayColumn':
         onToggleListDisplayColumn();
