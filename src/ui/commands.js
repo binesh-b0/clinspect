@@ -1063,6 +1063,14 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
       return { type: 'toggleDetailTab' };
     }
 
+    if (matches('detail.previousTab')) {
+      return { type: 'cycleDetailTab', direction: -1 };
+    }
+
+    if (matches('detail.nextTab')) {
+      return { type: 'cycleDetailTab', direction: 1 };
+    }
+
     if (matches('detail.toggleNode')) {
       return { type: 'toggleDetailNode' };
     }
@@ -1248,6 +1256,14 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
 
   if (matches('main.toggleDetailTab')) {
     return { type: 'toggleDetailTab' };
+  }
+
+  if (matches('main.previousDetailTab') && !isListFocused) {
+    return { type: 'cycleDetailTab', direction: -1 };
+  }
+
+  if (matches('main.nextDetailTab') && !isListFocused) {
+    return { type: 'cycleDetailTab', direction: 1 };
   }
 
   if (matches('main.statusFilter')) {
@@ -1605,6 +1621,9 @@ export function KeyboardControls({
       case 'cycleDiffFilterFocus':
         onCycleDiffFilterFocus(action.direction);
         break;
+      case 'cycleDetailTab':
+        onToggleDetailTab(action.direction);
+        break;
       case 'cycleListDisplayOption':
         onCycleListDisplayOption(action.direction);
         break;
@@ -1804,7 +1823,7 @@ export function KeyboardControls({
         onStopRecording();
         break;
       case 'toggleDetailTab':
-        onToggleDetailTab();
+        onToggleDetailTab(1);
         break;
       case 'toggleComposerField':
         onToggleComposerField();

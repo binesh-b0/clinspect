@@ -1728,7 +1728,7 @@ export const DetailModal = React.memo(function DetailModal({
   const matchLabel = matchCount > 0 ? ` | match ${activeMatchIndex + 1}/${matchCount}` : '';
   const subtitle = [
     `${getDetailBindingLabel(keyBindings, 'detail.close', { limit: 2 })} close`,
-    `${getDetailBindingLabel(keyBindings, 'detail.toggleTab', { limit: 1 })} tabs`,
+    `${getDetailBindingPairLabel(keyBindings, 'detail.previousTab', 'detail.nextTab')} tabs`,
     `${getDetailBindingLabel(keyBindings, 'detail.openSearch', { limit: 1 })} find`,
     `${getDetailBindingPairLabel(keyBindings, 'detail.nextMatch', 'detail.previousMatch')} next/prev`,
     `${getDetailBindingLabel(keyBindings, 'detail.toggleNode', { limit: 1 })} collapse`

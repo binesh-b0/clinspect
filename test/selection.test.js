@@ -1561,6 +1561,22 @@ test('keyboard action helper resolves navigation aliases and page movement', () 
     getKeyboardAction('/', {}, { isListFocused: false }),
     { type: 'openDetailSearch' }
   );
+  assert.deepEqual(
+    getKeyboardAction('', { rightArrow: true }, { isListFocused: false }),
+    { type: 'cycleDetailTab', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { leftArrow: true }, { isListFocused: false }),
+    { type: 'cycleDetailTab', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { rightArrow: true }, { isListFocused: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { leftArrow: true }, { isListFocused: true }),
+    { type: 'none' }
+  );
   assert.deepEqual(getKeyboardAction('o'), { type: 'openDetailModal' });
   assert.deepEqual(
     getKeyboardAction('y', {}, { isListFocused: true }),
@@ -2585,6 +2601,14 @@ test('keyboard action helper supports detail modal and detail search input', () 
     { type: 'scrollDetails', direction: 1 }
   );
   assert.deepEqual(
+    getKeyboardAction('', { rightArrow: true }, { isDetailModalOpen: true }),
+    { type: 'cycleDetailTab', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { leftArrow: true }, { isDetailModalOpen: true }),
+    { type: 'cycleDetailTab', direction: -1 }
+  );
+  assert.deepEqual(
     getKeyboardAction('R', {}, { isDetailModalOpen: true, isLiveMode: true }),
     { type: 'showCommandHint', message: 'use :resend' }
   );
@@ -2611,6 +2635,14 @@ test('keyboard action helper supports detail modal and detail search input', () 
   assert.deepEqual(
     getKeyboardAction('/', { ctrl: true }, { isDetailSearchOpen: true }),
     { type: 'openHelp' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { rightArrow: true }, { isDetailSearchOpen: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { leftArrow: true }, { isDetailSearchOpen: true }),
+    { type: 'none' }
   );
   assert.deepEqual(
     getKeyboardAction('R', {}, { isDetailSearchOpen: true }),
@@ -2673,6 +2705,34 @@ test('keyboard action helper supports custom key bindings without stealing text 
   assert.deepEqual(
     getKeyboardAction('z', {}, { filterFocus: 'query', isFilterOpen: true, keyBindings: movementBindings }),
     { type: 'appendSearch', value: 'z' }
+  );
+
+  const detailTabBindings = getTestKeyBindings({
+    'main.previousDetailTab': ['Z'],
+    'main.nextDetailTab': ['X'],
+    'detail.previousTab': ['<'],
+    'detail.nextTab': ['>']
+  });
+
+  assert.deepEqual(
+    getKeyboardAction('X', {}, { isListFocused: false, keyBindings: detailTabBindings }),
+    { type: 'cycleDetailTab', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('Z', {}, { isListFocused: false, keyBindings: detailTabBindings }),
+    { type: 'cycleDetailTab', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('X', {}, { isListFocused: true, keyBindings: detailTabBindings }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('>', {}, { isDetailModalOpen: true, keyBindings: detailTabBindings }),
+    { type: 'cycleDetailTab', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('<', {}, { isDetailModalOpen: true, keyBindings: detailTabBindings }),
+    { type: 'cycleDetailTab', direction: -1 }
   );
 
   const anomalyBindings = getTestKeyBindings({
@@ -2884,7 +2944,7 @@ test('footer text shows mode-aware essential keymaps', () => {
   );
   assert.equal(
     formatFooterText({ isListFocused: false }),
-    'j/k: scroll  [ / ]: page  r: tabs  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  : command  h: help'
+    'j/k: scroll  [ / ]: page  left/right: tabs  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  : command  h: help'
   );
   assert.equal(
     formatFooterText({ hideFrameworkAssets: false, isListFocused: true }),
@@ -2892,11 +2952,11 @@ test('footer text shows mode-aware essential keymaps', () => {
   );
   assert.equal(
     formatFooterText({ isDetailModalOpen: true }),
-    'j/k: scroll  [ / ]: page  r: tabs  /: find  n/N: match  E: edit  a: mark A  enter: collapse  esc/q: close  A: candidates  : command'
+    'j/k: scroll  [ / ]: page  left/right: tabs  /: find  n/N: match  E: edit  a: mark A  enter: collapse  esc/q: close  A: candidates  : command'
   );
   assert.equal(
     formatFooterText({ isDetailModalOpen: true, hasDiffBase: true }),
-    'j/k: scroll  [ / ]: page  r: tabs  /: find  n/N: match  E: edit  a: mark A  u: unmark  b: diff  enter: collapse  esc/q: close  A: candidates  : command'
+    'j/k: scroll  [ / ]: page  left/right: tabs  /: find  n/N: match  E: edit  a: mark A  u: unmark  b: diff  enter: collapse  esc/q: close  A: candidates  : command'
   );
   assert.equal(
     formatFooterText({ isListFocused: true, isLiveMode: false, isReplayMode: true }),
@@ -2914,7 +2974,7 @@ test('footer text shows mode-aware essential keymaps', () => {
       isListFocused: false,
       recordingStatus: { mode: 'partial', path: './capture.ndjson', state: 'paused', error: null }
     }),
-    'j/k: scroll  [ / ]: page  r: tabs  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  : command  h: help'
+    'j/k: scroll  [ / ]: page  left/right: tabs  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  : command  h: help'
   );
   assert.equal(
     formatFooterText({ isComposerOpen: true }),
@@ -2966,7 +3026,7 @@ test('footer text shows mode-aware essential keymaps', () => {
   );
   assert.equal(
     formatFooterText({ exportStatus: 'copied response body', isListFocused: false }),
-    'j/k: scroll  [ / ]: page  r: tabs  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  : command  h: help | copied response body'
+    'j/k: scroll  [ / ]: page  left/right: tabs  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  : command  h: help | copied response body'
   );
   assert.equal(
     formatFooterText({ isListFocused: true, resendStatus: 'resent GET /food' }),
@@ -2993,6 +3053,8 @@ test('footer and help labels reflect custom key bindings', () => {
     'main.markDiffBase': ['B'],
     'main.clearDiffBase': ['U'],
     'main.openDiff': ['Q'],
+    'main.previousDetailTab': ['Y'],
+    'main.nextDetailTab': ['I'],
     'main.toggleAnomalies': ['H'],
     'diff.close': ['c'],
     'diff.nextChange': ['>'],
@@ -3011,6 +3073,10 @@ test('footer and help labels reflect custom key bindings', () => {
   assert.equal(
     formatFooterText({ isListFocused: true, hasDiffBase: true, keyBindings }),
     'z/a: move  [ / ]: page  enter: inspect  B: mark A  U: unmark  Q: diff  tab: details  H: candidates  ; command  ?: help'
+  );
+  assert.equal(
+    formatFooterText({ isListFocused: false, keyBindings }),
+    'z/a: scroll  [ / ]: page  Y/I: tabs  .: find  n/N: match  B: mark A  tab: traffic  H: candidates  ; command  ?: help'
   );
   assert.equal(
     formatFooterText({ isExportPromptOpen: true, keyBindings }),
@@ -3033,6 +3099,7 @@ test('footer and help labels reflect custom key bindings', () => {
 
   assert.deepEqual(moveSection.rows.find((row) => row[1] === 'move line'), ['z/a', 'move line']);
   assert.deepEqual(inspectSection.rows.find((row) => row[1] === 'find details'), ['.', 'find details']);
+  assert.deepEqual(inspectSection.rows.find((row) => row[1] === 'request / response / auth / cache'), ['Y/I, r', 'request / response / auth / cache']);
   assert.deepEqual(diffSection.rows.find((row) => row[1] === 'mark A'), ['B', 'mark A']);
   assert.deepEqual(diffSection.rows.find((row) => row[1] === 'unmark A'), ['U', 'unmark A']);
   assert.deepEqual(diffSection.rows.find((row) => row[1] === 'compare with A'), ['Q', 'compare with A']);
@@ -4551,6 +4618,8 @@ test('auth detail tab renders safe badges and searchable source locations', () =
   assert.equal(cycleValue(DETAIL_TABS, 'response'), 'auth');
   assert.equal(cycleValue(DETAIL_TABS, 'auth'), 'cache');
   assert.equal(cycleValue(DETAIL_TABS, 'cache'), 'request');
+  assert.equal(cycleValue(DETAIL_TABS, 'request', -1), 'cache');
+  assert.equal(cycleValue(DETAIL_TABS, 'auth', -1), 'response');
   assert.match(text, /Auth & secrets/);
   assert.match(text, /\[bearer\] request header authorization/);
   assert.match(text, /\[session cookie\] request cookie sid/);

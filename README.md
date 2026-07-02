@@ -191,7 +191,7 @@ Main UI:
 - `g`/`G` jumps to top/bottom.
 - `tab` switches between traffic and details.
 - `enter` inspects a traffic row or toggles a detail node.
-- `r` switches request/response/auth/cache details.
+- Left/right switches request/response/auth/cache details; `r` also cycles forward.
 - `/` searches traffic or details, depending on focus.
 - `t` cycles traffic-list path display between smart, start, and end truncation.
 - `v` cycles traffic-list density between full, compact, and path-only views.

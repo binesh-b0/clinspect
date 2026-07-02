@@ -69,6 +69,16 @@ function getCommandSuggestionLabel(bindings) {
   return next === 'tab/down' && previous === 'up' ? 'tab/up/down' : `${next}/${previous}`;
 }
 
+function getDetailTabHelpLabel(bindings, scope = 'main') {
+  const previousActionId = scope === 'detail' ? 'detail.previousTab' : 'main.previousDetailTab';
+  const nextActionId = scope === 'detail' ? 'detail.nextTab' : 'main.nextDetailTab';
+  const toggleActionId = scope === 'detail' ? 'detail.toggleTab' : 'main.toggleDetailTab';
+  const arrowLabel = getActionPairLabel(bindings, previousActionId, nextActionId);
+  const toggleLabel = getActionLabel(bindings, toggleActionId, { limit: 1 });
+
+  return toggleLabel === 'unbound' ? arrowLabel : `${arrowLabel}, ${toggleLabel}`;
+}
+
 function getActionTokens(bindings, actionId) {
   return bindings?.[actionId] ?? DEFAULT_KEY_BINDINGS[actionId] ?? [];
 }
@@ -108,7 +118,7 @@ function getDefaultHelpSections(keyBindings = DEFAULT_KEY_BINDINGS) {
       title: 'Inspect',
       rows: [
         [getActionLabel(keyBindings, 'main.inspect'), 'inspect row'],
-        [getActionLabel(keyBindings, 'main.toggleDetailTab'), 'request / response / auth / cache'],
+        [getDetailTabHelpLabel(keyBindings, 'main'), 'request / response / auth / cache'],
         [getActionLabel(keyBindings, 'main.openDetailModal'), 'details modal'],
         [getActionLabel(keyBindings, 'main.openSearch'), 'find details'],
         [getActionPairLabel(keyBindings, 'main.nextMatch', 'main.previousMatch', { separator: ' / ' }), 'next / previous match'],
@@ -216,7 +226,7 @@ function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context =
           rows: [
             [getActionPairLabel(keyBindings, 'main.moveDown', 'main.moveUp'), 'scroll'],
             [getActionPairLabel(keyBindings, 'main.pageUp', 'main.pageDown', { separator: ' / ' }), 'page'],
-            [getActionLabel(keyBindings, 'main.toggleDetailTab', { limit: 1 }), 'request / response / auth / cache'],
+            [getDetailTabHelpLabel(keyBindings, 'main'), 'request / response / auth / cache'],
             [getActionLabel(keyBindings, 'main.openSearch', { limit: 1 }), 'find details'],
             [getActionPairLabel(keyBindings, 'main.nextMatch', 'main.previousMatch'), 'next / previous match'],
             [getActionLabel(keyBindings, 'main.inspect', { limit: 1 }), 'collapse row'],
@@ -233,7 +243,7 @@ function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context =
           rows: [
             [getActionPairLabel(keyBindings, 'detail.scrollDown', 'detail.scrollUp'), 'scroll'],
             [getActionPairLabel(keyBindings, 'detail.pageUp', 'detail.pageDown', { separator: ' / ' }), 'page'],
-            [getActionLabel(keyBindings, 'detail.toggleTab', { limit: 1 }), 'request / response / auth / cache'],
+            [getDetailTabHelpLabel(keyBindings, 'detail'), 'request / response / auth / cache'],
             [getActionLabel(keyBindings, 'detail.openSearch', { limit: 1 }), 'find details'],
             [getActionPairLabel(keyBindings, 'detail.nextMatch', 'detail.previousMatch'), 'next / previous match'],
             [getActionLabel(keyBindings, 'detail.toggleNode', { limit: 1 }), 'collapse row'],
@@ -870,7 +880,7 @@ export function formatFooterText({
     return withStatus(joinFooterParts([
       formatFooterBinding(getActionPairLabel(keyBindings, 'detail.scrollDown', 'detail.scrollUp'), 'scroll'),
       formatFooterBinding(getActionPairLabel(keyBindings, 'detail.pageUp', 'detail.pageDown', { separator: ' / ' }), 'page'),
-      formatFooterBinding(getActionLabel(keyBindings, 'detail.toggleTab', { limit: 1 }), 'tabs'),
+      formatFooterBinding(getActionPairLabel(keyBindings, 'detail.previousTab', 'detail.nextTab'), 'tabs'),
       formatFooterBinding(getActionLabel(keyBindings, 'detail.openSearch', { limit: 1 }), 'find'),
       formatFooterBinding(getActionPairLabel(keyBindings, 'detail.nextMatch', 'detail.previousMatch'), 'match'),
       ...liveDetailModalActions,
@@ -902,7 +912,7 @@ export function formatFooterText({
   return withStatus(joinFooterParts([
     formatFooterBinding(moveKeys, 'scroll'),
     formatFooterBinding(pageKeys, 'page'),
-    formatFooterBinding(getActionLabel(keyBindings, 'main.toggleDetailTab', { limit: 1 }), 'tabs'),
+    formatFooterBinding(getActionPairLabel(keyBindings, 'main.previousDetailTab', 'main.nextDetailTab'), 'tabs'),
     formatFooterBinding(getActionLabel(keyBindings, 'main.openSearch', { limit: 1 }), 'find'),
     formatFooterBinding(matchKeys, 'match'),
     formatFooterBinding(getActionLabel(keyBindings, 'main.markDiffBase', { limit: 1 }), 'mark A'),

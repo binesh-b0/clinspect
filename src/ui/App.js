@@ -2653,8 +2653,8 @@ export function App({
           setIsFollowingLatest(false);
         },
         onToggleListDisplayColumn: toggleFocusedListDisplayColumn,
-        onToggleDetailTab: () => {
-          setDetailTab((current) => cycleValue(DETAIL_TABS, current));
+        onToggleDetailTab: (direction = 1) => {
+          setDetailTab((current) => cycleValue(DETAIL_TABS, current, direction));
         },
         onToggleComposerField: () => setComposer(toggleFocusedComposerField),
         onToggleComposerReveal: () => {
