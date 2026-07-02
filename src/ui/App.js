@@ -332,6 +332,19 @@ export {
   normalizeKeyBindings
 } from './key-bindings.js';
 
+export function resolveAutoInspectSelection(logs = [], currentSelectedLogId = null, currentInspectedLogId = null, options = {}) {
+  const nextSelectedLogId = options.selectedLogId ?? (
+    options.boundary
+      ? getBoundaryLogId(logs, options.boundary)
+      : moveSelectedLogId(logs, currentSelectedLogId, options.direction ?? 0)
+  );
+
+  return {
+    inspectedLogId: options.autoInspect ? nextSelectedLogId : currentInspectedLogId,
+    selectedLogId: nextSelectedLogId
+  };
+}
+
 function getNextPageUnavailableStatusForLog(log) {
   const pagination = analyzePagination(log);
 
@@ -541,6 +554,7 @@ export function App({
     return initialLogs[initialLogs.length - 1]?.id ?? null;
   });
   const [isFollowingLatest, setIsFollowingLatest] = useState(false);
+  const [isAutoInspectEnabled, setIsAutoInspectEnabled] = useState(false);
   const [isListFocused, setIsListFocused] = useState(true);
   const [isPaused, setIsPaused] = useState(() => captureController?.isPaused?.() ?? false);
   const [methodFilters, setMethodFilters] = useState([]);
@@ -745,6 +759,15 @@ export function App({
   const inspectedLog = useMemo(() => {
     return hydrateLog(filteredLogs.find((log) => log.id === inspectedLogId) ?? selectedLog);
   }, [filteredLogs, inspectedLogId, selectedLog, stateStore]);
+
+  useEffect(() => {
+    if (!isAutoInspectEnabled) {
+      return;
+    }
+
+    setInspectedLogId(selectedLog?.id ?? null);
+  }, [isAutoInspectEnabled, selectedLog?.id]);
+
   const commandActionLog = isListFocused && !isDetailModalOpen ? hydrateLog(selectedLog) : inspectedLog;
   const diffBaseLog = useMemo(() => {
     if (!diffBaseLogId) {
@@ -1347,6 +1370,9 @@ export function App({
       case 'toggleAnomalies':
         closeCompletedCommand(toggleAnomalies());
         break;
+      case 'toggleAutoInspect':
+        closeCompletedCommand(toggleAutoInspect());
+        break;
       case 'stopRecording':
         if (isReplayMode) {
           closeCompletedCommand('recording unavailable in replay mode');
@@ -1474,6 +1500,21 @@ export function App({
       current.isOpen ? current : { ...current, status }
     ));
     showToast(status, nextHighlightAnomalies && anomalyCount > 0 ? 'warning' : 'info');
+
+    return status;
+  };
+
+  const toggleAutoInspect = () => {
+    const nextEnabled = !isAutoInspectEnabled;
+    const status = nextEnabled ? 'auto inspect on' : 'auto inspect off';
+
+    setIsAutoInspectEnabled(nextEnabled);
+    if (nextEnabled) {
+      setInspectedLogId(selectedLog?.id ?? null);
+    }
+    setCommandState((current) => (
+      current.isOpen ? current : { ...current, status }
+    ));
 
     return status;
   };
@@ -2417,6 +2458,7 @@ export function App({
     isExportPromptOpen: Boolean(pendingExport),
     hasDiffBase: Boolean(diffBaseLogId),
     isHelpOpen,
+    isAutoInspectEnabled,
     hideFrameworkAssets,
     isLiveMode,
     isListDisplayOpen,
@@ -2638,11 +2680,23 @@ export function App({
         onMoveSchemaGroup: moveSchemaGroup,
         onMoveSelection: (direction) => {
           setIsFollowingLatest(false);
-          setSelectedLogId((currentId) => moveSelectedLogId(filteredLogs, currentId, direction));
+          const next = resolveAutoInspectSelection(filteredLogs, selectedLogId, inspectedLogId, {
+            autoInspect: isAutoInspectEnabled,
+            direction
+          });
+
+          setSelectedLogId(next.selectedLogId);
+          setInspectedLogId(next.inspectedLogId);
         },
         onMoveSelectionTo: (boundary) => {
           setIsFollowingLatest(false);
-          setSelectedLogId(getBoundaryLogId(filteredLogs, boundary));
+          const next = resolveAutoInspectSelection(filteredLogs, selectedLogId, inspectedLogId, {
+            autoInspect: isAutoInspectEnabled,
+            boundary
+          });
+
+          setSelectedLogId(next.selectedLogId);
+          setInspectedLogId(next.inspectedLogId);
         },
         onOpenFilter: (focus) => {
           setFilterFocus(focus);
@@ -2815,6 +2869,7 @@ export function App({
         onToggleDiffFilterOption: () => moveDiffFilterOption(1),
         onToggleFrameworkAssets: toggleFrameworkAssets,
         onToggleAnomalies: toggleAnomalies,
+        onToggleAutoInspect: toggleAutoInspect,
         onTogglePause: toggleCapturePause,
         onToggleRecordingPause: toggleRecordingPause
       })

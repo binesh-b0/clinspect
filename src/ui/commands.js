@@ -93,6 +93,12 @@ export const COMMAND_DEFINITIONS = [
     action: { type: 'toggleAnomalies' }
   },
   {
+    name: 'auto-inspect',
+    aliases: ['ai', 'auto-select', 'auto-details'],
+    description: 'toggle auto-inspect on selection move',
+    action: { type: 'toggleAutoInspect' }
+  },
+  {
     name: 'help',
     aliases: ['h'],
     description: 'open help',
@@ -1274,6 +1280,10 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     return { type: 'followLatest' };
   }
 
+  if (matches('main.toggleAutoInspect')) {
+    return { type: 'toggleAutoInspect' };
+  }
+
   if (matches('main.openDetailModal')) {
     return { type: 'openDetailModal' };
   }
@@ -1527,6 +1537,7 @@ export function KeyboardControls({
   onToggleFilterOption,
   onToggleFrameworkAssets,
   onToggleAnomalies,
+  onToggleAutoInspect,
   onToggleListDisplayColumn,
   onToggleDetailTab,
   onToggleFocus,
@@ -1916,6 +1927,9 @@ export function KeyboardControls({
         break;
       case 'toggleAnomalies':
         onToggleAnomalies();
+        break;
+      case 'toggleAutoInspect':
+        onToggleAutoInspect();
         break;
       case 'toggleListDisplayColumn':
         onToggleListDisplayColumn();

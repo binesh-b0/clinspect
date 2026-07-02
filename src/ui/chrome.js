@@ -118,6 +118,7 @@ function getDefaultHelpSections(keyBindings = DEFAULT_KEY_BINDINGS) {
       title: 'Inspect',
       rows: [
         [getActionLabel(keyBindings, 'main.inspect'), 'inspect row'],
+        [getActionLabel(keyBindings, 'main.toggleAutoInspect'), 'auto inspect mode'],
         [getDetailTabHelpLabel(keyBindings, 'main'), 'request / response / diagnostics'],
         [getActionLabel(keyBindings, 'main.openDetailModal'), 'details modal'],
         [getActionLabel(keyBindings, 'main.openSearch'), 'find details'],
@@ -203,6 +204,7 @@ function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context =
             [getActionLabel(keyBindings, 'main.toggleFocus'), 'details pane'],
             [getActionLabel(keyBindings, 'main.openSearch'), 'search traffic'],
             [getActionPairLabel(keyBindings, 'main.methodFilter', 'main.statusFilter', { separator: ' / ' }), 'method / status filters'],
+            [getActionLabel(keyBindings, 'main.toggleAutoInspect'), 'auto inspect mode'],
             [getActionLabel(keyBindings, 'main.openListDisplay'), 'list display'],
             [getActionLabel(keyBindings, 'main.toggleFrameworkAssets'), 'show / hide framework'],
             [getActionLabel(keyBindings, 'main.toggleAnomalies'), 'experimental highlights']
@@ -771,6 +773,7 @@ export function formatFooterText({
   isExportPromptOpen = false,
   hasDiffBase = false,
   isHelpOpen = false,
+  isAutoInspectEnabled = false,
   hideFrameworkAssets = true,
   isLiveMode = true,
   isListFocused = true,
@@ -796,6 +799,7 @@ export function formatFooterText({
   const liveDetailActions = isLiveMode ? [`${detailEditKey} edit`] : [];
   const liveDetailModalActions = isLiveMode ? [formatFooterBinding(detailEditKey, 'edit')] : [];
   const anomalyAction = formatFooterBinding(getActionLabel(keyBindings, 'main.toggleAnomalies', { limit: 1 }), 'candidates');
+  const autoInspectStatus = isAutoInspectEnabled ? 'auto inspect on' : '';
   const unmarkDiffAction = hasDiffBase
     ? [formatFooterBinding(getActionLabel(keyBindings, 'main.clearDiffBase', { limit: 1 }), 'unmark')]
     : [];
@@ -941,6 +945,7 @@ export function formatFooterText({
       ...compareDiffAction,
       formatFooterBinding(getActionLabel(keyBindings, 'main.toggleFocus', { limit: 1 }), 'details'),
       anomalyAction,
+      autoInspectStatus,
       `${commandKey} command`,
       formatFooterBinding(getActionLabel(keyBindings, 'main.openHelp', { limit: 1 }), 'help')
     ]));
@@ -957,6 +962,7 @@ export function formatFooterText({
     ...compareDiffAction,
     formatFooterBinding(getActionLabel(keyBindings, 'main.toggleFocus', { limit: 1 }), 'traffic'),
     anomalyAction,
+    autoInspectStatus,
     `${commandKey} command`,
     formatFooterBinding(getActionLabel(keyBindings, 'main.openHelp', { limit: 1 }), 'help')
   ]));
@@ -981,6 +987,7 @@ export const Footer = React.memo(function Footer({
   isExportPromptOpen,
   hasDiffBase,
   isHelpOpen,
+  isAutoInspectEnabled,
   hideFrameworkAssets,
   isLiveMode,
   isListFocused,
@@ -1014,6 +1021,7 @@ export const Footer = React.memo(function Footer({
         isExportPromptOpen,
         hasDiffBase,
         isHelpOpen,
+        isAutoInspectEnabled,
         hideFrameworkAssets,
         isLiveMode,
         isListFocused,

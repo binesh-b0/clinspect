@@ -116,6 +116,7 @@ import {
   RequestActivityPage,
   SchemaInferenceModal,
   ToastNotification,
+  resolveAutoInspectSelection,
   resolveCommandInput,
   resolveSelectedLogId,
   selectComposerTab,
@@ -285,6 +286,40 @@ test('moveSelectedLogId moves relative to stable selected id', () => {
   assert.equal(moveSelectedLogId(logs, 'one', -1), 'one');
   assert.equal(moveSelectedLogId(logs, 'one', getPageStep(20)), 'three');
   assert.equal(moveSelectedLogId(logs, 'three', -getPageStep(20)), 'one');
+});
+
+test('auto-inspect selection helper keeps inspected traffic opt-in', () => {
+  assert.deepEqual(
+    resolveAutoInspectSelection(logs, 'one', 'three', { autoInspect: false, direction: 1 }),
+    { selectedLogId: 'two', inspectedLogId: 'three' }
+  );
+  assert.deepEqual(
+    resolveAutoInspectSelection(logs, 'one', 'three', { autoInspect: true, direction: 1 }),
+    { selectedLogId: 'two', inspectedLogId: 'two' }
+  );
+  assert.deepEqual(
+    resolveAutoInspectSelection(logs, 'one', 'three', { autoInspect: true, direction: getPageStep(20) }),
+    { selectedLogId: 'three', inspectedLogId: 'three' }
+  );
+  assert.deepEqual(
+    resolveAutoInspectSelection(logs, 'three', 'one', { autoInspect: true, boundary: 'first' }),
+    { selectedLogId: 'one', inspectedLogId: 'one' }
+  );
+  assert.deepEqual(
+    resolveAutoInspectSelection(logs, 'one', 'one', { autoInspect: true, boundary: 'last' }),
+    { selectedLogId: 'three', inspectedLogId: 'three' }
+  );
+  assert.deepEqual(
+    resolveAutoInspectSelection([{ id: 'two' }], 'one', 'one', {
+      autoInspect: true,
+      selectedLogId: resolveSelectedLogId([{ id: 'two' }], 'one')
+    }),
+    { selectedLogId: 'two', inspectedLogId: 'two' }
+  );
+  assert.deepEqual(
+    resolveAutoInspectSelection(logs, 'two', 'one'),
+    { selectedLogId: 'two', inspectedLogId: 'one' }
+  );
 });
 
 test('getSelectedIndex resolves missing selections to the first row', () => {
@@ -2516,6 +2551,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
     'pause-capture',
     'clear-logs',
     'anomalies',
+    'auto-inspect',
     'help'
   ]);
   assert.deepEqual(getCommandMatches('res').map((command) => command.name), ['resend']);
@@ -2528,6 +2564,8 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(getCommandMatches('red').map((command) => command.name), ['flows']);
   assert.deepEqual(getCommandMatches('ret').map((command) => command.name), ['flows']);
   assert.deepEqual(getCommandMatches('anom').map((command) => command.name), ['anomalies']);
+  assert.deepEqual(getCommandMatches('ai').map((command) => command.name), ['auto-inspect']);
+  assert.deepEqual(getCommandMatches('auto').map((command) => command.name), ['auto-inspect']);
   assert.deepEqual(getCommandMatches('r').map((command) => command.name), ['resend', 'requests', 'flows', 'record']);
   assert.deepEqual(resolveCommandInput('next-page').action, { type: 'openNextPage' });
   assert.deepEqual(resolveCommandInput('np').action, { type: 'openNextPage' });
@@ -2549,6 +2587,10 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(resolveCommandInput('anomalies').action, { type: 'toggleAnomalies' });
   assert.deepEqual(resolveCommandInput('anomaly').action, { type: 'toggleAnomalies' });
   assert.deepEqual(resolveCommandInput('anom').action, { type: 'toggleAnomalies' });
+  assert.deepEqual(resolveCommandInput('auto-inspect').action, { type: 'toggleAutoInspect' });
+  assert.deepEqual(resolveCommandInput('ai').action, { type: 'toggleAutoInspect' });
+  assert.deepEqual(resolveCommandInput('auto-select').action, { type: 'toggleAutoInspect' });
+  assert.deepEqual(resolveCommandInput('auto-details').action, { type: 'toggleAutoInspect' });
   assert.equal(getCommandSuggestionIndex('r', -1, 1), 0);
   assert.equal(getCommandSuggestionIndex('r', 0, 1), 1);
   assert.equal(getCommandSuggestionIndex('r', 0, -1), 3);
@@ -3033,6 +3075,55 @@ test('keyboard action helper toggles framework assets outside text inputs', () =
   );
 });
 
+test('keyboard action helper toggles auto-inspect only outside text and overlay contexts', () => {
+  assert.deepEqual(getKeyboardAction('I'), { type: 'toggleAutoInspect' });
+  assert.deepEqual(
+    getKeyboardAction('I', {}, { isListFocused: false }),
+    { type: 'toggleAutoInspect' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('I', {}, { isDetailModalOpen: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('I', {}, { isListDisplayOpen: true }),
+    { type: 'none' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('I', {}, { isCommandOpen: true }),
+    { type: 'appendCommandText', value: 'I' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('I', {}, { isFilterOpen: true, filterFocus: 'query' }),
+    { type: 'appendSearch', value: 'I' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('I', {}, { isDetailSearchOpen: true }),
+    { type: 'appendDetailSearch', value: 'I' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('I', {}, { isComposerOpen: true, isComposerTextFocused: true }),
+    { type: 'insertComposerText', value: 'I' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('I', {}, { isComposerBodyEditorOpen: true, isComposerOpen: true }),
+    { type: 'insertComposerText', value: 'I' }
+  );
+
+  const autoInspectBindings = getTestKeyBindings({
+    'main.toggleAutoInspect': ['Z']
+  });
+
+  assert.deepEqual(
+    getKeyboardAction('Z', {}, { keyBindings: autoInspectBindings }),
+    { type: 'toggleAutoInspect' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('Z', {}, { filterFocus: 'query', isFilterOpen: true, keyBindings: autoInspectBindings }),
+    { type: 'appendSearch', value: 'Z' }
+  );
+});
+
 test('keyboard action helper supports detail modal and detail search input', () => {
   assert.deepEqual(
     getKeyboardAction('q', {}, { isDetailModalOpen: true }),
@@ -3425,6 +3516,14 @@ test('footer text shows mode-aware essential keymaps', () => {
     'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  A: candidates  : command  h: help'
   );
   assert.equal(
+    formatFooterText({ isAutoInspectEnabled: true, isListFocused: true }),
+    'j/k: move  [ / ]: page  enter: inspect  a: mark A  tab: details  A: candidates  auto inspect on  : command  h: help'
+  );
+  assert.equal(
+    formatFooterText({ isAutoInspectEnabled: true, isListFocused: false }),
+    'j/k: scroll  [ / ]: page  left/right: tabs  /: find  n/N: match  a: mark A  tab: traffic  A: candidates  auto inspect on  : command  h: help'
+  );
+  assert.equal(
     formatFooterText({ isDetailModalOpen: true }),
     'j/k: scroll  [ / ]: page  left/right: tabs  /: find  n/N: match  E: edit  a: mark A  enter: collapse  esc/q: close  A: candidates  : command'
   );
@@ -3533,6 +3632,7 @@ test('footer and help labels reflect custom key bindings', () => {
     'main.openDiff': ['Q'],
     'main.previousDetailTab': ['Y'],
     'main.nextDetailTab': ['I'],
+    'main.toggleAutoInspect': ['O'],
     'main.toggleAnomalies': ['H'],
     'diff.close': ['c'],
     'diff.nextChange': ['>'],
@@ -3581,6 +3681,7 @@ test('footer and help labels reflect custom key bindings', () => {
     inspectSection.rows.find((row) => row[1] === 'request / response / diagnostics'),
     ['Y/I, r', 'request / response / diagnostics']
   );
+  assert.deepEqual(inspectSection.rows.find((row) => row[1] === 'auto inspect mode'), ['O', 'auto inspect mode']);
   assert.deepEqual(diffSection.rows.find((row) => row[1] === 'mark A'), ['B', 'mark A']);
   assert.deepEqual(diffSection.rows.find((row) => row[1] === 'unmark A'), ['U', 'unmark A']);
   assert.deepEqual(diffSection.rows.find((row) => row[1] === 'compare with A'), ['Q', 'compare with A']);
@@ -3732,6 +3833,14 @@ test('command help rows are generated from command definitions', () => {
       description: 'toggle experimental highlights'
     }
   );
+  assert.deepEqual(
+    rows.find((row) => row.command === ':auto-inspect'),
+    {
+      aliases: ':ai, :auto-select, :auto-details',
+      command: ':auto-inspect',
+      description: 'toggle auto-inspect on selection move'
+    }
+  );
   assert.equal(
     rows.find((row) => row.command === ':clear-logs').aliases,
     ':clear, :clear-traffic'
@@ -3749,6 +3858,10 @@ test('contextual help sections focus the active surface and command availability
   assert.deepEqual(
     trafficSections.map((section) => section.title),
     ['Traffic', 'Traffic Actions']
+  );
+  assert.deepEqual(
+    trafficSections[0].rows.find((row) => row[1] === 'auto inspect mode'),
+    ['I', 'auto inspect mode']
   );
   assert.equal(trafficSections.find((section) => section.title === 'Compose'), undefined);
   assert.deepEqual(
