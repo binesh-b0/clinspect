@@ -4,6 +4,10 @@ import { parseDocument } from 'htmlparser2';
 import { Box, Text } from 'ink';
 import { detectAuthSecrets } from '../auth-secrets.js';
 import {
+  analyzeCacheHeaders,
+  formatCacheIssue
+} from '../cache-analysis.js';
+import {
   findJwtTokensInLog,
   formatJwtTimeClaim
 } from '../jwt-inspector.js';
@@ -52,7 +56,8 @@ function formatDetailTabLabel(detailTab = 'request') {
   return [
     ['request', 'Request'],
     ['response', 'Response'],
-    ['auth', 'Auth']
+    ['auth', 'Auth'],
+    ['cache', 'Cache']
   ].map(([tab, label]) => (detailTab === tab ? `[${label}]` : label)).join(' ');
 }
 
@@ -164,6 +169,113 @@ function formatAuthSecretDetailRows(log, options = {}) {
       });
     }),
     ...formatJwtInspectorDetailRows(jwtTokens, { showEmpty: findings.length > 0 })
+  ];
+}
+
+function formatCacheHeaderDetailRow(row) {
+  return createDetailRow({
+    id: `cache-header-${row.id}`,
+    matchText: `cache ${row.label} ${row.summary}`,
+    searchText: `cache ${row.label} ${row.name} ${row.summary} ${row.text}`,
+    segments: [
+      { text: row.label, color: 'cyan' },
+      { text: ': ', color: 'gray' },
+      { text: row.value },
+      ...(row.summary
+        ? [
+          { text: ' | ', color: 'gray' },
+          { text: row.summary, color: 'yellow' }
+        ]
+        : [])
+    ],
+    text: row.text,
+    type: 'cache-header'
+  });
+}
+
+function formatCacheContextDetailRow(row) {
+  const [label, rest = ''] = row.text.split(/: (.*)/s);
+
+  return createDetailRow({
+    id: `cache-${row.id}`,
+    matchText: `cache context ${row.text}`,
+    searchText: `cache context ${row.label} ${row.value} ${row.text}`,
+    segments: [
+      { text: label, color: 'gray' },
+      { text: ': ', color: 'gray' },
+      { text: rest }
+    ],
+    text: row.text,
+    type: 'cache-context'
+  });
+}
+
+function formatCacheIssueDetailRow(issue) {
+  const text = formatCacheIssue(issue);
+
+  return createDetailRow({
+    id: `cache-issue-${issue.id}`,
+    matchText: `cache possible issue ${issue.message}`,
+    searchText: `cache possible issue ${issue.id} ${issue.message}`,
+    segments: [{ text, color: 'yellow', bold: true }],
+    text,
+    type: 'cache-issue'
+  });
+}
+
+function formatCacheAnalysisDetailRows(log, options = {}) {
+  const analysis = analyzeCacheHeaders(log, options);
+  const titleRow = createDetailRow({
+    id: 'cache-headers-title',
+    segments: [{ text: 'Cache headers', color: 'cyan', bold: true }],
+    type: 'section'
+  });
+
+  if (analysis.headers.length === 0 && analysis.issues.length === 0) {
+    return [
+      titleRow,
+      createDetailRow({
+        id: 'cache-empty',
+        segments: [{ text: 'No cache headers captured', color: 'gray' }],
+        text: 'No cache headers captured',
+        type: 'empty'
+      })
+    ];
+  }
+
+  const contextRows = analysis.rows.filter((row) => row.section === 'context');
+  const headerRows = analysis.headers.length > 0
+    ? analysis.headers.map(formatCacheHeaderDetailRow)
+    : [
+      createDetailRow({
+        id: 'cache-empty',
+        segments: [{ text: 'No cache headers captured', color: 'gray' }],
+        text: 'No cache headers captured',
+        type: 'empty'
+      })
+    ];
+
+  return [
+    titleRow,
+    ...headerRows,
+    createDetailRow({ id: 'cache-context-spacer', text: '', type: 'blank' }),
+    createDetailRow({
+      id: 'cache-context-title',
+      segments: [{ text: 'Context', color: 'cyan', bold: true }],
+      type: 'section'
+    }),
+    ...contextRows.map(formatCacheContextDetailRow),
+    ...(analysis.issues.length > 0
+      ? [
+        createDetailRow({ id: 'cache-issues-spacer', text: '', type: 'blank' }),
+        createDetailRow({
+          id: 'cache-issues-title',
+          segments: [{ text: 'Possible issues', color: 'cyan', bold: true }],
+          type: 'section'
+        }),
+        ...analysis.issues.map(formatCacheIssueDetailRow)
+      ]
+      : [])
   ];
 }
 
@@ -1256,6 +1368,10 @@ export function getDetailRows(log, detailTab = 'request', options = {}) {
 
   if (detailTab === 'auth') {
     return formatAuthSecretDetailRows(log, options);
+  }
+
+  if (detailTab === 'cache') {
+    return formatCacheAnalysisDetailRows(log, options);
   }
 
   const payload = detailTab === 'response' ? log.response : log.request;

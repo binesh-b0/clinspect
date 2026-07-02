@@ -141,7 +141,7 @@ Exports work from the current traffic view and do not require recording to be en
 - `D` writes the current export target under `./.clinspect/exports/`.
 - After either key, press `m` for masked headers/cookies or `r` for raw captured values.
 
-When the traffic list is focused, the export target is the selected full request/response exchange. When details are focused, the export target follows the focused section, header, body field, auth row, or body row. Body downloads use an appropriate extension when possible, such as `.json`, `.jsonl`, `.html`, `.xml`, or `.txt`.
+When the traffic list is focused, the export target is the selected full request/response exchange. When details are focused, the export target follows the focused section, header, body field, auth row, cache row, or body row. Body downloads use an appropriate extension when possible, such as `.json`, `.jsonl`, `.html`, `.xml`, or `.txt`.
 
 ## Privacy And Security Notes
 
@@ -191,7 +191,7 @@ Main UI:
 - `g`/`G` jumps to top/bottom.
 - `tab` switches between traffic and details.
 - `enter` inspects a traffic row or toggles a detail node.
-- `r` switches request/response/auth details.
+- `r` switches request/response/auth/cache details.
 - `/` searches traffic or details, depending on focus.
 - `t` cycles traffic-list path display between smart, start, and end truncation.
 - `v` cycles traffic-list density between full, compact, and path-only views.
@@ -271,7 +271,7 @@ Implemented:
 - terminal traffic list and detail panes
 - request/response headers, status, timing, and capped text body capture
 - structured response previews with collapsible nodes for JSON, NDJSON, React Flight, SSE, forms, XML, and HTML
-- an Auth detail tab that shows masked badges for likely bearer tokens, API keys, token/session cookies, JWTs, basic auth, and CSRF tokens
+- Auth and Cache detail tabs for masked auth/secret candidates and experimental cache-header analysis
 - pagination summaries from request query params, response `Link` headers, and common JSON next-cursor fields, with `:next-page` composer support and `:send-next-page` immediate send
 - traffic filtering and detail search
 - manual request composer with saved local requests and an in-session sent-request activity page

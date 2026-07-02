@@ -164,6 +164,12 @@ export {
   detectAuthSecrets
 } from '../auth-secrets.js';
 export {
+  analyzeCacheHeaders,
+  formatCacheIssue,
+  parseCacheAge,
+  parseCacheControl
+} from '../cache-analysis.js';
+export {
   decodeJwtToken,
   findJwtTokensInLog,
   formatJwtScopes,

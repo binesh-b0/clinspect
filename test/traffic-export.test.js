@@ -174,6 +174,47 @@ test('focused auth rows export only safe badge text', () => {
   assert.equal(exported.content.includes('response-refresh-secret'), false);
 });
 
+test('focused cache rows export only safe analysis text', () => {
+  const log = createLog({
+    path: '/api/me',
+    request: {
+      headers: {
+        authorization: 'Bearer opaque-secret-token'
+      }
+    },
+    response: {
+      headers: {
+        age: '5',
+        'cache-control': 'public, max-age=120',
+        'set-cookie': 'sid=response-secret; Path=/'
+      },
+      body: '',
+      truncated: false
+    }
+  });
+  const rows = getDetailRows(log, 'cache', { showCookieValues: true });
+  const issueRowIndex = rows.findIndex((row) => row.text === 'possible issue: authenticated or dynamic response allows public caching');
+  const target = resolveTrafficExportTarget({
+    detailRows: rows,
+    detailTab: 'cache',
+    focusedRow: issueRowIndex,
+    isListFocused: false,
+    log
+  });
+  const exported = createTrafficExport({ log, target, secretPolicy: 'raw' });
+
+  assert.deepEqual(target, {
+    detailTab: 'cache',
+    filenamePart: 'cache-row',
+    kind: 'row',
+    label: 'cache row',
+    rowText: 'possible issue: authenticated or dynamic response allows public caching'
+  });
+  assert.equal(exported.content, 'possible issue: authenticated or dynamic response allows public caching');
+  assert.equal(exported.content.includes('opaque-secret-token'), false);
+  assert.equal(exported.content.includes('response-secret'), false);
+});
+
 test('masked exports match UI masking and public target header display while raw exports keep captured values', () => {
   const log = createLog();
   const rows = getDetailRows(log, 'request', {

@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   countActiveFilters,
   analyzePagination,
+  analyzeCacheHeaders,
   applyDetailMatches,
   classifyFrameworkAssetRequest,
   clampDetailRowIndex,
@@ -31,6 +32,7 @@ import {
   findJwtTokensInLog,
   filterLogs,
   formatAnomalyReasons,
+  formatCacheIssue,
   filterRequestDiffRows,
   formatCommandSelectionStatus,
   formatEndpointGroupRow,
@@ -80,6 +82,8 @@ import {
   getTrafficRowWidth,
   isFrameworkAssetRequest,
   parseDetailSearchQuery,
+  parseCacheAge,
+  parseCacheControl,
   getSelectedIndex,
   getSearchValues,
   getTrafficVisibleCount,
@@ -4542,10 +4546,11 @@ test('auth detail tab renders safe badges and searchable source locations', () =
   const text = getDetailLines(log, 'auth', { showCookieValues: true }).join('\n');
   const matches = findDetailMatches(rows, 'authorization');
 
-  assert.deepEqual(DETAIL_TABS, ['request', 'response', 'auth']);
+  assert.deepEqual(DETAIL_TABS, ['request', 'response', 'auth', 'cache']);
   assert.equal(cycleValue(DETAIL_TABS, 'request'), 'response');
   assert.equal(cycleValue(DETAIL_TABS, 'response'), 'auth');
-  assert.equal(cycleValue(DETAIL_TABS, 'auth'), 'request');
+  assert.equal(cycleValue(DETAIL_TABS, 'auth'), 'cache');
+  assert.equal(cycleValue(DETAIL_TABS, 'cache'), 'request');
   assert.match(text, /Auth & secrets/);
   assert.match(text, /\[bearer\] request header authorization/);
   assert.match(text, /\[session cookie\] request cookie sid/);
@@ -4618,6 +4623,203 @@ test('auth detail tab renders JWT inspector summaries and decoded rows without r
   assert.match(noJwtText, /JWT Inspector/);
   assert.match(noJwtText, /No JWT tokens found/);
   assert.equal(noJwtText.includes('opaque-secret'), false);
+});
+
+test('cache analyzer parses cache headers and validators', () => {
+  const cacheControl = parseCacheControl('public, max-age=60, s-maxage="120", private, no-cache, no-store, immutable');
+
+  assert.deepEqual(cacheControl.directives, {
+    immutable: true,
+    'max-age': '60',
+    'no-cache': true,
+    'no-store': true,
+    private: true,
+    public: true,
+    's-maxage': '120'
+  });
+  assert.deepEqual(parseCacheAge('42'), {
+    present: true,
+    raw: '42',
+    seconds: 42,
+    valid: true
+  });
+  assert.deepEqual(parseCacheAge('4.2'), {
+    present: true,
+    raw: '4.2',
+    seconds: null,
+    valid: false
+  });
+
+  const analysis = analyzeCacheHeaders(createDiffLog({
+    response: {
+      headers: {
+        age: '12',
+        'cache-control': 'public, max-age=60',
+        etag: 'W/"abc"',
+        'last-modified': 'Wed, 21 Oct 2015 07:28:00 GMT',
+        vary: 'Accept-Encoding, Cookie'
+      }
+    }
+  }));
+  const text = analysis.rows.map((row) => row.text).join('\n');
+
+  assert.match(text, /Cache-Control: public, max-age=60 \| public, max-age 60s/);
+  assert.match(text, /ETag: W\/"abc" \| weak validator/);
+  assert.match(text, /Last-Modified: Wed, 21 Oct 2015 07:28:00 GMT \| valid/);
+  assert.match(text, /Vary: Accept-Encoding, Cookie \| varies on accept-encoding, cookie/);
+  assert.match(text, /Age: 12 \| 12s/);
+
+  const invalid = analyzeCacheHeaders(createDiffLog({
+    response: {
+      headers: {
+        age: 'soon',
+        'last-modified': 'not a date'
+      }
+    }
+  }));
+
+  assert.deepEqual(invalid.issues.map((issue) => issue.id), ['invalid-age', 'invalid-last-modified']);
+  assert.equal(formatCacheIssue(invalid.issues[0]), 'possible issue: Age header is not a valid non-negative integer');
+});
+
+test('cache analyzer flags cautious cache issues for authenticated or dynamic responses', () => {
+  const authenticatedPublic = analyzeCacheHeaders(createDiffLog({
+    path: '/api/me',
+    request: {
+      headers: {
+        authorization: 'Bearer opaque-secret'
+      }
+    },
+    response: {
+      headers: {
+        age: '5',
+        'cache-control': 'public, max-age=120',
+        'set-cookie': 'sid=response-secret; Path=/'
+      }
+    }
+  }));
+  const publicIssueIds = new Set(authenticatedPublic.issues.map((issue) => issue.id));
+
+  assert.equal(publicIssueIds.has('sensitive-public-cache'), true);
+  assert.equal(publicIssueIds.has('sensitive-browser-cache'), true);
+  assert.equal(publicIssueIds.has('set-cookie-shared-cache'), true);
+  assert.equal(publicIssueIds.has('cached-sensitive-response'), true);
+
+  const shared = analyzeCacheHeaders(createDiffLog({
+    path: '/api/me',
+    response: {
+      headers: {
+        'cache-control': 's-maxage=60',
+        'content-type': 'application/json'
+      }
+    }
+  }));
+
+  assert.equal(shared.issues.some((issue) => issue.id === 'sensitive-shared-cache'), true);
+
+  const missing = analyzeCacheHeaders(createDiffLog({
+    path: '/api/items',
+    response: {
+      headers: {
+        'content-type': 'application/json'
+      }
+    }
+  }));
+
+  assert.deepEqual(missing.issues.map((issue) => issue.id), ['missing-cache-control']);
+
+  const conflict = analyzeCacheHeaders(createDiffLog({
+    path: '/assets/app.js',
+    response: {
+      headers: {
+        'cache-control': 'no-store, public, s-maxage=60'
+      }
+    }
+  }));
+
+  assert.equal(conflict.issues.some((issue) => issue.id === 'conflicting-cache-control'), true);
+
+  const safeAuthenticated = analyzeCacheHeaders(createDiffLog({
+    request: {
+      headers: {
+        authorization: 'Bearer opaque-secret'
+      }
+    },
+    response: {
+      headers: {
+        'cache-control': 'private, no-store'
+      }
+    }
+  }));
+
+  assert.deepEqual(safeAuthenticated.issues, []);
+
+  const staticAsset = analyzeCacheHeaders(createDiffLog({
+    path: '/assets/app.js',
+    response: {
+      headers: {
+        age: '120',
+        'cache-control': 'public, max-age=31536000, immutable',
+        'content-type': 'application/javascript'
+      }
+    }
+  }));
+
+  assert.deepEqual(staticAsset.issues, []);
+});
+
+test('cache detail tab renders interpreted headers and safe possible issues', () => {
+  const log = createDiffLog({
+    path: '/api/me?include=profile',
+    request: {
+      headers: {
+        authorization: 'Bearer opaque-secret'
+      }
+    },
+    response: {
+      headers: {
+        age: '5',
+        'cache-control': 'public, max-age=120',
+        'content-type': 'application/json',
+        etag: 'W/"abc"',
+        'last-modified': 'Wed, 21 Oct 2015 07:28:00 GMT',
+        'set-cookie': 'sid=response-secret; Path=/',
+        vary: 'Accept-Encoding, Cookie'
+      }
+    }
+  });
+  const rows = getDetailRows(log, 'cache', { showCookieValues: true });
+  const text = getDetailLines(log, 'cache', { showCookieValues: true }).join('\n');
+
+  assert.match(text, /Cache headers/);
+  assert.match(text, /Cache-Control: public, max-age=120 \| public, max-age 120s/);
+  assert.match(text, /ETag: W\/"abc" \| weak validator/);
+  assert.match(text, /Context/);
+  assert.match(text, /authenticated: yes \(request auth candidate, response auth cookie\)/);
+  assert.match(text, /dynamic: yes \(sets cookie, api path, application\/json, query-bearing route\)/);
+  assert.match(text, /Possible issues/);
+  assert.match(text, /possible issue: authenticated or dynamic response allows public caching/);
+  assert.equal(text.includes('opaque-secret'), false);
+  assert.equal(text.includes('response-secret'), false);
+  assert.equal(findDetailMatches(rows, 'cache-control').length > 0, true);
+  assert.equal(findDetailMatches(rows, 'public caching').length > 0, true);
+  assert.deepEqual(getDetailLines(createDiffLog(), 'cache'), [
+    'Cache headers',
+    'No cache headers captured'
+  ]);
+
+  const missingHeaderText = getDetailLines(createDiffLog({
+    path: '/api/items',
+    response: {
+      headers: {
+        'content-type': 'application/json'
+      }
+    }
+  }), 'cache').join('\n');
+
+  assert.match(missingHeaderText, /No cache headers captured/);
+  assert.match(missingHeaderText, /Possible issues/);
+  assert.match(missingHeaderText, /possible issue: authenticated or dynamic response has no Cache-Control header/);
 });
 
 test('cookie headers are masked in details and search by default', () => {
