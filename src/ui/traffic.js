@@ -40,6 +40,10 @@ import {
   getBindingPairLabel
 } from './key-bindings.js';
 import { getEndpointRoutePattern } from './endpoints.js';
+import {
+  analyzeContentNegotiation,
+  analyzeCors
+} from '../diagnostics.js';
 
 const TRAFFIC_ROW_MARKER_WIDTH = 3;
 const DEFAULT_SLOW_REQUEST_MS = 1000;
@@ -47,6 +51,8 @@ const DEFAULT_LARGE_BODY_BYTES = 100 * 1024;
 const DEFAULT_REPEATED_ERROR_COUNT = 3;
 const VALID_EMPTY_RESPONSE_STATUSES = new Set([204, 205, 304]);
 const TRAFFIC_ANOMALY_LABELS = Object.freeze({
+  'content-negotiation': 'content negotiation',
+  cors: 'CORS',
   'empty-response': 'empty response',
   'large-body': 'large body',
   'missing-content-type': 'missing content-type',
@@ -212,6 +218,14 @@ export function getTrafficAnomalyReasons(log = {}, context = {}) {
 
   if (isSuspiciousEmptyResponse(log)) {
     reasons.push('empty-response');
+  }
+
+  if (analyzeCors(log).issues.length > 0) {
+    reasons.push('cors');
+  }
+
+  if (analyzeContentNegotiation(log).issues.length > 0) {
+    reasons.push('content-negotiation');
   }
 
   return reasons;

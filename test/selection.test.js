@@ -5,6 +5,8 @@ import {
   analyzeTrafficFlows,
   analyzePagination,
   analyzeCacheHeaders,
+  analyzeContentNegotiation,
+  analyzeCors,
   applyDetailMatches,
   classifyFrameworkAssetRequest,
   clampDetailRowIndex,
@@ -35,6 +37,7 @@ import {
   filterLogs,
   formatAnomalyReasons,
   formatCacheIssue,
+  formatDiagnosticsIssue,
   formatFlowLabel,
   filterRequestDiffRows,
   formatCommandSelectionStatus,
@@ -57,6 +60,7 @@ import {
   formatTrafficRow,
   HELP_SECTIONS,
   inferJsonShape,
+  inferRestAction,
   getDiffCandidateLogIds,
   getDiffEndpointShape,
   getEndpointRoutePattern,
@@ -519,6 +523,40 @@ test('traffic anomaly helpers detect balanced anomaly cases', () => {
     id: 'missing-content-type',
     response: { body: 'hello', headers: {} }
   });
+  const corsMismatch = createDiffLog({
+    id: 'cors',
+    request: {
+      body: '',
+      headers: {
+        cookie: 'sid=secret',
+        origin: 'https://app.example'
+      }
+    },
+    response: {
+      body: 'ok',
+      headers: {
+        'access-control-allow-origin': '*',
+        'content-type': 'text/plain'
+      }
+    }
+  });
+  const negotiationMismatch = createDiffLog({
+    id: 'negotiation',
+    path: '/api/users',
+    request: {
+      body: '',
+      headers: {
+        accept: 'application/json'
+      }
+    },
+    response: {
+      body: '<html>error</html>',
+      headers: {
+        'content-type': 'text/html'
+      }
+    },
+    statusCode: 500
+  });
   const emptyOk = createDiffLog({
     id: 'empty-ok',
     response: { body: '', headers: { 'content-type': 'text/plain' } },
@@ -541,11 +579,193 @@ test('traffic anomaly helpers detect balanced anomaly cases', () => {
   assert.deepEqual(getTrafficAnomalyReasons(truncatedBody), ['large-body', 'empty-response']);
   assert.deepEqual(getTrafficAnomalyReasons(contentLengthBody), ['large-body', 'empty-response']);
   assert.deepEqual(getTrafficAnomalyReasons(slow), ['slow', 'empty-response']);
-  assert.deepEqual(getTrafficAnomalyReasons(missingContentType), ['missing-content-type']);
+  assert.deepEqual(getTrafficAnomalyReasons(missingContentType), ['missing-content-type', 'content-negotiation']);
+  assert.deepEqual(getTrafficAnomalyReasons(corsMismatch), ['cors']);
+  assert.deepEqual(getTrafficAnomalyReasons(negotiationMismatch), ['content-negotiation']);
   assert.deepEqual(getTrafficAnomalyReasons(emptyOk), ['empty-response']);
   assert.deepEqual(getTrafficAnomalyReasons(emptyError), ['empty-response']);
   assert.deepEqual(validEmpty.flatMap((item) => getTrafficAnomalyReasons(item)), []);
-  assert.equal(formatAnomalyReasons(['slow', 'large-body', 'missing-content-type']), 'slow, large body, missing content-type');
+  assert.equal(
+    formatAnomalyReasons(['slow', 'large-body', 'missing-content-type', 'cors', 'content-negotiation']),
+    'slow, large body, missing content-type, CORS, content negotiation'
+  );
+});
+
+test('diagnostics CORS analyzer explains preflight and response mismatches', () => {
+  const preflight = analyzeCors(createDiffLog({
+    method: 'OPTIONS',
+    request: {
+      body: '',
+      headers: {
+        cookie: 'sid=secret',
+        origin: 'https://app.example',
+        'access-control-request-method': 'PATCH',
+        'access-control-request-headers': 'X-Token, X-Missing'
+      }
+    },
+    response: {
+      body: '',
+      headers: {
+        'access-control-allow-origin': 'https://app.example',
+        'access-control-allow-methods': 'GET, POST',
+        'access-control-allow-headers': 'X-Token'
+      }
+    }
+  }));
+  const wildcardCredentials = analyzeCors(createDiffLog({
+    request: {
+      body: '',
+      headers: {
+        authorization: 'Bearer token',
+        origin: 'https://app.example'
+      }
+    },
+    response: {
+      body: 'ok',
+      headers: {
+        'access-control-allow-credentials': 'true',
+        'access-control-allow-origin': '*',
+        'content-type': 'text/plain'
+      }
+    }
+  }));
+  const originMismatch = analyzeCors(createDiffLog({
+    request: {
+      body: '',
+      headers: {
+        origin: 'https://app.example'
+      }
+    },
+    response: {
+      body: 'ok',
+      headers: {
+        'access-control-allow-origin': 'https://admin.example',
+        'content-type': 'text/plain'
+      }
+    }
+  }));
+  const noOrigin = analyzeCors(createDiffLog());
+
+  assert.equal(preflight.preflight, true);
+  assert.deepEqual(preflight.issues.map((issue) => issue.id), [
+    'credentials-not-allowed',
+    'method-not-allowed',
+    'headers-not-allowed'
+  ]);
+  assert.equal(preflight.rows.some((row) => row.text === 'requested method: PATCH'), true);
+  assert.equal(preflight.rows.some((row) => row.text === 'requested headers: x-token, x-missing'), true);
+  assert.deepEqual(wildcardCredentials.issues.map((issue) => issue.id), ['wildcard-with-credentials']);
+  assert.deepEqual(originMismatch.issues.map((issue) => issue.id), ['origin-not-allowed']);
+  assert.deepEqual(noOrigin.issues, []);
+  assert.equal(noOrigin.rows.some((row) => row.text === 'cors: not a cross-origin browser request'), true);
+  assert.equal(
+    formatDiagnosticsIssue(preflight.issues[0]),
+    'cors issue: Credential-like request is missing Access-Control-Allow-Credentials: true'
+  );
+});
+
+test('diagnostics content negotiation analyzer flags mismatches cautiously', () => {
+  const jsonClientHtml = analyzeContentNegotiation(createDiffLog({
+    path: '/api/users',
+    request: {
+      body: '',
+      headers: {
+        accept: 'application/json'
+      }
+    },
+    response: {
+      body: '<html>error</html>',
+      headers: {
+        'content-type': 'text/html'
+      }
+    },
+    statusCode: 500
+  }));
+  const wildcardOk = analyzeContentNegotiation(createDiffLog({
+    request: {
+      body: '',
+      headers: {
+        accept: '*/*'
+      }
+    },
+    response: {
+      body: '<html>ok</html>',
+      headers: {
+        'content-type': 'text/html'
+      }
+    }
+  }));
+  const encodingMismatch = analyzeContentNegotiation(createDiffLog({
+    request: {
+      body: '',
+      headers: {
+        'accept-encoding': 'gzip'
+      }
+    },
+    response: {
+      body: 'compressed',
+      headers: {
+        'content-encoding': 'br',
+        'content-type': 'text/plain'
+      }
+    }
+  }));
+  const requestBodyIssues = analyzeContentNegotiation(createDiffLog({
+    request: {
+      body: JSON.stringify({ name: 'Ada' }),
+      headers: {
+        'content-type': 'text/plain'
+      }
+    },
+    response: {
+      body: 'ok',
+      headers: {
+        'content-type': 'text/plain'
+      }
+    }
+  }));
+  const missingResponseType = analyzeContentNegotiation(createDiffLog({
+    response: {
+      body: 'hello',
+      headers: {}
+    }
+  }));
+  const formMissingType = analyzeContentNegotiation(createDiffLog({
+    request: {
+      body: 'name=Ada',
+      headers: {}
+    }
+  }));
+
+  assert.deepEqual(jsonClientHtml.issues.map((issue) => issue.id), [
+    'response-not-acceptable',
+    'json-client-html-response'
+  ]);
+  assert.deepEqual(wildcardOk.issues, []);
+  assert.deepEqual(encodingMismatch.issues.map((issue) => issue.id), ['encoding-not-accepted']);
+  assert.deepEqual(requestBodyIssues.issues.map((issue) => issue.id), ['request-json-content-type-mismatch']);
+  assert.deepEqual(missingResponseType.issues.map((issue) => issue.id), ['missing-response-content-type']);
+  assert.deepEqual(formMissingType.issues.map((issue) => issue.id), ['request-form-content-type-mismatch']);
+  assert.equal(jsonClientHtml.rows.some((row) => row.text === 'accept: application/json'), true);
+  assert.equal(
+    formatDiagnosticsIssue(jsonClientHtml.issues[1]),
+    'content negotiation issue: JSON-preferring client received an HTML response'
+  );
+});
+
+test('diagnostics REST action inference labels common resource operations', () => {
+  assert.equal(inferRestAction(createDiffLog({ method: 'GET', path: '/api/v1/users' })).action, 'list users');
+  assert.equal(inferRestAction(createDiffLog({ method: 'GET', path: '/api/v1/users/123' })).action, 'get user');
+  assert.equal(inferRestAction(createDiffLog({ method: 'POST', path: '/api/users' })).action, 'create user');
+  assert.equal(inferRestAction(createDiffLog({ method: 'PATCH', path: '/api/users/123' })).action, 'update user');
+  assert.equal(inferRestAction(createDiffLog({ method: 'PUT', path: '/api/users/123' })).action, 'update user');
+  assert.equal(inferRestAction(createDiffLog({ method: 'DELETE', path: '/api/users/123' })).action, 'delete user');
+  assert.equal(
+    inferRestAction(createDiffLog({ method: 'GET', path: '/api/users/550e8400-e29b-41d4-a716-446655440000/orders' })).action,
+    'list orders'
+  );
+  assert.equal(inferRestAction(createDiffLog({ method: 'GET', path: '/api/categories/abc123456789' })).action, 'get category');
+  assert.equal(inferRestAction(createDiffLog({ method: 'TRACE', path: '/api/users' })).action, 'trace users');
 });
 
 test('traffic list renders anomaly highlights without filtering normal rows', () => {
@@ -1454,7 +1674,7 @@ test('flow modal renders grouped sections and selected-flow previews', () => {
   assert.match(getNodeText(emptyModal), /No redirect chains or repeated requests in visible traffic/);
 });
 
-test('flow detail tab renders selected redirect and repeat context', () => {
+test('flow detail rows render selected redirect and repeat context', () => {
   const start = Date.UTC(2026, 0, 1, 0, 0, 0);
   const logs = [
     createDiffLog({
@@ -3357,7 +3577,10 @@ test('footer and help labels reflect custom key bindings', () => {
 
   assert.deepEqual(moveSection.rows.find((row) => row[1] === 'move line'), ['z/a', 'move line']);
   assert.deepEqual(inspectSection.rows.find((row) => row[1] === 'find details'), ['.', 'find details']);
-  assert.deepEqual(inspectSection.rows.find((row) => row[1] === 'request / response / auth / cache / flow'), ['Y/I, r', 'request / response / auth / cache / flow']);
+  assert.deepEqual(
+    inspectSection.rows.find((row) => row[1] === 'request / response / diagnostics'),
+    ['Y/I, r', 'request / response / diagnostics']
+  );
   assert.deepEqual(diffSection.rows.find((row) => row[1] === 'mark A'), ['B', 'mark A']);
   assert.deepEqual(diffSection.rows.find((row) => row[1] === 'unmark A'), ['U', 'unmark A']);
   assert.deepEqual(diffSection.rows.find((row) => row[1] === 'compare with A'), ['Q', 'compare with A']);
@@ -4884,7 +5107,7 @@ test('auth secret detector classifies structured candidates without exposing val
   );
 });
 
-test('auth detail tab renders safe badges and searchable source locations', () => {
+test('auth detail rows render safe badges and searchable source locations', () => {
   const log = createDiffLog({
     path: '/api/items?api_key=query-secret',
     request: {
@@ -4905,14 +5128,12 @@ test('auth detail tab renders safe badges and searchable source locations', () =
   const text = getDetailLines(log, 'auth', { showCookieValues: true }).join('\n');
   const matches = findDetailMatches(rows, 'authorization');
 
-  assert.deepEqual(DETAIL_TABS, ['request', 'response', 'auth', 'cache', 'flow']);
+  assert.deepEqual(DETAIL_TABS, ['request', 'response', 'diagnostics']);
   assert.equal(cycleValue(DETAIL_TABS, 'request'), 'response');
-  assert.equal(cycleValue(DETAIL_TABS, 'response'), 'auth');
-  assert.equal(cycleValue(DETAIL_TABS, 'auth'), 'cache');
-  assert.equal(cycleValue(DETAIL_TABS, 'cache'), 'flow');
-  assert.equal(cycleValue(DETAIL_TABS, 'flow'), 'request');
-  assert.equal(cycleValue(DETAIL_TABS, 'request', -1), 'flow');
-  assert.equal(cycleValue(DETAIL_TABS, 'auth', -1), 'response');
+  assert.equal(cycleValue(DETAIL_TABS, 'response'), 'diagnostics');
+  assert.equal(cycleValue(DETAIL_TABS, 'diagnostics'), 'request');
+  assert.equal(cycleValue(DETAIL_TABS, 'request', -1), 'diagnostics');
+  assert.equal(cycleValue(DETAIL_TABS, 'diagnostics', -1), 'response');
   assert.match(text, /Auth & secrets/);
   assert.match(text, /\[bearer\] request header authorization/);
   assert.match(text, /\[session cookie\] request cookie sid/);
@@ -4932,7 +5153,7 @@ test('auth detail tab renders safe badges and searchable source locations', () =
   ]);
 });
 
-test('auth detail tab renders JWT inspector summaries and decoded rows without raw token leakage', () => {
+test('auth detail rows render JWT inspector summaries and decoded rows without raw token leakage', () => {
   const now = Date.UTC(2026, 0, 1, 0, 0, 0);
   const token = createJwtToken({
     aud: 'api',
@@ -4985,6 +5206,84 @@ test('auth detail tab renders JWT inspector summaries and decoded rows without r
   assert.match(noJwtText, /JWT Inspector/);
   assert.match(noJwtText, /No JWT tokens found/);
   assert.equal(noJwtText.includes('opaque-secret'), false);
+});
+
+test('diagnostics detail tab renders combined diagnostics, auth, cache, and flow sections', () => {
+  const log = createDiffLog({
+    method: 'PATCH',
+    path: '/api/v1/users/123',
+    request: {
+      body: JSON.stringify({ name: 'Ada' }),
+      headers: {
+        accept: 'application/json',
+        authorization: 'Bearer opaque-secret',
+        origin: 'https://app.example',
+        'content-type': 'text/plain'
+      }
+    },
+    response: {
+      body: '<html>error</html>',
+      headers: {
+        'access-control-allow-origin': '*',
+        'content-type': 'text/html'
+      }
+    },
+    statusCode: 500
+  });
+  const rows = getDetailRows(log, 'diagnostics');
+  const text = getDetailLines(log, 'diagnostics').join('\n');
+
+  assert.match(text, /Diagnostics/);
+  assert.match(text, /REST Action/);
+  assert.match(text, /action: update user/);
+  assert.match(text, /resource: user/);
+  assert.match(text, /route kind: item/);
+  assert.match(text, /CORS/);
+  assert.match(text, /origin: https:\/\/app\.example/);
+  assert.match(text, /allow origin: \*/);
+  assert.match(text, /cors issue: Credential-like request cannot use Access-Control-Allow-Origin \*/);
+  assert.match(text, /cors issue: Credential-like request is missing Access-Control-Allow-Credentials: true/);
+  assert.match(text, /Content Negotiation/);
+  assert.match(text, /accept: application\/json/);
+  assert.match(text, /request content type: text\/plain/);
+  assert.match(text, /response content type: text\/html/);
+  assert.match(text, /content negotiation issue: JSON-preferring client received an HTML response/);
+  assert.match(text, /content negotiation issue: Request body looks like JSON but Content-Type is not JSON/);
+  assert.match(text, /Auth & secrets/);
+  assert.match(text, /\[bearer\] request header authorization/);
+  assert.match(text, /JWT Inspector/);
+  assert.match(text, /No JWT tokens found/);
+  assert.match(text, /Cache headers/);
+  assert.match(text, /No cache headers captured/);
+  assert.match(text, /Possible issues/);
+  assert.match(text, /possible issue: authenticated or dynamic response has no Cache-Control header/);
+  assert.match(text, /Flow context/);
+  assert.match(text, /No flow context for selected request/);
+  assert.equal(text.includes('opaque-secret'), false);
+  assert.equal(findDetailMatches(rows, 'JSON-preferring').length > 0, true);
+  assert.equal(findDetailMatches(rows, 'flow context').length > 0, true);
+  assert.equal(findDetailMatches(rows, 'opaque-secret').length, 0);
+
+  const healthyText = getDetailLines(createDiffLog({
+    method: 'GET',
+    path: '/api/users',
+    request: {
+      body: '',
+      headers: {
+        accept: 'application/json'
+      }
+    },
+    response: {
+      body: JSON.stringify({ ok: true }),
+      headers: {
+        'content-type': 'application/json'
+      }
+    }
+  }), 'diagnostics').join('\n');
+
+  assert.match(healthyText, /action: list users/);
+  assert.match(healthyText, /cors: no issues detected/);
+  assert.match(healthyText, /content negotiation: no issues detected/);
 });
 
 test('cache analyzer parses cache headers and validators', () => {
@@ -5130,7 +5429,7 @@ test('cache analyzer flags cautious cache issues for authenticated or dynamic re
   assert.deepEqual(staticAsset.issues, []);
 });
 
-test('cache detail tab renders interpreted headers and safe possible issues', () => {
+test('cache detail rows render interpreted headers and safe possible issues', () => {
   const log = createDiffLog({
     path: '/api/me?include=profile',
     request: {

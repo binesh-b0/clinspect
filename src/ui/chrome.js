@@ -118,7 +118,7 @@ function getDefaultHelpSections(keyBindings = DEFAULT_KEY_BINDINGS) {
       title: 'Inspect',
       rows: [
         [getActionLabel(keyBindings, 'main.inspect'), 'inspect row'],
-        [getDetailTabHelpLabel(keyBindings, 'main'), 'request / response / auth / cache / flow'],
+        [getDetailTabHelpLabel(keyBindings, 'main'), 'request / response / diagnostics'],
         [getActionLabel(keyBindings, 'main.openDetailModal'), 'details modal'],
         [getActionLabel(keyBindings, 'main.openSearch'), 'find details'],
         [getActionPairLabel(keyBindings, 'main.nextMatch', 'main.previousMatch', { separator: ' / ' }), 'next / previous match'],
@@ -226,7 +226,7 @@ function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context =
           rows: [
             [getActionPairLabel(keyBindings, 'main.moveDown', 'main.moveUp'), 'scroll'],
             [getActionPairLabel(keyBindings, 'main.pageUp', 'main.pageDown', { separator: ' / ' }), 'page'],
-            [getDetailTabHelpLabel(keyBindings, 'main'), 'request / response / auth / cache / flow'],
+            [getDetailTabHelpLabel(keyBindings, 'main'), 'request / response / diagnostics'],
             [getActionLabel(keyBindings, 'main.openSearch', { limit: 1 }), 'find details'],
             [getActionPairLabel(keyBindings, 'main.nextMatch', 'main.previousMatch'), 'next / previous match'],
             [getActionLabel(keyBindings, 'main.inspect', { limit: 1 }), 'collapse row'],
@@ -243,7 +243,7 @@ function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context =
           rows: [
             [getActionPairLabel(keyBindings, 'detail.scrollDown', 'detail.scrollUp'), 'scroll'],
             [getActionPairLabel(keyBindings, 'detail.pageUp', 'detail.pageDown', { separator: ' / ' }), 'page'],
-            [getDetailTabHelpLabel(keyBindings, 'detail'), 'request / response / auth / cache / flow'],
+            [getDetailTabHelpLabel(keyBindings, 'detail'), 'request / response / diagnostics'],
             [getActionLabel(keyBindings, 'detail.openSearch', { limit: 1 }), 'find details'],
             [getActionPairLabel(keyBindings, 'detail.nextMatch', 'detail.previousMatch'), 'next / previous match'],
             [getActionLabel(keyBindings, 'detail.toggleNode', { limit: 1 }), 'collapse row'],

@@ -8,6 +8,12 @@ import {
   formatCacheIssue
 } from '../cache-analysis.js';
 import {
+  analyzeContentNegotiation,
+  analyzeCors,
+  formatDiagnosticsIssue,
+  inferRestAction
+} from '../diagnostics.js';
+import {
   analyzeTrafficFlows
 } from '../flow-analysis.js';
 import {
@@ -62,9 +68,7 @@ function formatDetailTabLabel(detailTab = 'request') {
   return [
     ['request', 'Request'],
     ['response', 'Response'],
-    ['auth', 'Auth'],
-    ['cache', 'Cache'],
-    ['flow', 'Flow']
+    ['diagnostics', 'Diagnostics']
   ].map(([tab, label]) => (detailTab === tab ? `[${label}]` : label)).join(' ');
 }
 
@@ -438,6 +442,131 @@ function formatFlowDetailRows(log, options = {}) {
         ])
       ]
       : [])
+  ];
+}
+
+function formatDiagnosticsInfoRow(row, idPrefix) {
+  const [label, rest = ''] = row.text.split(/: (.*)/s);
+
+  return createDetailRow({
+    id: `${idPrefix}-${row.id}`,
+    matchText: `diagnostics ${row.section} ${row.text}`,
+    searchText: `diagnostics ${row.section} ${row.label} ${row.value} ${row.text}`,
+    segments: [
+      { text: label, color: 'gray' },
+      { text: ': ', color: 'gray' },
+      { text: rest }
+    ],
+    text: row.text,
+    type: 'diagnostics-info'
+  });
+}
+
+function formatDiagnosticsIssueDetailRow(issue) {
+  const text = formatDiagnosticsIssue(issue);
+
+  return createDetailRow({
+    id: `diagnostics-issue-${issue.section}-${issue.id}`,
+    matchText: `diagnostics ${issue.section} issue ${issue.message}`,
+    searchText: `diagnostics ${issue.section} issue ${issue.id} ${issue.kind} ${issue.message}`,
+    segments: [{ text, color: 'yellow', bold: true }],
+    text,
+    type: 'diagnostics-issue'
+  });
+}
+
+function createDiagnosticsHealthyRow(id, text) {
+  return createDetailRow({
+    id,
+    matchText: `diagnostics ${text}`,
+    searchText: `diagnostics ${text}`,
+    segments: [{ text, color: 'green' }],
+    text,
+    type: 'diagnostics-ok'
+  });
+}
+
+function appendDiagnosticsSection(id, rows = []) {
+  if (rows.length === 0) {
+    return [];
+  }
+
+  return [
+    createDetailRow({ id, text: '', type: 'blank' }),
+    ...rows
+  ];
+}
+
+function formatCoreDiagnosticsDetailRows(log, options = {}) {
+  const restAction = inferRestAction(log, options);
+  const cors = analyzeCors(log, options);
+  const negotiation = analyzeContentNegotiation(log, options);
+
+  return [
+    createDetailRow({
+      id: 'diagnostics-title',
+      segments: [{ text: 'Diagnostics', color: 'cyan', bold: true }],
+      text: 'Diagnostics',
+      type: 'section'
+    }),
+    createDetailRow({
+      id: 'diagnostics-rest-title',
+      segments: [{ text: 'REST Action', color: 'cyan', bold: true }],
+      text: 'REST Action',
+      type: 'section'
+    }),
+    formatDiagnosticsInfoRow({
+      id: 'rest-action',
+      label: 'action',
+      section: 'rest-action',
+      text: `action: ${restAction.action}`,
+      value: restAction.action
+    }, 'diagnostics'),
+    formatDiagnosticsInfoRow({
+      id: 'rest-resource',
+      label: 'resource',
+      section: 'rest-action',
+      text: `resource: ${restAction.resource}`,
+      value: restAction.resource
+    }, 'diagnostics'),
+    formatDiagnosticsInfoRow({
+      id: 'rest-route-kind',
+      label: 'route kind',
+      section: 'rest-action',
+      text: `route kind: ${restAction.itemRoute ? 'item' : 'collection'}`,
+      value: restAction.itemRoute ? 'item' : 'collection'
+    }, 'diagnostics'),
+    createDetailRow({ id: 'diagnostics-cors-spacer', text: '', type: 'blank' }),
+    createDetailRow({
+      id: 'diagnostics-cors-title',
+      segments: [{ text: 'CORS', color: 'cyan', bold: true }],
+      text: 'CORS',
+      type: 'section'
+    }),
+    ...cors.rows.map((row) => formatDiagnosticsInfoRow(row, 'diagnostics')),
+    ...(cors.issues.length > 0
+      ? cors.issues.map(formatDiagnosticsIssueDetailRow)
+      : [createDiagnosticsHealthyRow('diagnostics-cors-ok', 'cors: no issues detected')]),
+    createDetailRow({ id: 'diagnostics-negotiation-spacer', text: '', type: 'blank' }),
+    createDetailRow({
+      id: 'diagnostics-negotiation-title',
+      segments: [{ text: 'Content Negotiation', color: 'cyan', bold: true }],
+      text: 'Content Negotiation',
+      type: 'section'
+    }),
+    ...negotiation.rows.map((row) => formatDiagnosticsInfoRow(row, 'diagnostics')),
+    ...(negotiation.issues.length > 0
+      ? negotiation.issues.map(formatDiagnosticsIssueDetailRow)
+      : [createDiagnosticsHealthyRow('diagnostics-negotiation-ok', 'content negotiation: no issues detected')])
+  ];
+}
+
+function formatDiagnosticsDetailRows(log, options = {}) {
+  return [
+    ...formatCoreDiagnosticsDetailRows(log, options),
+    ...appendDiagnosticsSection('diagnostics-auth-spacer', formatAuthSecretDetailRows(log, options)),
+    ...appendDiagnosticsSection('diagnostics-cache-spacer', formatCacheAnalysisDetailRows(log, options)),
+    ...appendDiagnosticsSection('diagnostics-flow-spacer', formatFlowDetailRows(log, options))
   ];
 }
 
@@ -1530,6 +1659,10 @@ export function getDetailRows(log, detailTab = 'request', options = {}) {
 
   if (detailTab === 'auth') {
     return formatAuthSecretDetailRows(log, options);
+  }
+
+  if (detailTab === 'diagnostics') {
+    return formatDiagnosticsDetailRows(log, options);
   }
 
   if (detailTab === 'cache') {

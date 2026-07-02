@@ -218,6 +218,51 @@ test('focused cache rows export only safe analysis text', () => {
   assert.equal(exported.content.includes('response-secret'), false);
 });
 
+test('focused diagnostics rows export only rendered analysis text', () => {
+  const log = createLog({
+    method: 'PATCH',
+    path: '/api/users/123',
+    request: {
+      body: JSON.stringify({ name: 'Ada' }),
+      headers: {
+        accept: 'application/json',
+        authorization: 'Bearer opaque-secret-token',
+        origin: 'https://app.example',
+        'content-type': 'text/plain'
+      }
+    },
+    response: {
+      body: '<html>error</html>',
+      headers: {
+        'access-control-allow-origin': '*',
+        'content-type': 'text/html'
+      },
+      truncated: false
+    },
+    statusCode: 500
+  });
+  const rows = getDetailRows(log, 'diagnostics');
+  const issueRowIndex = rows.findIndex((row) => row.text === 'content negotiation issue: JSON-preferring client received an HTML response');
+  const target = resolveTrafficExportTarget({
+    detailRows: rows,
+    detailTab: 'diagnostics',
+    focusedRow: issueRowIndex,
+    isListFocused: false,
+    log
+  });
+  const exported = createTrafficExport({ log, target, secretPolicy: 'raw' });
+
+  assert.deepEqual(target, {
+    detailTab: 'diagnostics',
+    filenamePart: 'diagnostics-row',
+    kind: 'row',
+    label: 'diagnostics row',
+    rowText: 'content negotiation issue: JSON-preferring client received an HTML response'
+  });
+  assert.equal(exported.content, 'content negotiation issue: JSON-preferring client received an HTML response');
+  assert.equal(exported.content.includes('opaque-secret-token'), false);
+});
+
 test('focused flow rows export only rendered analysis text', () => {
   const first = createLog({
     id: 'submit-1',

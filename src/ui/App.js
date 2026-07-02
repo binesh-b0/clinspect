@@ -185,6 +185,12 @@ export {
   parseCacheControl
 } from '../cache-analysis.js';
 export {
+  analyzeContentNegotiation,
+  analyzeCors,
+  formatDiagnosticsIssue,
+  inferRestAction
+} from '../diagnostics.js';
+export {
   analyzeTrafficFlows,
   formatFlowLabel,
   getRedirectChainGroups,
