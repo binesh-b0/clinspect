@@ -3,6 +3,10 @@ import { XMLParser } from 'fast-xml-parser';
 import { parseDocument } from 'htmlparser2';
 import { Box, Text } from 'ink';
 import { detectAuthSecrets } from '../auth-secrets.js';
+import {
+  findJwtTokensInLog,
+  formatJwtTimeClaim
+} from '../jwt-inspector.js';
 import { analyzePagination } from '../pagination.js';
 import { parseQueryParameters } from '../query-params.js';
 import {
@@ -119,15 +123,16 @@ function formatHeaderDetailRows(headers, options = {}, idPrefix = 'headers') {
   });
 }
 
-function formatAuthSecretDetailRows(log) {
+function formatAuthSecretDetailRows(log, options = {}) {
   const findings = detectAuthSecrets(log);
+  const jwtTokens = findJwtTokensInLog(log, options);
   const titleRow = createDetailRow({
     id: 'auth-title',
     segments: [{ text: 'Auth & secrets', color: 'cyan', bold: true }],
     type: 'section'
   });
 
-  if (findings.length === 0) {
+  if (findings.length === 0 && jwtTokens.length === 0) {
     return [
       titleRow,
       createDetailRow({
@@ -157,7 +162,151 @@ function formatAuthSecretDetailRows(log) {
         text,
         type: 'auth-secret'
       });
-    })
+    }),
+    ...formatJwtInspectorDetailRows(jwtTokens, { showEmpty: findings.length > 0 })
+  ];
+}
+
+function slugDetailId(value = '') {
+  return String(value ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'jwt';
+}
+
+function formatJwtWarningLabel(token = {}) {
+  if (token.isExpired) {
+    return 'expired';
+  }
+
+  if (token.isNearExpiry) {
+    return 'near expiry';
+  }
+
+  return 'none';
+}
+
+function getJwtWarningColor(token = {}) {
+  if (token.isExpired) {
+    return 'red';
+  }
+
+  if (token.isNearExpiry) {
+    return 'yellow';
+  }
+
+  return 'green';
+}
+
+function formatJwtClaimText(value = '') {
+  const text = String(value ?? '');
+
+  return text.trim() ? sanitizeTerminalText(text) : 'n/a';
+}
+
+function createJwtClaimRow(index, label, value, options = {}) {
+  const safeValue = formatJwtClaimText(value);
+  const text = `${label}: ${safeValue}`;
+
+  return createDetailRow({
+    id: `jwt-${index}-${slugDetailId(label)}`,
+    searchText: `jwt ${label} ${safeValue}`,
+    segments: [
+      { text: label, color: 'gray' },
+      { text: ': ', color: 'gray' },
+      { text: safeValue, color: options.color }
+    ],
+    text,
+    type: 'jwt-claim'
+  });
+}
+
+function namespaceJwtJsonRows(rows = [], prefix = '') {
+  return rows.map((row) => ({
+    ...row,
+    id: `${prefix}-${row.id}`,
+    path: row.path ? `${prefix}.${row.path}` : row.path,
+    searchText: ['jwt decoded', row.searchText, row.path ? `${prefix}.${row.path}` : '']
+      .filter(Boolean)
+      .join(' '),
+    type: `jwt-${row.type}`
+  }));
+}
+
+function formatJwtDecodedRows(token = {}, index = 0) {
+  const prefix = `jwt-${index}`;
+
+  return [
+    createDetailRow({
+      id: `${prefix}-decoded-header-title`,
+      segments: [{ text: 'decoded header', color: 'cyan' }],
+      text: 'decoded header',
+      type: 'jwt-section'
+    }),
+    ...namespaceJwtJsonRows(formatRootedJsonRows(token.header, {}, 'header'), `${prefix}-header`),
+    createDetailRow({
+      id: `${prefix}-decoded-payload-title`,
+      segments: [{ text: 'decoded payload', color: 'cyan' }],
+      text: 'decoded payload',
+      type: 'jwt-section'
+    }),
+    ...namespaceJwtJsonRows(formatRootedJsonRows(token.payload, {}, 'payload'), `${prefix}-payload`)
+  ];
+}
+
+function formatJwtTokenRows(token = {}, index = 0) {
+  const expiryLabel = formatJwtTimeClaim(token.payload?.exp);
+  const warningLabel = formatJwtWarningLabel(token);
+  const prefix = `jwt-${index}`;
+
+  return [
+    createDetailRow({
+      id: `${prefix}-summary`,
+      searchText: `jwt ${token.location} ${token.tokenPreview} unverified local decode`,
+      segments: [
+        { text: token.location, color: 'cyan' },
+        { text: ' | ', color: 'gray' },
+        { text: token.tokenPreview, color: 'yellow' },
+        { text: ' | ', color: 'gray' },
+        { text: 'unverified local decode', color: 'gray' }
+      ],
+      type: 'jwt-summary'
+    }),
+    createJwtClaimRow(index, 'issuer', token.issuer),
+    createJwtClaimRow(index, 'subject', token.subject),
+    createJwtClaimRow(index, 'scopes', token.scopes),
+    createJwtClaimRow(index, 'expiry', expiryLabel, {
+      color: token.isExpired || token.isNearExpiry ? getJwtWarningColor(token) : undefined
+    }),
+    createJwtClaimRow(index, 'warning', warningLabel, { color: getJwtWarningColor(token) }),
+    createJwtClaimRow(index, 'verification', 'signature not verified (local decode only)', { color: 'gray' }),
+    ...formatJwtDecodedRows(token, index)
+  ];
+}
+
+function formatJwtInspectorDetailRows(tokens = [], options = {}) {
+  if (tokens.length === 0 && !options.showEmpty) {
+    return [];
+  }
+
+  return [
+    createDetailRow({ id: 'jwt-spacer', text: '', type: 'blank' }),
+    createDetailRow({
+      id: 'jwt-title',
+      segments: [{ text: 'JWT Inspector', color: 'cyan', bold: true }],
+      text: 'JWT Inspector',
+      type: 'section'
+    }),
+    ...(tokens.length === 0
+      ? [
+        createDetailRow({
+          id: 'jwt-empty',
+          segments: [{ text: 'No JWT tokens found', color: 'gray' }],
+          text: 'No JWT tokens found',
+          type: 'empty'
+        })
+      ]
+      : tokens.flatMap(formatJwtTokenRows))
   ];
 }
 
@@ -1106,7 +1255,7 @@ export function getDetailRows(log, detailTab = 'request', options = {}) {
   }
 
   if (detailTab === 'auth') {
-    return formatAuthSecretDetailRows(log);
+    return formatAuthSecretDetailRows(log, options);
   }
 
   const payload = detailTab === 'response' ? log.response : log.request;

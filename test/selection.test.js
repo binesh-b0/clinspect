@@ -17,6 +17,7 @@ import {
   DEFAULT_KEY_BINDINGS,
   DETAIL_TABS,
   detectAuthSecrets,
+  decodeJwtToken,
   EndpointGroupsModal,
   cycleDetailWidthMode,
   cyclePaneWidthMode,
@@ -27,6 +28,7 @@ import {
   ensureComposerActiveTabRows,
   extractPortFromHost,
   findDetailMatches,
+  findJwtTokensInLog,
   filterLogs,
   formatAnomalyReasons,
   filterRequestDiffRows,
@@ -39,6 +41,8 @@ import {
   formatFilterLabel,
   formatPathForMode,
   formatStructuredPayloadRows,
+  formatJwtScopes,
+  formatJwtTimeClaim,
   formatRecordingLabel,
   formatSchemaRow,
   formatTrafficHeader,
@@ -148,6 +152,26 @@ function createDiffLog(overrides = {}) {
       ...(overrides.response ?? {})
     }
   };
+}
+
+function encodeJwtPart(value, options = {}) {
+  const encoded = Buffer.from(JSON.stringify(value), 'utf8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_');
+
+  return options.padding ? encoded : encoded.replace(/=+$/g, '');
+}
+
+function createJwtToken(payload = {}, options = {}) {
+  const header = options.header ?? { alg: 'HS256', typ: 'JWT' };
+  const signature = options.signature ?? 'signature-secret';
+
+  return [
+    encodeJwtPart(header, { padding: options.padding }),
+    encodeJwtPart(payload, { padding: options.padding }),
+    signature
+  ].join('.');
 }
 
 function getDiffChangeRows(left, right, options) {
@@ -4321,6 +4345,107 @@ test('search helpers expose scoped values', () => {
   assert.equal(getSearchValues(log, 'headers').some((value) => value.includes('x-result: empty')), true);
 });
 
+test('jwt inspector decodes claims, scopes, expiry, and invalid tokens locally', () => {
+  const now = Date.UTC(2026, 0, 1, 0, 0, 0);
+  const nearExpiry = Math.floor(now / 1000) + (10 * 60);
+  const token = createJwtToken({
+    exp: nearExpiry,
+    iss: 'https://issuer.example',
+    scope: 'read write',
+    sub: 'user-123'
+  }, {
+    header: { alg: 'RS256', kid: 'kid-1', typ: 'JWT' },
+    signature: 'supersecret-signature'
+  });
+  const decoded = decodeJwtToken(token, { now });
+  const expired = decodeJwtToken(createJwtToken({ exp: Math.floor(now / 1000) }), { now });
+  const padded = decodeJwtToken(createJwtToken({ sub: 'padded' }, { padding: true }), { now });
+  const serialized = JSON.stringify(decoded);
+
+  assert.equal(decoded.decoded, true);
+  assert.deepEqual(decoded.header, { alg: 'RS256', kid: 'kid-1', typ: 'JWT' });
+  assert.equal(decoded.issuer, 'https://issuer.example');
+  assert.equal(decoded.subject, 'user-123');
+  assert.equal(decoded.scopes, 'read, write');
+  assert.equal(decoded.expiresAt, '2026-01-01T00:10:00.000Z');
+  assert.equal(decoded.isExpired, false);
+  assert.equal(decoded.isNearExpiry, true);
+  assert.deepEqual(decoded.warnings, ['near expiry']);
+  assert.equal(serialized.includes(token), false);
+  assert.equal(serialized.includes('supersecret-signature'), false);
+  assert.equal(expired.isExpired, true);
+  assert.equal(expired.isNearExpiry, false);
+  assert.deepEqual(expired.warnings, ['expired']);
+  assert.equal(padded.decoded, true);
+  assert.equal(padded.subject, 'padded');
+  assert.equal(decodeJwtToken('not-a-jwt').decoded, false);
+  assert.equal(formatJwtTimeClaim(nearExpiry), '2026-01-01T00:10:00.000Z');
+  assert.equal(formatJwtTimeClaim(undefined), 'n/a');
+  assert.equal(formatJwtTimeClaim('not-a-date'), 'invalid');
+  assert.equal(formatJwtScopes({ scp: ['read', 'write'], scopes: 42 }), 'read, write, 42');
+  assert.equal(formatJwtScopes({}), 'n/a');
+});
+
+test('jwt inspector finds tokens across request and response sources without duplicates', () => {
+  const now = Date.UTC(2026, 0, 1, 0, 0, 0);
+  const authToken = createJwtToken({ iss: 'auth', sub: 'one' });
+  const rawHeaderToken = createJwtToken({ iss: 'raw-header', sub: 'two' });
+  const cookieToken = createJwtToken({ iss: 'cookie', sub: 'three' });
+  const queryToken = createJwtToken({ iss: 'query', sub: 'four' });
+  const jsonBodyToken = createJwtToken({ iss: 'json-body', sub: 'five' });
+  const setCookieToken = createJwtToken({ iss: 'set-cookie', sub: 'six' });
+  const formBodyToken = createJwtToken({ iss: 'form-body', sub: 'seven' });
+  const log = createDiffLog({
+    path: `/callback?id_token=${queryToken}&duplicate=${authToken}&plain=ok`,
+    request: {
+      headers: {
+        authorization: `Bearer ${authToken}`,
+        cookie: `access_token=${cookieToken}; duplicate=${authToken}; bad=opaque`,
+        'content-type': 'application/json',
+        'x-raw-jwt': rawHeaderToken
+      },
+      body: JSON.stringify({
+        nested: {
+          id_token: jsonBodyToken
+        },
+        visible: 'plain'
+      })
+    },
+    response: {
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        'set-cookie': [
+          `ts_access_token=${setCookieToken}; Path=/; HttpOnly`,
+          'bad=opaque; Path=/'
+        ]
+      },
+      body: `access_token=${formBodyToken}&visible=plain&bad=a.b.c`
+    }
+  });
+  const tokens = findJwtTokensInLog(log, { now });
+
+  assert.equal(tokens.length, 7);
+  assert.deepEqual(tokens.map((token) => token.location), [
+    'request header authorization',
+    'request cookie access_token',
+    'request header x-raw-jwt',
+    'response cookie ts_access_token',
+    'request query id_token',
+    'request body nested.id_token',
+    'response body access_token'
+  ]);
+  assert.deepEqual(tokens.map((token) => token.issuer), [
+    'auth',
+    'cookie',
+    'raw-header',
+    'set-cookie',
+    'query',
+    'json-body',
+    'form-body'
+  ]);
+  assert.equal(JSON.stringify(tokens).includes(authToken), false);
+});
+
 test('auth secret detector classifies structured candidates without exposing values', () => {
   const jwt = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjMifQ.signature';
   const log = createDiffLog({
@@ -4438,6 +4563,61 @@ test('auth detail tab renders safe badges and searchable source locations', () =
     'Auth & secrets',
     'No auth or secret candidates'
   ]);
+});
+
+test('auth detail tab renders JWT inspector summaries and decoded rows without raw token leakage', () => {
+  const now = Date.UTC(2026, 0, 1, 0, 0, 0);
+  const token = createJwtToken({
+    aud: 'api',
+    exp: Math.floor(now / 1000) + 60,
+    iss: 'https://issuer.example',
+    roles: ['admin'],
+    scope: 'orders:read orders:write',
+    sub: 'user-123'
+  }, {
+    header: { alg: 'HS256', typ: 'JWT' },
+    signature: 'render-secret-signature'
+  });
+  const log = createDiffLog({
+    request: {
+      headers: {
+        authorization: `Bearer ${token}`
+      }
+    }
+  });
+  const rows = getDetailRows(log, 'auth', { now });
+  const text = getDetailLines(log, 'auth', { now }).join('\n');
+
+  assert.match(text, /Auth & secrets/);
+  assert.match(text, /\[JWT\] request header authorization/);
+  assert.match(text, /JWT Inspector/);
+  assert.match(text, /request header authorization \| JWT HS256\/JWT \| unverified local decode/);
+  assert.match(text, /issuer: https:\/\/issuer\.example/);
+  assert.match(text, /subject: user-123/);
+  assert.match(text, /scopes: orders:read, orders:write/);
+  assert.match(text, /expiry: 2026-01-01T00:01:00.000Z/);
+  assert.match(text, /warning: near expiry/);
+  assert.match(text, /verification: signature not verified \(local decode only\)/);
+  assert.match(text, /decoded header/);
+  assert.match(text, /alg: "HS256"/);
+  assert.match(text, /decoded payload/);
+  assert.match(text, /roles: \[ 1 items/);
+  assert.equal(text.includes(token), false);
+  assert.equal(text.includes('render-secret-signature'), false);
+  assert.equal(findDetailMatches(rows, token).length, 0);
+  assert.equal(findDetailMatches(rows, 'render-secret-signature').length, 0);
+
+  const noJwtText = getDetailLines(createDiffLog({
+    request: {
+      headers: {
+        authorization: 'Bearer opaque-secret'
+      }
+    }
+  }), 'auth', { now }).join('\n');
+
+  assert.match(noJwtText, /JWT Inspector/);
+  assert.match(noJwtText, /No JWT tokens found/);
+  assert.equal(noJwtText.includes('opaque-secret'), false);
 });
 
 test('cookie headers are masked in details and search by default', () => {

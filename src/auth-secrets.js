@@ -1,3 +1,5 @@
+import { decodeJwtToken } from './jwt-inspector.js';
+
 const BADGES = Object.freeze({
   'api-key': 'api key',
   bearer: 'bearer',
@@ -119,49 +121,8 @@ function classifyStructuredSecret(name, value, source) {
   return authorizationType ?? classifyNamedSecret(name, source);
 }
 
-function safeBase64UrlDecode(value = '') {
-  const text = String(value ?? '');
-
-  if (!/^[A-Za-z0-9_-]+$/.test(text)) {
-    return null;
-  }
-
-  const padded = text
-    .replace(/-/g, '+')
-    .replace(/_/g, '/')
-    .padEnd(Math.ceil(text.length / 4) * 4, '=');
-
-  try {
-    return Buffer.from(padded, 'base64').toString('utf8');
-  } catch {
-    return null;
-  }
-}
-
-function parseBase64UrlJson(value = '') {
-  const decoded = safeBase64UrlDecode(value);
-
-  if (!decoded) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(decoded);
-
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
 function isJwtLike(value = '') {
-  const parts = String(value ?? '').trim().split('.');
-
-  if (parts.length !== 3 || parts.some((part) => !part)) {
-    return false;
-  }
-
-  return Boolean(parseBase64UrlJson(parts[0]) && parseBase64UrlJson(parts[1]));
+  return decodeJwtToken(value).decoded === true;
 }
 
 function getAuthorizationType(value = '') {

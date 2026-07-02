@@ -164,6 +164,12 @@ export {
   detectAuthSecrets
 } from '../auth-secrets.js';
 export {
+  decodeJwtToken,
+  findJwtTokensInLog,
+  formatJwtScopes,
+  formatJwtTimeClaim
+} from '../jwt-inspector.js';
+export {
   applyTrafficDensity,
   classifyFrameworkAssetRequest,
   countActiveFilters,
