@@ -11,7 +11,10 @@ import {
   resolveTrafficExportTarget,
   writeTrafficExportFile
 } from '../src/export/traffic-export.js';
-import { getDetailRows } from '../src/ui/App.js';
+import {
+  analyzeTrafficFlows,
+  getDetailRows
+} from '../src/ui/App.js';
 
 function createLog(overrides = {}) {
   return {
@@ -213,6 +216,54 @@ test('focused cache rows export only safe analysis text', () => {
   assert.equal(exported.content, 'possible issue: authenticated or dynamic response allows public caching');
   assert.equal(exported.content.includes('opaque-secret-token'), false);
   assert.equal(exported.content.includes('response-secret'), false);
+});
+
+test('focused flow rows export only rendered analysis text', () => {
+  const first = createLog({
+    id: 'submit-1',
+    method: 'POST',
+    path: '/checkout',
+    timestamp: Date.UTC(2026, 5, 30, 10, 15, 20),
+    request: {
+      body: 'card=4111111111111111',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded'
+      }
+    }
+  });
+  const second = createLog({
+    id: 'submit-2',
+    method: 'POST',
+    path: '/checkout',
+    timestamp: Date.UTC(2026, 5, 30, 10, 15, 21),
+    request: {
+      body: 'card=4111111111111111',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded'
+      }
+    }
+  });
+  const flowAnalysis = analyzeTrafficFlows([first, second]);
+  const rows = getDetailRows(first, 'flow', { flowAnalysis });
+  const rowIndex = rows.findIndex((row) => row.text === 'possible double submit 2x POST /checkout');
+  const target = resolveTrafficExportTarget({
+    detailRows: rows,
+    detailTab: 'flow',
+    focusedRow: rowIndex,
+    isListFocused: false,
+    log: first
+  });
+  const exported = createTrafficExport({ log: first, target, secretPolicy: 'raw' });
+
+  assert.deepEqual(target, {
+    detailTab: 'flow',
+    filenamePart: 'flow-row',
+    kind: 'row',
+    label: 'flow row',
+    rowText: 'possible double submit 2x POST /checkout'
+  });
+  assert.equal(exported.content, 'possible double submit 2x POST /checkout');
+  assert.equal(exported.content.includes('4111111111111111'), false);
 });
 
 test('masked exports match UI masking and public target header display while raw exports keep captured values', () => {

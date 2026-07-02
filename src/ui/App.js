@@ -113,6 +113,15 @@ import {
   getEndpointRoutePattern
 } from './endpoints.js';
 import {
+  FlowAnalysisModal,
+  formatFlowHeadline,
+  formatFlowMetadata,
+  formatFlowRow,
+  getFlowDisplayGroups,
+  getFlowPreviewRows,
+  shouldUseWideFlowLayout
+} from './flows.js';
+import {
   SchemaInferenceModal,
   createSchemaGroups,
   formatSchemaRow,
@@ -146,6 +155,12 @@ import {
   resolveCommandInput
 } from './commands.js';
 import { normalizeKeyBindings } from './key-bindings.js';
+import {
+  analyzeTrafficFlows,
+  formatFlowLabel,
+  getRedirectChainGroups,
+  getRepeatRequestGroups
+} from '../flow-analysis.js';
 
 export {
   analyzePagination,
@@ -169,6 +184,12 @@ export {
   parseCacheAge,
   parseCacheControl
 } from '../cache-analysis.js';
+export {
+  analyzeTrafficFlows,
+  formatFlowLabel,
+  getRedirectChainGroups,
+  getRepeatRequestGroups
+} from '../flow-analysis.js';
 export {
   decodeJwtToken,
   findJwtTokensInLog,
@@ -271,6 +292,15 @@ export {
   formatEndpointGroupRow,
   getEndpointRoutePattern
 } from './endpoints.js';
+export {
+  FlowAnalysisModal,
+  formatFlowHeadline,
+  formatFlowMetadata,
+  formatFlowRow,
+  getFlowDisplayGroups,
+  getFlowPreviewRows,
+  shouldUseWideFlowLayout
+} from './flows.js';
 export {
   SchemaInferenceModal,
   createSchemaGroups,
@@ -391,6 +421,7 @@ function getActiveHelpContext({
   isDiffOpen = false,
   isDiffValueOpen = false,
   isEndpointGroupsOpen = false,
+  isFlowAnalysisOpen = false,
   isSchemaInferenceOpen = false,
   isExportPromptOpen = false,
   isFilterOpen = false,
@@ -417,6 +448,10 @@ function getActiveHelpContext({
 
   if (isSchemaInferenceOpen) {
     return { surface: 'schemaInference' };
+  }
+
+  if (isFlowAnalysisOpen) {
+    return { surface: 'flowAnalysis' };
   }
 
   if (isRequestActivityOpen) {
@@ -558,6 +593,8 @@ export function App({
   const [isSchemaInferenceOpen, setIsSchemaInferenceOpen] = useState(false);
   const [focusedSchemaGroupIndex, setFocusedSchemaGroupIndex] = useState(0);
   const [focusedSchemaRowIndex, setFocusedSchemaRowIndex] = useState(0);
+  const [isFlowAnalysisOpen, setIsFlowAnalysisOpen] = useState(false);
+  const [focusedFlowAnalysisIndex, setFocusedFlowAnalysisIndex] = useState(0);
   const [diffBaseLogId, setDiffBaseLogId] = useState(null);
   const [isDiffOpen, setIsDiffOpen] = useState(false);
   const [focusedDiffIndex, setFocusedDiffIndex] = useState(0);
@@ -614,6 +651,8 @@ export function App({
   const trafficAnomalyMap = useMemo(() => getTrafficAnomalyMap(filteredLogs), [filteredLogs]);
   const endpointGroups = useMemo(() => createEndpointGroups(filteredLogs), [filteredLogs]);
   const schemaGroups = useMemo(() => createSchemaGroups(filteredLogs), [filteredLogs]);
+  const flowAnalysis = useMemo(() => analyzeTrafficFlows(filteredLogs), [filteredLogs]);
+  const flowDisplayGroups = useMemo(() => getFlowDisplayGroups(flowAnalysis), [flowAnalysis]);
 
   useEffect(() => {
     const handleUpdate = (updatedLogs) => setLogs(updatedLogs);
@@ -673,6 +712,10 @@ export function App({
   }, [schemaGroups]);
 
   useEffect(() => {
+    setFocusedFlowAnalysisIndex((current) => Math.max(0, Math.min(flowDisplayGroups.length - 1, current)));
+  }, [flowDisplayGroups]);
+
+  useEffect(() => {
     const currentRows = schemaGroups[focusedSchemaGroupIndex]?.rows ?? [];
 
     setFocusedSchemaRowIndex((current) => Math.max(0, Math.min(currentRows.length - 1, current)));
@@ -722,11 +765,12 @@ export function App({
   const rawDetailRows = useMemo(
     () => getDetailRows(inspectedLog, detailTab, {
       collapsedPaths: collapsedDetailPaths,
+      flowAnalysis,
       publicTargetUrl,
       proxyOrigin,
       showCookieValues
     }),
-    [collapsedDetailPaths, detailTab, inspectedLog, publicTargetUrl, proxyOrigin, showCookieValues]
+    [collapsedDetailPaths, detailTab, flowAnalysis, inspectedLog, publicTargetUrl, proxyOrigin, showCookieValues]
   );
   const detailMatches = useMemo(
     () => findDetailMatches(rawDetailRows, detailSearchQuery),
@@ -951,6 +995,7 @@ export function App({
     setDiffSearchMode('words');
     setDiffWordMatchMode('and');
     setDiffMatchCase(false);
+    setIsFlowAnalysisOpen(false);
   };
 
   const stopRecording = () => {
@@ -1047,6 +1092,7 @@ export function App({
     setIsListDisplayOpen(false);
     setIsEndpointGroupsOpen(false);
     setIsSchemaInferenceOpen(false);
+    setIsFlowAnalysisOpen(false);
     setIsDiffOpen(false);
     setPendingExport(null);
     setPendingResend(null);
@@ -1062,6 +1108,7 @@ export function App({
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
     setIsSchemaInferenceOpen(false);
+    setIsFlowAnalysisOpen(false);
     setIsDiffOpen(false);
     setPendingExport(null);
     setPendingResend(null);
@@ -1078,6 +1125,23 @@ export function App({
     setIsListDisplayOpen(false);
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
+    setIsFlowAnalysisOpen(false);
+    setIsDiffOpen(false);
+    setPendingExport(null);
+    setPendingResend(null);
+  };
+
+  const openFlowAnalysis = () => {
+    setIsFlowAnalysisOpen(true);
+    setFocusedFlowAnalysisIndex((current) => Math.max(0, Math.min(flowDisplayGroups.length - 1, current)));
+    setIsFilterOpen(false);
+    setIsDetailSearchOpen(false);
+    setIsDetailModalOpen(false);
+    setIsHelpOpen(false);
+    setIsListDisplayOpen(false);
+    setIsRequestActivityOpen(false);
+    setIsEndpointGroupsOpen(false);
+    setIsSchemaInferenceOpen(false);
     setIsDiffOpen(false);
     setPendingExport(null);
     setPendingResend(null);
@@ -1123,6 +1187,49 @@ export function App({
     setFocusedSchemaRowIndex(boundary === 'bottom'
       ? Math.max(0, rows.length - 1)
       : 0);
+  };
+
+  const moveFlowAnalysis = (direction) => {
+    setFocusedFlowAnalysisIndex((current) => Math.max(
+      0,
+      Math.min(flowDisplayGroups.length - 1, current + direction)
+    ));
+  };
+
+  const moveFlowAnalysisTo = (boundary) => {
+    setFocusedFlowAnalysisIndex(boundary === 'bottom'
+      ? Math.max(0, flowDisplayGroups.length - 1)
+      : 0);
+  };
+
+  const inspectFlowAnalysis = () => {
+    const group = flowDisplayGroups[focusedFlowAnalysisIndex];
+
+    if (!group) {
+      showToast('no flow selected', 'error');
+      return;
+    }
+
+    const logId = group.focusLogId;
+    const log = logId
+      ? stateStore.getLogById?.(logId) ?? filteredLogs.find((item) => String(item.id) === String(logId))
+      : null;
+
+    if (!log) {
+      showToast('flow request not found', 'error');
+      return;
+    }
+
+    setLogs(stateStore.getLogs());
+    setSelectedLogId(log.id);
+    setInspectedLogId(log.id);
+    setIsFlowAnalysisOpen(false);
+    setIsListFocused(false);
+    setDetailTab('flow');
+    setDetailScrollOffset(0);
+    setFocusedDetailRow(0);
+    setDetailMatchIndex(0);
+    showToast(`opened ${log.method} ${log.path}`, 'success');
   };
 
   const moveRequestActivity = (direction) => {
@@ -1226,6 +1333,10 @@ export function App({
       case 'openSchemaInference':
         closeCompletedCommand('');
         openSchemaInference();
+        break;
+      case 'openFlowAnalysis':
+        closeCompletedCommand('');
+        openFlowAnalysis();
         break;
       case 'toggleAnomalies':
         closeCompletedCommand(toggleAnomalies());
@@ -1385,6 +1496,7 @@ export function App({
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
     setIsSchemaInferenceOpen(false);
+    setIsFlowAnalysisOpen(false);
     setIsDiffOpen(false);
     setPendingExport(null);
     setPendingResend(null);
@@ -1509,6 +1621,7 @@ export function App({
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
     setIsSchemaInferenceOpen(false);
+    setIsFlowAnalysisOpen(false);
     setPendingExport(null);
     setPendingResend(null);
   };
@@ -1647,6 +1760,7 @@ export function App({
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
     setIsSchemaInferenceOpen(false);
+    setIsFlowAnalysisOpen(false);
     setIsDiffOpen(false);
     setPendingExport({
       action,
@@ -1660,6 +1774,7 @@ export function App({
     setIsListDisplayOpen(false);
     setIsEndpointGroupsOpen(false);
     setIsSchemaInferenceOpen(false);
+    setIsFlowAnalysisOpen(false);
   };
 
   const formatSavedExportPath = (filePath) => {
@@ -1745,6 +1860,7 @@ export function App({
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
     setIsSchemaInferenceOpen(false);
+    setIsFlowAnalysisOpen(false);
     setIsDiffOpen(false);
   };
 
@@ -1770,6 +1886,7 @@ export function App({
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
     setIsSchemaInferenceOpen(false);
+    setIsFlowAnalysisOpen(false);
     setIsDiffOpen(false);
   };
 
@@ -1832,6 +1949,7 @@ export function App({
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
     setIsSchemaInferenceOpen(false);
+    setIsFlowAnalysisOpen(false);
     setIsDiffOpen(false);
   };
 
@@ -1903,6 +2021,7 @@ export function App({
     setIsListDisplayOpen(false);
     setIsEndpointGroupsOpen(false);
     setIsSchemaInferenceOpen(false);
+    setIsFlowAnalysisOpen(false);
     setIsDiffOpen(false);
 
     Promise.resolve()
@@ -2003,7 +2122,8 @@ export function App({
       setIsListDisplayOpen(false);
       setIsRequestActivityOpen(false);
       setIsEndpointGroupsOpen(false);
-    setIsSchemaInferenceOpen(false);
+      setIsSchemaInferenceOpen(false);
+      setIsFlowAnalysisOpen(false);
       setIsDiffOpen(false);
       return;
     }
@@ -2016,6 +2136,7 @@ export function App({
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
     setIsSchemaInferenceOpen(false);
+    setIsFlowAnalysisOpen(false);
     sendResendPlan(plan);
   };
 
@@ -2047,6 +2168,7 @@ export function App({
     setIsRequestActivityOpen(false);
     setIsEndpointGroupsOpen(false);
     setIsSchemaInferenceOpen(false);
+    setIsFlowAnalysisOpen(false);
     setIsDiffOpen(false);
   };
 
@@ -2235,6 +2357,12 @@ export function App({
     keyBindings,
     totalLogs: filteredLogs.length
   });
+  const flowAnalysisNode = h(FlowAnalysisModal, {
+    analysis: flowAnalysis,
+    focusedIndex: focusedFlowAnalysisIndex,
+    keyBindings,
+    totalLogs: filteredLogs.length
+  });
   const requestDiffNode = h(RequestDiffModal, {
     diff: requestDiff,
     focusedRow: focusedDiffIndex,
@@ -2259,6 +2387,7 @@ export function App({
     isDiffOpen,
     isDiffValueOpen,
     isEndpointGroupsOpen,
+    isFlowAnalysisOpen,
     isSchemaInferenceOpen,
     isExportPromptOpen: Boolean(pendingExport),
     isFilterOpen,
@@ -2286,6 +2415,7 @@ export function App({
     isLiveMode,
     isListDisplayOpen,
     isEndpointGroupsOpen,
+    isFlowAnalysisOpen,
     isSchemaInferenceOpen,
     isRequestActivityOpen,
     isListFocused: isDetailModalOpen ? false : isListFocused,
@@ -2309,6 +2439,7 @@ export function App({
         isHelpOpen,
         isListDisplayOpen,
         isEndpointGroupsOpen,
+        isFlowAnalysisOpen,
         isSchemaInferenceOpen,
         isRequestActivityOpen,
         isDiffOpen,
@@ -2333,6 +2464,7 @@ export function App({
         diffPageSize: diffVisibleCount,
         diffValuePageSize: diffVisibleCount,
         endpointGroupsPageSize: endpointGroupPageSize,
+        flowAnalysisPageSize: endpointGroupPageSize,
         schemaInferencePageSize,
         detailPageSize: activeDetailVisibleCount,
         showTrafficPane: paneLayout.showTrafficPane,
@@ -2370,6 +2502,7 @@ export function App({
         onCloseDetailModal: () => setIsDetailModalOpen(false),
         onCloseDiff: closeDiff,
         onCloseEndpointGroups: () => setIsEndpointGroupsOpen(false),
+        onCloseFlowAnalysis: () => setIsFlowAnalysisOpen(false),
         onCloseRequestActivity: () => setIsRequestActivityOpen(false),
         onCloseComposer: () => {
           setComposer((current) => ({
@@ -2492,6 +2625,8 @@ export function App({
         onMoveDiffValueScrollTo: moveDiffValueScrollTo,
         onMoveEndpointGroup: moveEndpointGroup,
         onMoveEndpointGroupTo: moveEndpointGroupTo,
+        onMoveFlowAnalysis: moveFlowAnalysis,
+        onMoveFlowAnalysisTo: moveFlowAnalysisTo,
         onMoveSchemaField: moveSchemaField,
         onMoveSchemaFieldTo: moveSchemaFieldTo,
         onMoveSchemaGroup: moveSchemaGroup,
@@ -2511,6 +2646,7 @@ export function App({
           setIsRequestActivityOpen(false);
           setIsEndpointGroupsOpen(false);
           setIsSchemaInferenceOpen(false);
+          setIsFlowAnalysisOpen(false);
           setIsDiffOpen(false);
           setIsFollowingLatest(false);
         },
@@ -2523,6 +2659,7 @@ export function App({
             setIsRequestActivityOpen(false);
             setIsEndpointGroupsOpen(false);
             setIsSchemaInferenceOpen(false);
+            setIsFlowAnalysisOpen(false);
             setIsDiffOpen(false);
           }
         },
@@ -2533,6 +2670,7 @@ export function App({
           setIsRequestActivityOpen(false);
           setIsEndpointGroupsOpen(false);
           setIsSchemaInferenceOpen(false);
+          setIsFlowAnalysisOpen(false);
           setIsDiffOpen(false);
           setIsListFocused(false);
         },
@@ -2562,7 +2700,9 @@ export function App({
         onOpenDiffValue: openDiffValue,
         onOpenHelp: () => setIsHelpOpen(true),
         onOpenListDisplay: openListDisplay,
+        onOpenFlowAnalysis: openFlowAnalysis,
         onOpenSchemaInference: openSchemaInference,
+        onInspectFlowAnalysis: inspectFlowAnalysis,
         onInspectRequestActivity: inspectRequestActivity,
         onMarkDiffBase: markDiffBase,
         onPreviewComposerSend: () => {
@@ -2613,6 +2753,7 @@ export function App({
             setIsRequestActivityOpen(false);
             setIsEndpointGroupsOpen(false);
             setIsSchemaInferenceOpen(false);
+            setIsFlowAnalysisOpen(false);
             setIsDiffOpen(false);
           }
           if (selectedLog) {
@@ -2711,6 +2852,8 @@ export function App({
           ? endpointGroupsNode
         : (isSchemaInferenceOpen
           ? schemaInferenceNode
+        : (isFlowAnalysisOpen
+          ? flowAnalysisNode
         : (isRequestActivityOpen
           ? requestActivityNode
         : (composer.isOpen
@@ -2732,7 +2875,7 @@ export function App({
             scrollOffset: detailScrollOffset,
             visibleCount: detailModalVisibleCount
           })
-          : paneNodes))))))))
+          : paneNodes)))))))))
     ),
     h(ToastNotification, { toast }),
     isDiffOpen && !commandState.isOpen && !isHelpOpen && !isListDisplayOpen

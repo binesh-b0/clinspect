@@ -96,6 +96,15 @@ export const DEFAULT_KEY_BINDINGS = Object.freeze({
   'schemaInference.nextGroup': Object.freeze(['n']),
   'schemaInference.previousGroup': Object.freeze(['N']),
 
+  'flowAnalysis.close': Object.freeze(['escape', 'q', 'backspace']),
+  'flowAnalysis.inspect': Object.freeze(['enter']),
+  'flowAnalysis.moveDown': Object.freeze(['j', 'down']),
+  'flowAnalysis.moveUp': Object.freeze(['k', 'up']),
+  'flowAnalysis.pageDown': Object.freeze(['pagedown', ']']),
+  'flowAnalysis.pageUp': Object.freeze(['pageup', '[']),
+  'flowAnalysis.top': Object.freeze(['g']),
+  'flowAnalysis.bottom': Object.freeze(['G']),
+
   'resend.confirm': Object.freeze(['enter', 'y', 'Y']),
   'resend.edit': Object.freeze(['E', 'e']),
   'resend.cancel': Object.freeze(['escape', 'n', 'N', 'backspace']),
@@ -284,6 +293,16 @@ const ACTION_CONTEXT_GROUPS = [
     'schemaInference.bottom',
     'schemaInference.nextGroup',
     'schemaInference.previousGroup'
+  ],
+  [
+    'flowAnalysis.close',
+    'flowAnalysis.inspect',
+    'flowAnalysis.moveDown',
+    'flowAnalysis.moveUp',
+    'flowAnalysis.pageDown',
+    'flowAnalysis.pageUp',
+    'flowAnalysis.top',
+    'flowAnalysis.bottom'
   ],
   ['resend.confirm', 'resend.edit', 'resend.cancel'],
   ['composerConfirm.confirm', 'composerConfirm.cancel'],

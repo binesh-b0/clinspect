@@ -8,6 +8,9 @@ import {
   formatCacheIssue
 } from '../cache-analysis.js';
 import {
+  analyzeTrafficFlows
+} from '../flow-analysis.js';
+import {
   findJwtTokensInLog,
   formatJwtTimeClaim
 } from '../jwt-inspector.js';
@@ -31,6 +34,9 @@ import {
   getBindingLabel,
   getBindingPairLabel
 } from './key-bindings.js';
+import {
+  getFlowPreviewRows
+} from './flows.js';
 
 function getDetailBindingLabel(keyBindings, actionId, options = {}) {
   return getBindingLabel(keyBindings, actionId, options);
@@ -57,7 +63,8 @@ function formatDetailTabLabel(detailTab = 'request') {
     ['request', 'Request'],
     ['response', 'Response'],
     ['auth', 'Auth'],
-    ['cache', 'Cache']
+    ['cache', 'Cache'],
+    ['flow', 'Flow']
   ].map(([tab, label]) => (detailTab === tab ? `[${label}]` : label)).join(' ');
 }
 
@@ -274,6 +281,161 @@ function formatCacheAnalysisDetailRows(log, options = {}) {
           type: 'section'
         }),
         ...analysis.issues.map(formatCacheIssueDetailRow)
+      ]
+      : [])
+  ];
+}
+
+function getFlowContextForLog(log, options = {}) {
+  const logId = log?.id === undefined || log?.id === null ? null : String(log.id);
+
+  if (options.flowContext) {
+    return options.flowContext;
+  }
+
+  if (logId && options.flowAnalysis?.logContextById instanceof Map) {
+    return options.flowAnalysis.logContextById.get(logId) ?? {
+      redirectChains: [],
+      repeatGroups: []
+    };
+  }
+
+  if (Array.isArray(options.flowLogs)) {
+    return analyzeTrafficFlows(options.flowLogs).logContextById.get(logId) ?? {
+      redirectChains: [],
+      repeatGroups: []
+    };
+  }
+
+  return {
+    redirectChains: [],
+    repeatGroups: []
+  };
+}
+
+function formatFlowPreviewDetailRow(line, index, idPrefix, searchPrefix) {
+  return createDetailRow({
+    id: `${idPrefix}-${line.id}-${index}`,
+    matchText: `${searchPrefix} ${line.text}`,
+    searchText: `${searchPrefix} ${line.text}`,
+    segments: [{
+      text: line.text,
+      color: line.color,
+      bold: line.bold
+    }],
+    text: line.text,
+    type: 'flow'
+  });
+}
+
+function createFlowPositionDetailRow(idPrefix, entry, searchPrefix) {
+  const text = `position ${entry.position}/${entry.total}`;
+
+  return createDetailRow({
+    id: `${idPrefix}-position`,
+    matchText: `${searchPrefix} ${text}`,
+    searchText: `${searchPrefix} ${text}`,
+    segments: [{ text, color: 'gray' }],
+    text,
+    type: 'flow'
+  });
+}
+
+function formatRedirectChainDetailRows(entry, selectedLogId) {
+  const chain = entry.chain;
+  const idPrefix = `flow-redirect-${chain.id}`;
+  const searchPrefix = 'flow redirect chain';
+  const previewRows = getFlowPreviewRows(chain, { selectedLogId });
+
+  return [
+    ...previewRows.slice(0, 2).map((line, index) => formatFlowPreviewDetailRow(
+      line,
+      index,
+      idPrefix,
+      searchPrefix
+    )),
+    createFlowPositionDetailRow(idPrefix, entry, searchPrefix),
+    ...previewRows.slice(2).map((line, index) => formatFlowPreviewDetailRow(
+      line,
+      index + 2,
+      idPrefix,
+      searchPrefix
+    ))
+  ];
+}
+
+function formatRepeatGroupDetailRows(entry) {
+  const group = entry.group;
+  const idPrefix = `flow-repeat-${group.id}`;
+  const searchPrefix = 'flow repeated requests';
+  const previewRows = getFlowPreviewRows(group);
+
+  return [
+    ...previewRows.slice(0, 2).map((line, index) => formatFlowPreviewDetailRow(
+      line,
+      index,
+      idPrefix,
+      searchPrefix
+    )),
+    createFlowPositionDetailRow(idPrefix, entry, searchPrefix),
+    ...previewRows.slice(2).map((line, index) => formatFlowPreviewDetailRow(
+      line,
+      index + 2,
+      idPrefix,
+      searchPrefix
+    ))
+  ];
+}
+
+function formatFlowDetailRows(log, options = {}) {
+  const context = getFlowContextForLog(log, options);
+  const redirectChains = context.redirectChains ?? [];
+  const repeatGroups = context.repeatGroups ?? [];
+  const titleRow = createDetailRow({
+    id: 'flow-title',
+    segments: [{ text: 'Flow context', color: 'cyan', bold: true }],
+    type: 'section'
+  });
+
+  if (redirectChains.length === 0 && repeatGroups.length === 0) {
+    return [
+      titleRow,
+      createDetailRow({
+        id: 'flow-empty',
+        segments: [{ text: 'No flow context for selected request', color: 'gray' }],
+        text: 'No flow context for selected request',
+        type: 'empty'
+      })
+    ];
+  }
+
+  return [
+    titleRow,
+    ...(redirectChains.length > 0
+      ? [
+        createDetailRow({
+          id: 'flow-redirect-title',
+          segments: [{ text: 'Redirect chain', color: 'cyan', bold: true }],
+          type: 'section'
+        }),
+        ...redirectChains.flatMap((entry, index) => [
+          ...(index > 0 ? [createDetailRow({ id: `flow-redirect-spacer-${index}`, text: '', type: 'blank' })] : []),
+          ...formatRedirectChainDetailRows(entry, log?.id)
+        ])
+      ]
+      : []),
+    ...(repeatGroups.length > 0
+      ? [
+        ...(redirectChains.length > 0 ? [createDetailRow({ id: 'flow-repeat-spacer', text: '', type: 'blank' })] : []),
+        createDetailRow({
+          id: 'flow-repeat-title',
+          segments: [{ text: 'Repeat detection', color: 'cyan', bold: true }],
+          type: 'section'
+        }),
+        ...repeatGroups.flatMap((entry, index) => [
+          ...(index > 0 ? [createDetailRow({ id: `flow-repeat-spacer-${index}`, text: '', type: 'blank' })] : []),
+          ...formatRepeatGroupDetailRows(entry)
+        ])
       ]
       : [])
   ];
@@ -1372,6 +1534,10 @@ export function getDetailRows(log, detailTab = 'request', options = {}) {
 
   if (detailTab === 'cache') {
     return formatCacheAnalysisDetailRows(log, options);
+  }
+
+  if (detailTab === 'flow') {
+    return formatFlowDetailRows(log, options);
   }
 
   const payload = detailTab === 'response' ? log.response : log.request;

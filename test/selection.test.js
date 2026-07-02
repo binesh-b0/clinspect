@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   countActiveFilters,
+  analyzeTrafficFlows,
   analyzePagination,
   analyzeCacheHeaders,
   applyDetailMatches,
@@ -20,6 +21,7 @@ import {
   detectAuthSecrets,
   decodeJwtToken,
   EndpointGroupsModal,
+  FlowAnalysisModal,
   cycleDetailWidthMode,
   cyclePaneWidthMode,
   cycleTrafficDensity,
@@ -33,9 +35,13 @@ import {
   filterLogs,
   formatAnomalyReasons,
   formatCacheIssue,
+  formatFlowLabel,
   filterRequestDiffRows,
   formatCommandSelectionStatus,
   formatEndpointGroupRow,
+  formatFlowHeadline,
+  formatFlowMetadata,
+  formatFlowRow,
   formatFrameworkDetectionLabel,
   formatPaginationNextStatus,
   formatPaneWidthLabel,
@@ -54,6 +60,10 @@ import {
   getDiffCandidateLogIds,
   getDiffEndpointShape,
   getEndpointRoutePattern,
+  getFlowDisplayGroups,
+  getFlowPreviewRows,
+  getRedirectChainGroups,
+  getRepeatRequestGroups,
   getRequestDiffRows,
   getBoundaryLogId,
   getCommandHelpRows,
@@ -106,11 +116,12 @@ import {
   resolveSelectedLogId,
   selectComposerTab,
   shouldOpenDetailModalForInspect,
+  shouldUseWideFlowLayout,
   summarizeFrameworkAssets,
   toggleTrafficColumn,
   toggleFilterValue
 } from '../src/ui/App.js';
-import { CommandModal } from '../src/ui/chrome.js';
+import { CommandModal, HelpModal } from '../src/ui/chrome.js';
 import { TrafficList } from '../src/ui/traffic.js';
 import {
   DiffFilterBar,
@@ -143,6 +154,7 @@ function createDiffLog(overrides = {}) {
     path: overrides.path ?? '/',
     responseTimeMs: overrides.responseTimeMs ?? 0,
     statusCode: overrides.statusCode ?? 200,
+    ...(Object.hasOwn(overrides, 'timestamp') ? { timestamp: overrides.timestamp } : {}),
     request: {
       body: '',
       headers: {},
@@ -1285,6 +1297,202 @@ test('endpoint group rows and modal render summary, truncation, empty, and focus
   assert.match(getNodeText(emptyModal), /No visible traffic to group/);
 });
 
+test('flow analyzer groups complete and incomplete redirect chains', () => {
+  const start = Date.UTC(2026, 0, 1, 0, 0, 0);
+  const chains = getRedirectChainGroups([
+    createDiffLog({
+      id: 'login',
+      method: 'POST',
+      path: '/login',
+      statusCode: 303,
+      timestamp: start,
+      response: { headers: { location: '/mfa' } }
+    }),
+    createDiffLog({
+      id: 'mfa',
+      method: 'GET',
+      path: '/mfa',
+      statusCode: 302,
+      timestamp: start + 500,
+      response: { headers: { location: 'https://app.example/dashboard?from=mfa' } }
+    }),
+    createDiffLog({
+      id: 'done',
+      method: 'GET',
+      path: '/dashboard?from=mfa',
+      statusCode: 200,
+      timestamp: start + 900
+    })
+  ]);
+
+  assert.equal(chains.length, 1);
+  assert.equal(chains[0].complete, true);
+  assert.equal(chains[0].hopCount, 2);
+  assert.deepEqual(chains[0].logIds, ['login', 'mfa', 'done']);
+  assert.equal(chains[0].statusTrail, '303 -> 302 -> 200');
+  assert.equal(chains[0].finalDestination, 'GET /dashboard?from=mfa');
+  assert.equal(formatFlowLabel(chains[0]), 'redirect chain 2 hops | final 200');
+
+  const incomplete = getRedirectChainGroups([
+    createDiffLog({
+      id: 'old',
+      method: 'GET',
+      path: '/old',
+      statusCode: 302,
+      response: { headers: { location: '/new' } }
+    })
+  ]);
+
+  assert.equal(incomplete.length, 1);
+  assert.equal(incomplete[0].complete, false);
+  assert.equal(incomplete[0].finalDestination, '/new (next request not captured)');
+  assert.equal(formatFlowLabel(incomplete[0]), 'incomplete redirect chain 1 hop');
+});
+
+test('flow analyzer classifies repeated request groups cautiously', () => {
+  const start = Date.UTC(2026, 0, 1, 0, 0, 0);
+  const jsonRequest = (body = '{"ok":true}') => ({
+    body,
+    headers: { 'content-type': 'application/json' }
+  });
+  const groups = getRepeatRequestGroups([
+    createDiffLog({ id: 'submit-1', method: 'POST', path: '/checkout', statusCode: 200, timestamp: start, request: jsonRequest() }),
+    createDiffLog({ id: 'submit-2', method: 'POST', path: '/checkout', statusCode: 200, timestamp: start + 600, request: jsonRequest() }),
+    createDiffLog({ id: 'retry-1', method: 'GET', path: '/api/items', statusCode: 500, timestamp: start + 3000 }),
+    createDiffLog({ id: 'retry-2', method: 'GET', path: '/api/items', statusCode: 200, timestamp: start + 3400 }),
+    createDiffLog({ id: 'poll-1', method: 'GET', path: '/poll', statusCode: 200, timestamp: start + 6000 }),
+    createDiffLog({ id: 'poll-2', method: 'GET', path: '/poll', statusCode: 200, timestamp: start + 6500 }),
+    createDiffLog({ id: 'poll-3', method: 'GET', path: '/poll', statusCode: 200, timestamp: start + 7000 }),
+    createDiffLog({ id: 'loop-1', method: 'GET', path: '/loop', statusCode: 503, timestamp: start + 9000 }),
+    createDiffLog({ id: 'loop-2', method: 'GET', path: '/loop', statusCode: 503, timestamp: start + 9400 }),
+    createDiffLog({ id: 'loop-3', method: 'GET', path: '/loop', statusCode: 503, timestamp: start + 9800 }),
+    createDiffLog({ id: 'dup-1', method: 'GET', path: '/duplicate', statusCode: 200, timestamp: start + 12_000 }),
+    createDiffLog({ id: 'dup-2', method: 'GET', path: '/duplicate', statusCode: 200, timestamp: start + 12_900 }),
+    createDiffLog({ id: 'late-1', method: 'GET', path: '/late', statusCode: 200, timestamp: start + 16_000 }),
+    createDiffLog({ id: 'late-2', method: 'GET', path: '/late', statusCode: 200, timestamp: start + 19_000 }),
+    createDiffLog({ id: 'body-1', method: 'POST', path: '/body', statusCode: 200, timestamp: start + 22_000, request: jsonRequest('{"id":1}') }),
+    createDiffLog({ id: 'body-2', method: 'POST', path: '/body', statusCode: 200, timestamp: start + 22_500, request: jsonRequest('{"id":2}') })
+  ]);
+  const labels = Object.fromEntries(groups.map((group) => [`${group.method} ${group.path}`, group.label]));
+
+  assert.equal(labels['POST /checkout'], 'possible double submit');
+  assert.equal(labels['GET /api/items'], 'likely retry');
+  assert.equal(labels['GET /poll'], 'possible polling');
+  assert.equal(labels['GET /loop'], 'possible retry loop');
+  assert.equal(labels['GET /duplicate'], 'possible duplicate');
+  assert.equal(labels['GET /late'], undefined);
+  assert.equal(labels['POST /body'], undefined);
+});
+
+test('flow modal renders grouped sections and selected-flow previews', () => {
+  const start = Date.UTC(2026, 0, 1, 0, 0, 0);
+  const analysis = analyzeTrafficFlows([
+    createDiffLog({
+      id: 'redirect',
+      method: 'GET',
+      path: '/old',
+      statusCode: 302,
+      timestamp: start,
+      response: { headers: { location: '/new' } }
+    }),
+    createDiffLog({ id: 'final', method: 'GET', path: '/new', statusCode: 200, timestamp: start + 100 }),
+    createDiffLog({ id: 'submit-1', method: 'POST', path: '/checkout', statusCode: 200, timestamp: start + 1000, request: { body: 'a=1', headers: { 'content-type': 'application/x-www-form-urlencoded' } } }),
+    createDiffLog({ id: 'submit-2', method: 'POST', path: '/checkout', statusCode: 200, timestamp: start + 1500, request: { body: 'a=1', headers: { 'content-type': 'application/x-www-form-urlencoded' } } })
+  ]);
+  const displayGroups = getFlowDisplayGroups(analysis);
+  const repeatGroup = displayGroups.find((group) => group.kind === 'repeat');
+  const redirectGroup = displayGroups.find((group) => group.kind === 'redirect');
+  const row = formatFlowRow(repeatGroup, { width: 72 });
+  const wideModal = FlowAnalysisModal.type({
+    analysis,
+    focusedIndex: 0,
+    terminalColumns: 120,
+    terminalRows: 28,
+    totalLogs: 4
+  });
+  const narrowModal = FlowAnalysisModal.type({
+    analysis,
+    focusedIndex: 1,
+    terminalColumns: 76,
+    terminalRows: 28,
+    totalLogs: 4
+  });
+  const emptyModal = FlowAnalysisModal.type({
+    analysis: analyzeTrafficFlows([]),
+    focusedIndex: 0,
+    totalLogs: 0
+  });
+  const wideText = getNodeText(wideModal);
+  const narrowText = getNodeText(narrowModal);
+  const focusedRows = collectNodes(wideModal).filter((node) => node.props?.backgroundColor === 'cyan');
+  const wideRows = collectNodes(wideModal).filter((node) => node.props?.flexDirection === 'row');
+
+  assert.equal(shouldUseWideFlowLayout(100), true);
+  assert.equal(shouldUseWideFlowLayout(70), false);
+  assert.match(row, /possible double submit 2x POST \/checkout/);
+  assert.equal(formatFlowHeadline(redirectGroup), '302 -> 200 GET /old -> /new');
+  assert.equal(formatFlowMetadata(redirectGroup), 'complete | 1 hop | span 100ms | final 200 GET /new');
+  assert.deepEqual(getFlowPreviewRows(repeatGroup).map((line) => line.text), [
+    'possible double submit 2x POST /checkout',
+    'span 500ms | statuses 200 -> 200 | 2 matching requests',
+    'statuses 200 -> 200',
+    'related submit-1, submit-2'
+  ]);
+  assert.match(wideText, /Flows/);
+  assert.match(wideText, /Redirect chains/);
+  assert.match(wideText, /Repeated requests/);
+  assert.match(wideText, /302 -> 200 GET \/old -> \/new/);
+  assert.match(wideText, /complete \| 1 hop \| span 100ms \| final 200 GET \/new/);
+  assert.match(wideText, /Selected flow/);
+  assert.match(wideText, /final 200 GET \/new/);
+  assert.equal(wideRows.some((node) => node.props?.width >= 90), true);
+  assert.match(narrowText, /possible double submit 2x POST \/checkout/);
+  assert.match(narrowText, /span 500ms \| statuses 200 -> 200 \| 2 matching requests/);
+  assert.match(narrowText, /related submit-1, submit-2/);
+  assert.equal(narrowText.includes('a=1'), false);
+  assert.equal(focusedRows.length, 1);
+  assert.match(getNodeText(emptyModal), /No redirect chains or repeated requests in visible traffic/);
+});
+
+test('flow detail tab renders selected redirect and repeat context', () => {
+  const start = Date.UTC(2026, 0, 1, 0, 0, 0);
+  const logs = [
+    createDiffLog({
+      id: 'redirect',
+      method: 'GET',
+      path: '/old',
+      statusCode: 302,
+      timestamp: start,
+      response: { headers: { location: '/new' } }
+    }),
+    createDiffLog({ id: 'final', method: 'GET', path: '/new', statusCode: 200, timestamp: start + 100 }),
+    createDiffLog({ id: 'submit-1', method: 'POST', path: '/checkout', statusCode: 200, timestamp: start + 1000, request: { body: 'a=1', headers: { 'content-type': 'application/x-www-form-urlencoded' } } }),
+    createDiffLog({ id: 'submit-2', method: 'POST', path: '/checkout', statusCode: 200, timestamp: start + 1500, request: { body: 'a=1', headers: { 'content-type': 'application/x-www-form-urlencoded' } } })
+  ];
+  const flowAnalysis = analyzeTrafficFlows(logs);
+  const finalText = getDetailLines(logs[1], 'flow', { flowAnalysis }).join('\n');
+  const repeatRows = getDetailRows(logs[2], 'flow', { flowAnalysis });
+  const repeatText = repeatRows.map((row) => row.text).join('\n');
+
+  assert.deepEqual(getDetailLines(createDiffLog(), 'flow'), [
+    'Flow context',
+    'No flow context for selected request'
+  ]);
+  assert.match(finalText, /Flow context/);
+  assert.match(finalText, /Redirect chain/);
+  assert.match(finalText, /302 -> 200 GET \/old -> \/new/);
+  assert.match(finalText, /complete \| 1 hop \| span 100ms \| final 200 GET \/new/);
+  assert.match(finalText, /position 2\/2/);
+  assert.match(finalText, /> final 200 GET \/new/);
+  assert.match(repeatText, /Repeat detection/);
+  assert.match(repeatText, /possible double submit 2x POST \/checkout/);
+  assert.match(repeatText, /span 500ms \| statuses 200 -> 200 \| 2 matching requests/);
+  assert.match(repeatText, /position 1\/2/);
+  assert.match(repeatText, /related submit-1, submit-2/);
+  assert.equal(repeatText.includes('a=1'), false);
+  assert.equal(findDetailMatches(repeatRows, 'possible double submit').length > 0, true);
+});
+
 test('schema inference parses JSON payloads and infers field shapes', () => {
   assert.deepEqual(parseJsonPayloadForSchema({
     body: '{"ok":true}',
@@ -1879,6 +2087,42 @@ test('keyboard action helper supports colon command mode for careful actions', (
     { type: 'openHelp' }
   );
   assert.deepEqual(
+    getKeyboardAction('j', {}, { isFlowAnalysisOpen: true }),
+    { type: 'moveFlowAnalysis', direction: 1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('k', {}, { isFlowAnalysisOpen: true }),
+    { type: 'moveFlowAnalysis', direction: -1 }
+  );
+  assert.deepEqual(
+    getKeyboardAction(']', {}, { flowAnalysisPageSize: 8, isFlowAnalysisOpen: true }),
+    { type: 'moveFlowAnalysis', direction: 8 }
+  );
+  assert.deepEqual(
+    getKeyboardAction('g', {}, { isFlowAnalysisOpen: true }),
+    { type: 'moveFlowAnalysisTo', boundary: 'top' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('G', {}, { isFlowAnalysisOpen: true }),
+    { type: 'moveFlowAnalysisTo', boundary: 'bottom' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('', { return: true }, { isFlowAnalysisOpen: true }),
+    { type: 'inspectFlowAnalysis' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('q', {}, { isFlowAnalysisOpen: true }),
+    { type: 'closeFlowAnalysis' }
+  );
+  assert.deepEqual(
+    getKeyboardAction(':', {}, { isFlowAnalysisOpen: true }),
+    { type: 'openCommandPrompt' }
+  );
+  assert.deepEqual(
+    getKeyboardAction('h', {}, { isFlowAnalysisOpen: true }),
+    { type: 'openHelp' }
+  );
+  assert.deepEqual(
     getKeyboardAction('h', {}, { isDiffOpen: true }),
     { type: 'openHelp' }
   );
@@ -2012,6 +2256,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
     { isListDisplayOpen: true },
     { isEndpointGroupsOpen: true },
     { isSchemaInferenceOpen: true },
+    { isFlowAnalysisOpen: true },
     { isRequestActivityOpen: true },
     { isDiffOpen: true },
     { isDiffOpen: true, isDiffValueOpen: true },
@@ -2045,6 +2290,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
     'requests',
     'endpoints',
     'schemas',
+    'flows',
     'record',
     'stop-recording',
     'pause-capture',
@@ -2058,8 +2304,11 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(getCommandMatches('rq').map((command) => command.name), ['requests']);
   assert.deepEqual(getCommandMatches('ep').map((command) => command.name), ['endpoints']);
   assert.deepEqual(getCommandMatches('sc').map((command) => command.name), ['schemas']);
+  assert.deepEqual(getCommandMatches('flow').map((command) => command.name), ['flows']);
+  assert.deepEqual(getCommandMatches('red').map((command) => command.name), ['flows']);
+  assert.deepEqual(getCommandMatches('ret').map((command) => command.name), ['flows']);
   assert.deepEqual(getCommandMatches('anom').map((command) => command.name), ['anomalies']);
-  assert.deepEqual(getCommandMatches('r').map((command) => command.name), ['resend', 'requests', 'record']);
+  assert.deepEqual(getCommandMatches('r').map((command) => command.name), ['resend', 'requests', 'flows', 'record']);
   assert.deepEqual(resolveCommandInput('next-page').action, { type: 'openNextPage' });
   assert.deepEqual(resolveCommandInput('np').action, { type: 'openNextPage' });
   assert.deepEqual(resolveCommandInput('send-next-page').action, { type: 'sendNextPage' });
@@ -2073,12 +2322,16 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(resolveCommandInput('schema').action, { type: 'openSchemaInference' });
   assert.deepEqual(resolveCommandInput('sc').action, { type: 'openSchemaInference' });
   assert.deepEqual(resolveCommandInput('shapes').action, { type: 'openSchemaInference' });
+  assert.deepEqual(resolveCommandInput('flows').action, { type: 'openFlowAnalysis' });
+  assert.deepEqual(resolveCommandInput('flow').action, { type: 'openFlowAnalysis' });
+  assert.deepEqual(resolveCommandInput('redirects').action, { type: 'openFlowAnalysis' });
+  assert.deepEqual(resolveCommandInput('retries').action, { type: 'openFlowAnalysis' });
   assert.deepEqual(resolveCommandInput('anomalies').action, { type: 'toggleAnomalies' });
   assert.deepEqual(resolveCommandInput('anomaly').action, { type: 'toggleAnomalies' });
   assert.deepEqual(resolveCommandInput('anom').action, { type: 'toggleAnomalies' });
   assert.equal(getCommandSuggestionIndex('r', -1, 1), 0);
   assert.equal(getCommandSuggestionIndex('r', 0, 1), 1);
-  assert.equal(getCommandSuggestionIndex('r', 0, -1), 2);
+  assert.equal(getCommandSuggestionIndex('r', 0, -1), 3);
   assert.equal(getCommandSuggestionRows('res').length, 7);
   assert.deepEqual(
     getCommandSuggestionRows('res').map((row) => row.name),
@@ -2102,7 +2355,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
   );
   assert.deepEqual(
     getCommandSuggestionRows('', 8).map((row) => row.name),
-    ['next-page', 'send-next-page', 'requests', 'endpoints', 'schemas', 'record', 'stop-recording']
+    ['next-page', 'send-next-page', 'requests', 'endpoints', 'schemas', 'flows', 'record']
   );
   assert.deepEqual(
     getCommandSuggestionRows('', 8).map((row) => row.isSelected),
@@ -2110,7 +2363,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
   );
   assert.equal(
     formatCommandSelectionStatus(getCommandSuggestionRows('r', 2)[2]),
-    'selected :record (rec)'
+    'selected :flows (flow)'
   );
   assert.equal(formatCommandSelectionStatus(getCommandSuggestionRows('wat')[0]), '');
   assert.deepEqual(resolveCommandInput(''), {
@@ -2131,10 +2384,11 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.deepEqual(resolveCommandInput('res').action, { type: 'startResend', mode: 'exact' });
   assert.deepEqual(resolveCommandInput('r'), {
     ok: false,
-    error: 'ambiguous command: resend, requests, record'
+    error: 'ambiguous command: resend, requests, flows, record'
   });
   assert.deepEqual(resolveCommandInput('r', 1).action, { type: 'openRequestActivity' });
-  assert.deepEqual(resolveCommandInput('r', 2).action, { type: 'toggleRecordingPause' });
+  assert.deepEqual(resolveCommandInput('r', 2).action, { type: 'openFlowAnalysis' });
+  assert.deepEqual(resolveCommandInput('r', 3).action, { type: 'toggleRecordingPause' });
   assert.deepEqual(resolveCommandInput('wat'), {
     ok: false,
     error: 'unknown command: wat'
@@ -2163,7 +2417,7 @@ test('keyboard action helper supports colon command mode for careful actions', (
   assert.equal(getCommandMatches('snp', unavailableNextPageContext).length, 0);
   assert.deepEqual(
     getCommandSuggestionRows('', -1, unavailableNextPageContext).map((row) => row.name),
-    ['quit', 'resend', 'requests', 'endpoints', 'schemas', 'record', 'stop-recording']
+    ['quit', 'resend', 'requests', 'endpoints', 'schemas', 'flows', 'record']
   );
   assert.deepEqual(resolveCommandInput('np', -1, unavailableNextPageContext), {
     ok: false,
@@ -3017,6 +3271,10 @@ test('footer text shows mode-aware essential keymaps', () => {
     'schemas  n/N: group  j/k: field  [ / ]: page  g/G: top/bottom  esc/q: close  h: help'
   );
   assert.equal(
+    formatFooterText({ isFlowAnalysisOpen: true }),
+    'flows  j/k: move  [ / ]: page  g/G: top/bottom  enter: inspect  esc/q: close  h: help'
+  );
+  assert.equal(
     formatFooterText({ isDiffOpen: true }),
     'diff  n/N: change  [ / ]: page  g/G: top/bottom  v: layout  /: filter  enter: full row  esc/q: close  h: help'
   );
@@ -3099,7 +3357,7 @@ test('footer and help labels reflect custom key bindings', () => {
 
   assert.deepEqual(moveSection.rows.find((row) => row[1] === 'move line'), ['z/a', 'move line']);
   assert.deepEqual(inspectSection.rows.find((row) => row[1] === 'find details'), ['.', 'find details']);
-  assert.deepEqual(inspectSection.rows.find((row) => row[1] === 'request / response / auth / cache'), ['Y/I, r', 'request / response / auth / cache']);
+  assert.deepEqual(inspectSection.rows.find((row) => row[1] === 'request / response / auth / cache / flow'), ['Y/I, r', 'request / response / auth / cache / flow']);
   assert.deepEqual(diffSection.rows.find((row) => row[1] === 'mark A'), ['B', 'mark A']);
   assert.deepEqual(diffSection.rows.find((row) => row[1] === 'unmark A'), ['U', 'unmark A']);
   assert.deepEqual(diffSection.rows.find((row) => row[1] === 'compare with A'), ['Q', 'compare with A']);
@@ -3236,6 +3494,14 @@ test('command help rows are generated from command definitions', () => {
     }
   );
   assert.deepEqual(
+    rows.find((row) => row.command === ':flows'),
+    {
+      aliases: ':flow, :redirects, :retries',
+      command: ':flows',
+      description: 'open redirect and retry flows'
+    }
+  );
+  assert.deepEqual(
     rows.find((row) => row.command === ':anomalies'),
     {
       aliases: ':anomaly, :anom',
@@ -3254,6 +3520,7 @@ test('contextual help sections focus the active surface and command availability
   const diffSections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'diff' });
   const endpointSections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'endpointGroups' });
   const schemaSections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'schemaInference' });
+  const flowSections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'flowAnalysis' });
   const requestActivitySections = getHelpSections(DEFAULT_KEY_BINDINGS, { surface: 'requestActivity' });
 
   assert.deepEqual(
@@ -3294,6 +3561,14 @@ test('contextual help sections focus the active surface and command availability
     ['n/N', 'change schema group']
   );
   assert.deepEqual(
+    flowSections.map((section) => section.title),
+    ['Flows']
+  );
+  assert.deepEqual(
+    flowSections[0].rows.find((row) => row[1] === 'inspect log'),
+    ['enter', 'inspect log']
+  );
+  assert.deepEqual(
     requestActivitySections[0].rows.find((row) => row[1] === 'close'),
     ['esc/q', 'close']
   );
@@ -3309,6 +3584,23 @@ test('contextual help sections focus the active surface and command availability
   assert.equal(commandRows.find((row) => row.command === ':next-page'), undefined);
   assert.equal(commandRows.find((row) => row.command === ':send-next-page'), undefined);
   assert.equal(commandRows.find((row) => row.command === ':clear-logs').aliases, ':clear, :clear-traffic');
+});
+
+test('help modal keeps long key labels on one row', () => {
+  const modal = HelpModal.type({
+    helpContext: { surface: 'details' },
+    keyBindings: DEFAULT_KEY_BINDINGS
+  });
+  const keyNode = collectNodes(modal).find((node) => (
+    node.props?.color === 'cyan' && getNodeText(node).trim() === 'left/right, r'
+  ));
+
+  assert.equal(Boolean(keyNode), true);
+  assert.equal(keyNode.props.wrap, 'truncate');
+  assert.equal(
+    collectNodes(modal).some((node) => getNodeText(node).trim() === 'ht'),
+    false
+  );
 });
 
 test('command modal renders command suggestions without missing constants', () => {
@@ -4613,12 +4905,13 @@ test('auth detail tab renders safe badges and searchable source locations', () =
   const text = getDetailLines(log, 'auth', { showCookieValues: true }).join('\n');
   const matches = findDetailMatches(rows, 'authorization');
 
-  assert.deepEqual(DETAIL_TABS, ['request', 'response', 'auth', 'cache']);
+  assert.deepEqual(DETAIL_TABS, ['request', 'response', 'auth', 'cache', 'flow']);
   assert.equal(cycleValue(DETAIL_TABS, 'request'), 'response');
   assert.equal(cycleValue(DETAIL_TABS, 'response'), 'auth');
   assert.equal(cycleValue(DETAIL_TABS, 'auth'), 'cache');
-  assert.equal(cycleValue(DETAIL_TABS, 'cache'), 'request');
-  assert.equal(cycleValue(DETAIL_TABS, 'request', -1), 'cache');
+  assert.equal(cycleValue(DETAIL_TABS, 'cache'), 'flow');
+  assert.equal(cycleValue(DETAIL_TABS, 'flow'), 'request');
+  assert.equal(cycleValue(DETAIL_TABS, 'request', -1), 'flow');
   assert.equal(cycleValue(DETAIL_TABS, 'auth', -1), 'response');
   assert.match(text, /Auth & secrets/);
   assert.match(text, /\[bearer\] request header authorization/);

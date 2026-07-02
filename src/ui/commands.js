@@ -57,6 +57,12 @@ export const COMMAND_DEFINITIONS = [
     action: { type: 'openSchemaInference' }
   },
   {
+    name: 'flows',
+    aliases: ['flow', 'redirects', 'retries'],
+    description: 'open redirect and retry flows',
+    action: { type: 'openFlowAnalysis' }
+  },
+  {
     name: 'record',
     aliases: ['rec'],
     description: 'start, pause, or resume recording',
@@ -386,6 +392,7 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     isListDisplayOpen = false,
     isEndpointGroupsOpen = false,
     isSchemaInferenceOpen = false,
+    isFlowAnalysisOpen = false,
     isRequestActivityOpen = false,
     isDiffOpen = false,
     isDiffFilterOpen = false,
@@ -408,6 +415,7 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
     diffPageSize = 1,
     diffValuePageSize = 1,
     endpointGroupsPageSize = 1,
+    flowAnalysisPageSize = 1,
     schemaInferencePageSize = 1,
     detailPageSize = 1,
     keyBindings: configuredKeyBindings,
@@ -611,6 +619,42 @@ export function getKeyboardAction(input = '', key = {}, options = {}) {
 
     if (matches('schemaInference.previousGroup')) {
       return { type: 'moveSchemaGroup', direction: -1 };
+    }
+
+    return { type: 'none' };
+  }
+
+  if (isFlowAnalysisOpen) {
+    if (matches('flowAnalysis.close')) {
+      return { type: 'closeFlowAnalysis' };
+    }
+
+    if (matches('flowAnalysis.inspect')) {
+      return { type: 'inspectFlowAnalysis' };
+    }
+
+    if (matches('flowAnalysis.moveUp')) {
+      return { type: 'moveFlowAnalysis', direction: -1 };
+    }
+
+    if (matches('flowAnalysis.moveDown')) {
+      return { type: 'moveFlowAnalysis', direction: 1 };
+    }
+
+    if (matches('flowAnalysis.pageUp')) {
+      return { type: 'moveFlowAnalysis', direction: -getPageStep(flowAnalysisPageSize) };
+    }
+
+    if (matches('flowAnalysis.pageDown')) {
+      return { type: 'moveFlowAnalysis', direction: getPageStep(flowAnalysisPageSize) };
+    }
+
+    if (matches('flowAnalysis.top')) {
+      return { type: 'moveFlowAnalysisTo', boundary: 'top' };
+    }
+
+    if (matches('flowAnalysis.bottom')) {
+      return { type: 'moveFlowAnalysisTo', boundary: 'bottom' };
     }
 
     return { type: 'none' };
@@ -1341,6 +1385,7 @@ export function KeyboardControls({
   isListDisplayOpen,
   isEndpointGroupsOpen,
   isSchemaInferenceOpen,
+  isFlowAnalysisOpen,
   isRequestActivityOpen,
   isDiffOpen,
   isDiffFilterOpen,
@@ -1363,6 +1408,7 @@ export function KeyboardControls({
   diffPageSize,
   diffValuePageSize,
   endpointGroupsPageSize,
+  flowAnalysisPageSize,
   schemaInferencePageSize,
   detailPageSize,
   keyBindings,
@@ -1395,6 +1441,7 @@ export function KeyboardControls({
   onCloseDiff,
   onCloseDiffValue,
   onCloseEndpointGroups,
+  onCloseFlowAnalysis,
   onCloseSchemaInference,
   onCloseHelp,
   onCloseListDisplay,
@@ -1426,6 +1473,8 @@ export function KeyboardControls({
   onMoveDiffValueScrollTo,
   onMoveEndpointGroup,
   onMoveEndpointGroupTo,
+  onMoveFlowAnalysis,
+  onMoveFlowAnalysisTo,
   onMoveSchemaField,
   onMoveSchemaFieldTo,
   onMoveSchemaGroup,
@@ -1451,7 +1500,9 @@ export function KeyboardControls({
   onOpenFilter,
   onOpenHelp,
   onOpenListDisplay,
+  onOpenFlowAnalysis,
   onOpenSchemaInference,
+  onInspectFlowAnalysis,
   onInspectRequestActivity,
   onMarkDiffBase,
   onPreviewComposerSend,
@@ -1491,6 +1542,7 @@ export function KeyboardControls({
       isListDisplayOpen,
       isEndpointGroupsOpen,
       isSchemaInferenceOpen,
+      isFlowAnalysisOpen,
       isRequestActivityOpen,
       isDiffOpen,
       isDiffFilterOpen,
@@ -1513,6 +1565,7 @@ export function KeyboardControls({
       diffPageSize,
       diffValuePageSize,
       endpointGroupsPageSize,
+      flowAnalysisPageSize,
       schemaInferencePageSize,
       detailPageSize,
       keyBindings,
@@ -1596,6 +1649,9 @@ export function KeyboardControls({
         break;
       case 'closeEndpointGroups':
         onCloseEndpointGroups();
+        break;
+      case 'closeFlowAnalysis':
+        onCloseFlowAnalysis();
         break;
       case 'closeSchemaInference':
         onCloseSchemaInference();
@@ -1702,6 +1758,12 @@ export function KeyboardControls({
       case 'moveEndpointGroupTo':
         onMoveEndpointGroupTo(action.boundary);
         break;
+      case 'moveFlowAnalysis':
+        onMoveFlowAnalysis(action.direction);
+        break;
+      case 'moveFlowAnalysisTo':
+        onMoveFlowAnalysisTo(action.boundary);
+        break;
       case 'moveSchemaField':
         onMoveSchemaField(action.direction);
         break;
@@ -1774,8 +1836,14 @@ export function KeyboardControls({
       case 'openListDisplay':
         onOpenListDisplay();
         break;
+      case 'openFlowAnalysis':
+        onOpenFlowAnalysis();
+        break;
       case 'openSchemaInference':
         onOpenSchemaInference();
+        break;
+      case 'inspectFlowAnalysis':
+        onInspectFlowAnalysis();
         break;
       case 'inspectRequestActivity':
         onInspectRequestActivity();

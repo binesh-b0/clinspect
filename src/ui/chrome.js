@@ -118,7 +118,7 @@ function getDefaultHelpSections(keyBindings = DEFAULT_KEY_BINDINGS) {
       title: 'Inspect',
       rows: [
         [getActionLabel(keyBindings, 'main.inspect'), 'inspect row'],
-        [getDetailTabHelpLabel(keyBindings, 'main'), 'request / response / auth / cache'],
+        [getDetailTabHelpLabel(keyBindings, 'main'), 'request / response / auth / cache / flow'],
         [getActionLabel(keyBindings, 'main.openDetailModal'), 'details modal'],
         [getActionLabel(keyBindings, 'main.openSearch'), 'find details'],
         [getActionPairLabel(keyBindings, 'main.nextMatch', 'main.previousMatch', { separator: ' / ' }), 'next / previous match'],
@@ -226,7 +226,7 @@ function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context =
           rows: [
             [getActionPairLabel(keyBindings, 'main.moveDown', 'main.moveUp'), 'scroll'],
             [getActionPairLabel(keyBindings, 'main.pageUp', 'main.pageDown', { separator: ' / ' }), 'page'],
-            [getDetailTabHelpLabel(keyBindings, 'main'), 'request / response / auth / cache'],
+            [getDetailTabHelpLabel(keyBindings, 'main'), 'request / response / auth / cache / flow'],
             [getActionLabel(keyBindings, 'main.openSearch', { limit: 1 }), 'find details'],
             [getActionPairLabel(keyBindings, 'main.nextMatch', 'main.previousMatch'), 'next / previous match'],
             [getActionLabel(keyBindings, 'main.inspect', { limit: 1 }), 'collapse row'],
@@ -243,7 +243,7 @@ function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context =
           rows: [
             [getActionPairLabel(keyBindings, 'detail.scrollDown', 'detail.scrollUp'), 'scroll'],
             [getActionPairLabel(keyBindings, 'detail.pageUp', 'detail.pageDown', { separator: ' / ' }), 'page'],
-            [getDetailTabHelpLabel(keyBindings, 'detail'), 'request / response / auth / cache'],
+            [getDetailTabHelpLabel(keyBindings, 'detail'), 'request / response / auth / cache / flow'],
             [getActionLabel(keyBindings, 'detail.openSearch', { limit: 1 }), 'find details'],
             [getActionPairLabel(keyBindings, 'detail.nextMatch', 'detail.previousMatch'), 'next / previous match'],
             [getActionLabel(keyBindings, 'detail.toggleNode', { limit: 1 }), 'collapse row'],
@@ -421,6 +421,19 @@ function getContextualHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context =
           ]
         }
       ];
+    case 'flowAnalysis':
+      return [
+        {
+          title: 'Flows',
+          rows: [
+            [getActionPairLabel(keyBindings, 'flowAnalysis.moveDown', 'flowAnalysis.moveUp'), 'move flow'],
+            [getActionPairLabel(keyBindings, 'flowAnalysis.pageUp', 'flowAnalysis.pageDown', { separator: ' / ' }), 'move page'],
+            [getActionPairLabel(keyBindings, 'flowAnalysis.top', 'flowAnalysis.bottom'), 'top / bottom'],
+            [getActionLabel(keyBindings, 'flowAnalysis.inspect', { limit: 1 }), 'inspect log'],
+            [getActionLabel(keyBindings, 'flowAnalysis.close', { limit: 2 }), 'close']
+          ]
+        }
+      ];
     case 'requestActivity':
       return [
         {
@@ -469,7 +482,7 @@ export function getHelpSections(keyBindings = DEFAULT_KEY_BINDINGS, context = nu
 
 export const HELP_SECTIONS = getHelpSections();
 
-const HELP_KEY_WIDTH = 10;
+const HELP_KEY_WIDTH = 14;
 const HELP_COLUMN_GAP_WIDTH = 3;
 const COMMAND_HELP_COMMAND_WIDTH = 18;
 const COMMAND_HELP_ALIAS_WIDTH = 24;
@@ -493,13 +506,24 @@ function getHelpColumns(sections) {
 }
 
 function renderHelpSections(sections, width) {
+  const keyWidth = Math.min(HELP_KEY_WIDTH, Math.max(8, Math.floor(width * 0.42)));
+  const descriptionWidth = Math.max(8, width - keyWidth);
+
   return sections.flatMap((section, sectionIndex) => [
     h(Text, { key: `${section.title}-title`, bold: true, color: 'cyan' }, section.title),
     ...section.rows.map(([keys, description]) => h(
       Box,
       { key: `${section.title}-${keys}`, width },
-      h(Text, { color: 'cyan' }, pad(keys, HELP_KEY_WIDTH)),
-      h(Text, { wrap: 'truncate' }, description)
+      h(
+        Box,
+        { width: keyWidth },
+        h(Text, { color: 'cyan', wrap: 'truncate' }, pad(truncate(keys, keyWidth), keyWidth))
+      ),
+      h(
+        Box,
+        { width: descriptionWidth },
+        h(Text, { wrap: 'truncate' }, truncate(description, descriptionWidth))
+      )
     )),
     sectionIndex < sections.length - 1
       ? h(Text, { key: `${section.title}-space` }, '')
@@ -734,6 +758,7 @@ export function formatFooterText({
   isListDisplayOpen = false,
   isRequestActivityOpen = false,
   isSchemaInferenceOpen = false,
+  isFlowAnalysisOpen = false,
   resendStatus = '',
   isComposerConfirmOpen = false,
   isComposerOpen = false,
@@ -837,6 +862,18 @@ export function formatFooterText({
     ]));
   }
 
+  if (isFlowAnalysisOpen) {
+    return withStatus(joinFooterParts([
+      'flows',
+      formatFooterBinding(getActionPairLabel(keyBindings, 'flowAnalysis.moveDown', 'flowAnalysis.moveUp'), 'move'),
+      formatFooterBinding(getActionPairLabel(keyBindings, 'flowAnalysis.pageUp', 'flowAnalysis.pageDown', { separator: ' / ' }), 'page'),
+      formatFooterBinding(getActionPairLabel(keyBindings, 'flowAnalysis.top', 'flowAnalysis.bottom'), 'top/bottom'),
+      formatFooterBinding(getActionLabel(keyBindings, 'flowAnalysis.inspect', { limit: 1 }), 'inspect'),
+      formatFooterBinding(getActionLabel(keyBindings, 'flowAnalysis.close', { limit: 2 }), 'close'),
+      formatFooterBinding(getActionLabel(keyBindings, 'main.openHelp', { limit: 1 }), 'help')
+    ]));
+  }
+
   if (isRequestActivityOpen) {
     return `sent requests  ${getActionPairLabel(keyBindings, 'main.moveDown', 'main.moveUp')} move  ${getActionLabel(keyBindings, 'main.inspect', { limit: 1 })} inspect log  ${requestActivityCloseKeys} close  ${getActionLabel(keyBindings, 'main.openHelp', { limit: 1 })} help`;
   }
@@ -931,6 +968,7 @@ export const Footer = React.memo(function Footer({
   isListDisplayOpen,
   isRequestActivityOpen,
   resendStatus,
+  isFlowAnalysisOpen,
   isComposerConfirmOpen,
   isComposerOpen,
   isComposerTextFocused,
@@ -962,6 +1000,7 @@ export const Footer = React.memo(function Footer({
         exportStatus,
         isListDisplayOpen,
         isRequestActivityOpen,
+        isFlowAnalysisOpen,
         resendStatus,
         isComposerConfirmOpen,
         isComposerOpen,

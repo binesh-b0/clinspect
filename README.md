@@ -191,7 +191,7 @@ Main UI:
 - `g`/`G` jumps to top/bottom.
 - `tab` switches between traffic and details.
 - `enter` inspects a traffic row or toggles a detail node.
-- Left/right switches request/response/auth/cache details; `r` also cycles forward.
+- Left/right switches request/response/auth/cache/flow details; `r` also cycles forward.
 - `/` searches traffic or details, depending on focus.
 - `t` cycles traffic-list path display between smart, start, and end truncation.
 - `v` cycles traffic-list density between full, compact, and path-only views.
@@ -203,7 +203,7 @@ Main UI:
 - `D` downloads the focused traffic item or detail to `./.clinspect/exports/`.
 - `m`/`r` chooses masked or raw values after starting an export.
 - `m` opens method filters; `s` opens status filters; `x` clears filters.
-- `:` opens command mode for careful actions: `:resend`, `:next-page`, `:send-next-page`, `:requests`, `:anomalies`, `:record`, `:stop`, `:pause`, `:clear`, `:quit`, and `:help`. `Ctrl-:` is also accepted when the terminal reports it distinctly.
+- `:` opens command mode for careful actions: `:resend`, `:next-page`, `:send-next-page`, `:requests`, `:flows`, `:anomalies`, `:record`, `:stop`, `:pause`, `:clear`, `:quit`, and `:help`. `Ctrl-:` is also accepted when the terminal reports it distinctly.
 - `h` or `Ctrl-/` opens help.
 - `Ctrl-C` or `Ctrl-Q` quits.
 
@@ -271,7 +271,7 @@ Implemented:
 - terminal traffic list and detail panes
 - request/response headers, status, timing, and capped text body capture
 - structured response previews with collapsible nodes for JSON, NDJSON, React Flight, SSE, forms, XML, and HTML
-- Auth and Cache detail tabs for masked auth/secret candidates and experimental cache-header analysis
+- Auth, Cache, and Flow detail tabs for masked auth/secret candidates, experimental cache-header analysis, redirect chains, and repeated-request context
 - pagination summaries from request query params, response `Link` headers, and common JSON next-cursor fields, with `:next-page` composer support and `:send-next-page` immediate send
 - traffic filtering and detail search
 - manual request composer with saved local requests and an in-session sent-request activity page
